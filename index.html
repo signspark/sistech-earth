@@ -2386,7 +2386,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   };
   const UAM_CRUISE_AGL = 300, UAM_V = 150/3.6, WALK_V = 4.5/3.6;
   const NV = { open:false, mode:'car', start:null, end:null, route:null, playing:false, t:0, mul:5, cam:'chase', camH:100,
-               ents:[], veh:null, cur:null, hdg:0, camHdg:null, hs:null, last:0, prevTarget:null, routing:0, busy:false };
+               ents:[], veh:null, cur:null, hdg:0, simTok:0, camHdg:null, hs:null, last:0, prevTarget:null, routing:0, busy:false };
   const ICON = {
     car:'<svg viewBox="0 0 24 24"><path d="M5 16h14v-4l-2-5H7l-2 5zM5 16v2M19 16v2M3 12h18"/><circle cx="8" cy="14" r=".6"/><circle cx="16" cy="14" r=".6"/></svg>',
     walk:'<svg viewBox="0 0 24 24"><circle cx="13" cy="4.5" r="1.8"/><path d="M10 21l2-6 3 3v3M9 11l3-3 3 3 3 1M12 8l-1 5"/></svg>',
@@ -2485,10 +2485,12 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   const angDiff = (a,b) => ((b-a+540)%360)-180;
   const tag = s => s.replace(/[<>&]/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 
-  function groundAt(lon, lat){ const ct = C.Cartographic.fromDegrees(lon, lat); let h; const g = globe.getHeight(ct); try{ if(scene.sampleHeightSupported) h = scene.sampleHeight(ct, NV.ents.concat(NV.veh?[NV.veh]:[], pinS?[pinS]:[], pinE?[pinE]:[])); }catch(e){}
+  function groundAt(lon, lat){ const ct = C.Cartographic.fromDegrees(lon, lat); let h;
     const ok = v => v!==undefined && v!==null && isFinite(v) && v>-500 && v<9000;
-    if(!ok(h) || (ok(g) && Math.abs(h-g)>400)) h = ok(g) ? g : undefined; return h; }
-
+    try{ if(scene.sampleHeightSupported) h = scene.sampleHeight(ct); }catch(e){}
+    if(!ok(h)){ const g = globe.getHeight(ct); h = ok(g) ? g : undefined; }
+    else if(NV.hs!=null && Math.abs(h - NV.hs) > 60){ const g = globe.getHeight(ct); if(ok(g) && Math.abs(g-NV.hs) < Math.abs(h-NV.hs)) h = g; }
+    return h; }
   /* ---- 표식 ---- */
   function pinImg(color, text){ const c=document.createElement('canvas'); c.width=72; c.height=92; const g=c.getContext('2d');
     g.fillStyle=color; g.strokeStyle='#fff'; g.lineWidth=4; g.beginPath(); g.moveTo(36,88); g.bezierCurveTo(30,70,6,54,6,34); g.arc(36,34,30,Math.PI,0); g.bezierCurveTo(66,54,42,70,36,88); g.closePath(); g.fill(); g.stroke();
@@ -2536,7 +2538,8 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     try{ const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(text)}&accept-language=ko&countrycodes=kr&limit=6&viewbox=${lon-0.6},${lat+0.45},${lon+0.6},${lat-0.45}`); const j = await r.json();
       list = j.map(x=>({ lon:+x.lon, lat:+x.lat, name: x.name || x.display_name.split(',')[0], sub: x.display_name.split(',').slice(1,4).join(',').trim() })); }catch(e){}
     if(!list.length){ try{ const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&lat=${lat}&lon=${lon}&limit=6`); const j = await r.json();
-      list = (j.features||[]).filter(f=>f.properties.countrycode==='KR'||!f.properties.countrycode).map(f=>({ lon:f.geometry.coordinates[0], lat:f.geometry.coordinates[1], name:f.properties.name||text, sub:[f.properties.city, f.properties.district, f.properties.street].filter(Boolean).join(' ') })); }catch(e){} }
+      list = (j.features||[]).filter(f=>f.properties.countrycode==='KR'||!f.properties.countrycode).map(f=>({ lon:f.geometry.coordinates[0], lat:f.geometry.coordinates[1], name:f.properties.name||text, sub:[f.properties.city, f.properties.district, f.properties.street].filter(Boolean).join(' '), osm: f.properties.osm_type && f.properties.osm_id ? f.properties.osm_type+f.properties.osm_id : null }));
+      const ids = list.map(x=>x.osm).filter(Boolean); if(ids.length){ try{ const r2 = await fetch(`https://nominatim.openstreetmap.org/lookup?format=jsonv2&osm_ids=${ids.join(',')}&accept-language=ko`); const k = await r2.json(); for(const it of k){ const key = it.osm_type[0].toUpperCase()+it.osm_id; const x = list.find(y=>y.osm===key); if(x){ if(it.name) x.name = it.name; const parts = (it.display_name||'').split(',').map(s=>s.trim()); x.sub = parts.slice(1,4).join(', '); } } }catch(e){} } }catch(e){} }
     list.forEach(x=>x.d = hav([lon,lat],[x.lon,x.lat])); list.sort((a,b)=>a.d-b.d); list = list.filter((x,i)=>!list.slice(0,i).some(y=>y.name===x.name && hav([x.lon,x.lat],[y.lon,y.lat])<250));
     if(!list.length){ box.innerHTML = '<button disabled>결과 없음 · 다른 이름이나 주소로 검색하거나 지도를 클릭하세요</button>'; return; }
     box.innerHTML = list.map((x,i)=>`<button data-i="${i}">${tag(x.name)}<small>${tag(x.sub||'')} · ${fmtD(x.d)}</small></button>`).join('');
@@ -2671,7 +2674,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   }
 
   /* ---- 경로 ---- */
-  function clearRoute(){ for(const e of NV.ents) viewer.entities.remove(e); NV.ents = []; NV.lineEnts = []; if(NV.veh){ viewer.entities.remove(NV.veh); NV.veh = null; } NV.route = null; q('#nvSum').classList.remove('open'); }
+  function clearRoute(){ for(const e of NV.ents) viewer.entities.remove(e); NV.ents = []; NV.lineEnts = []; NV.gT = null; NV.gVal = null; NV.hs = null; if(NV.veh){ viewer.entities.remove(NV.veh); NV.veh = null; } NV.route = null; q('#nvSum').classList.remove('open'); }
   const MOD = { 'left':'좌회전', 'right':'우회전', 'slight left':'왼쪽 방향', 'slight right':'오른쪽 방향', 'sharp left':'급좌회전', 'sharp right':'급우회전', 'straight':'직진', 'uturn':'유턴' };
   function stepText(s){ const m = s.maneuver||{}, md = MOD[m.modifier]||'';
     switch(m.type){ case 'depart': return '출발'; case 'arrive': return '목적지 도착';
@@ -2759,7 +2762,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   async function refineLanes(id, co, ann, mode, rt){
     let offs = null; try{ offs = await laneOffsets(co, mode); }catch(e){}
     const r = NV.route; if(id!==NV.routing || !r || r.mode!==mode) return;
-    if(!offs){ r.offsetSrc = 'default'; return; }
+    if(!offs){ r.offsetSrc = 'default'; if(!r.retried){ r.retried = true; setTimeout(()=>refineLanes(id, co, ann, mode, rt), 20000); } return; }
     const fr = r.dur ? NV.t / r.dur : 0; const b = buildLinear(co, offs, ann, mode, rt);
     r.S = b.S; r.total = b.total; r.dur = b.dur; r.steps = b.steps; r.offsetSrc = 'OSM'; NV.t = fr * b.dur;
     drawRoute(); placeAt(NV.t, true); updPanel();
@@ -2799,7 +2802,9 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     if(r.hdgFix!=null) NV.hdg = r.hdgFix;
     const side = MODELS[r.mode].side || 0; if(side){ const br2 = rad(NV.hdg + 90); lat += deg(side*Math.cos(br2)/R); lon += deg(side*Math.sin(br2)/(R*Math.cos(rad(lat)))); }
     if(a.h!=null){ h = a.h+(b.h-a.h)*f; }
-    else { let g = groundAt(lon, lat); if(g===undefined || g===null || isNaN(g)) g = NV.hs!=null ? NV.hs : 0;
+    else { const sNow = a.s+(b.s-a.s)*f, nowP = performance.now();
+      if(snap || NV.gT==null || nowP - NV.gT > 600){ const ah = rad(NV.hdg); const la2 = lat + deg(5*Math.cos(ah)/R), lo2 = lon + deg(5*Math.sin(ah)/(R*Math.cos(rad(lat)))); const gv = groundAt(snap?lon:lo2, snap?lat:la2); if(gv!==undefined && gv!==null && !isNaN(gv)) NV.gVal = gv; NV.gT = nowP; NV.gS = sNow; }
+      let g = NV.gVal; if(g===undefined || g===null || isNaN(g)) g = NV.hs!=null ? NV.hs : 0;
       if(snap || NV.hs==null) NV.hs = g; else { const moved = NV.lastS!=null ? Math.abs((a.s+(b.s-a.s)*f) - NV.lastS) : 0; const lim = Math.max(0.4, moved*0.15); NV.hs += Math.max(-lim, Math.min(lim, g - NV.hs)); }
       h = NV.hs + (r.mode==='car'? 0.05 : 0.02); }
     NV.lastS = a.s+(b.s-a.s)*f; NV.curS = NV.lastS; NV.curSpd = (b.t>a.t) ? hav([a.lon,a.lat],[b.lon,b.lat])/(b.t-a.t) : 0;
@@ -2844,12 +2849,12 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   function startSim(){ const r = NV.route; if(!r) return; if(NV.t >= r.dur) NV.t = 0;
     placeAt(NV.t, true); NV.camHdg = NV.hdg; NV.prevTarget = null; releaseCam();
     if(r.mode==='walk'){ prevMul = viewer.clock.multiplier; viewer.clock.multiplier = NV.mul; }
-    const begin = () => { NV.playing = true; NV.last = performance.now(); updPanel(); };
+    const tok = ++NV.simTok; const begin = () => { if(tok!==NV.simTok || !NV.route || !NV.open) return; NV.playing = true; NV.last = performance.now(); updPanel(); };
     if(NV.cam==='free'){ begin(); return; }
     const p = camPose(); NV.busy = true;
     camera.flyToBoundingSphere(new C.BoundingSphere(NV.cur, 0), { offset: new C.HeadingPitchRange(C.Math.toRadians(p.hd), C.Math.toRadians(p.pitch), p.range), duration: 1.6, complete: ()=>{ NV.busy=false; begin(); }, cancel: ()=>{ NV.busy=false; begin(); } });
   }
-  function stopSim(keepCam){ NV.playing = false; NV.busy = false; if(prevMul!=null){ viewer.clock.multiplier = prevMul; prevMul = null; } releaseCam(); if(NV.route) updPanel(); }
+  function stopSim(keepCam){ NV.playing = false; NV.simTok = (NV.simTok||0)+1; if(NV.busy){ try{ camera.cancelFlight(); }catch(e){} } NV.busy = false; if(prevMul!=null){ viewer.clock.multiplier = prevMul; prevMul = null; } releaseCam(); if(NV.route) updPanel(); }
   scene.preRender.addEventListener(() => {
     if(!NV.route || !NV.playing) return; const now = performance.now(); const dt = Math.min(0.25, (now - NV.last)/1000); NV.last = now;
     NV.t += dt * NV.mul; placeAt(NV.t, false, dt); updCamera(dt);
