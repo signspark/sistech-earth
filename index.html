@@ -208,8 +208,8 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--lime);outline-o
   <div class="row"><span>태양 조명 <small style="color:var(--text-dim)" id="sunInfo"></small></span><button class="switch on" id="swLight" aria-label="태양 조명"></button></div>
   <div class="row"><span>지명 표시</span><button class="switch on" id="swLabels" aria-label="지명"></button></div>
   <div class="row"><span>자동 회전</span><button class="switch" id="swSpin" aria-label="자동 회전"></button></div>
-  <div class="row"><span>지형 과장</span><div class="seg" id="segEx"><button class="on" data-v="1">1×</button><button data-v="3">3×</button><button data-v="10">10×</button></div></div>
-  <div class="note" style="padding:10px 0 0">지형: 현재 타원체(평면). Cesium World Terrain 또는 자체 DEM 연결 시 과장 배율이 적용됩니다.<br>영상: Esri World Imagery · 지명: Esri Reference</div>
+  <div class="row"><span>지형 확대</span><div class="seg" id="segEx"><button class="on" data-v="1">1×</button><button data-v="3">3×</button><button data-v="10">10×</button></div></div>
+  <div class="note" style="padding:10px 0 0">지형: 현재 타원체(평면). Cesium World Terrain 또는 자체 DEM 연결 시 확대 배율이 적용됩니다.<br>영상: Esri World Imagery · 지명: Esri Reference</div>
 </div>
 
 <nav id="rail" aria-label="모드 레일">
@@ -926,7 +926,7 @@ $('#swLight').onclick = e=>{ const on=!e.currentTarget.classList.contains('on');
 $('#swLabels').onclick = ()=>toggleLayer('labels');
 let spinOff=null;
 $('#swSpin').onclick = e=>{ const on=!e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on',on); if(on){ spinOff = viewer.clock.onTick.addEventListener(()=>camera.rotate(Cesium.Cartesian3.UNIT_Z, -0.0015)); } else if(spinOff){ spinOff(); spinOff=null; } };
-$('#segEx').querySelectorAll('button').forEach(b=>b.onclick=()=>{ $('#segEx').querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); if('verticalExaggeration' in scene) scene.verticalExaggeration=+b.dataset.v; else globe.terrainExaggeration=+b.dataset.v; $('#hudEx').textContent=b.dataset.v+'×'; toast('지형이 연결되면 과장 배율이 화면에 반영됩니다'); });
+$('#segEx').querySelectorAll('button').forEach(b=>b.onclick=()=>{ $('#segEx').querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); if('verticalExaggeration' in scene) scene.verticalExaggeration=+b.dataset.v; else globe.terrainExaggeration=+b.dataset.v; $('#hudEx').textContent=b.dataset.v+'×'; toast('지형이 연결되면 확대 배율이 화면에 반영됩니다'); });
 function sunInfo(){ const d=new Date(); $('#sunInfo').textContent = `· ${pad(d.getHours())}:${pad(d.getMinutes())} KST 실시간`; }
 sunInfo(); setInterval(sunInfo, 30000);
 
@@ -1172,9 +1172,9 @@ viewer.imageryLayers.raiseToTop(layersImg.labels);
 (function(){ const row = document.createElement('div'); row.className='row'; row.innerHTML = `<span>야간면 도시 불빛 <small style="color:var(--text-dim)">· 밤 쪽에만</small></span><button class="switch on" id="swNightAuto" aria-label="야간 불빛"></button>`; const sb=$('#settings'); sb.insertBefore(row, sb.querySelector('.note')); $('#swNightAuto').onclick = e=>{ const on=!e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on',on); layersImg.nightAuto.show = on; }; })();
 
 /* ---------- 지형 (Esri World Elevation, 키 불필요) ---------- */
-Cesium.ArcGISTiledElevationTerrainProvider.fromUrl('https://elevation3d.arcgis.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer').then(tp => { viewer.terrainProvider = tp; scene.globe.depthTestAgainstTerrain = false; STATE.terrain = true; updateSrc(); toast('지형 연결: Esri World Elevation (Terrain3D) · 설정에서 과장 배율 조절 가능'); }).catch(e => toast('지형 로드 실패: '+e.message));
+Cesium.ArcGISTiledElevationTerrainProvider.fromUrl('https://elevation3d.arcgis.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer').then(tp => { viewer.terrainProvider = tp; scene.globe.depthTestAgainstTerrain = false; STATE.terrain = true; updateSrc(); toast('지형 연결: Esri World Elevation (Terrain3D) · 설정에서 확대 배율 조절 가능'); }).catch(e => toast('지형 로드 실패: '+e.message));
 const _updateSrc2 = updateSrc; updateSrc = function(){ _updateSrc2(); if(STATE.terrain) $('#hudSrc').innerHTML = $('#hudSrc').innerHTML.replace('지형 없음(타원체)', '<b>Esri World Elevation</b> 지형'); };
-$('#segEx').insertAdjacentHTML('beforeend', '<button data-v="50">50×</button>'); const b50 = $('#segEx button[data-v="50"]'); b50.onclick = ()=>{ $('#segEx').querySelectorAll('button').forEach(x=>x.classList.remove('on')); b50.classList.add('on'); scene.verticalExaggeration = 50; $('#hudEx').textContent='50×'; toast('지형 과장 50× (EARTHUS 기본값) · 3D 모델과는 어긋남'); };
+$('#segEx').insertAdjacentHTML('beforeend', '<button data-v="50">50×</button>'); const b50 = $('#segEx button[data-v="50"]'); b50.onclick = ()=>{ $('#segEx').querySelectorAll('button').forEach(x=>x.classList.remove('on')); b50.classList.add('on'); scene.verticalExaggeration = 50; $('#hudEx').textContent='50×'; toast('지형 확대 50× (EARTHUS 기본값) · 3D 모델과는 어긋남'); };
 
 /* ---------- 한국어 지명 (국가·주요 도시 내장 + Natural Earth 국경선) ---------- */
 const KO_COUNTRIES = [['대한민국',36.5,127.8],['조선민주주의인민공화국',40.0,127.0],['일본',36.2,138.3],['중화인민공화국',35.0,104.0],['몽골',46.9,103.8],['러시아',61.5,105.3],['대만',23.7,121.0],['필리핀',12.9,122.0],['베트남',15.5,107.0],['태국',15.9,101.0],['라오스',19.9,102.5],['캄보디아',12.6,105.0],['미얀마',19.0,96.0],['말레이시아',3.5,102.0],['싱가포르',1.35,103.8],['인도네시아',-2.5,118.0],['인도',21.0,78.0],['네팔',28.4,84.1],['방글라데시',23.7,90.4],['스리랑카',7.9,80.8],['파키스탄',30.4,69.3],['아프가니스탄',33.9,67.7],['이란',32.4,53.7],['이라크',33.2,43.7],['사우디아라비아',24.0,45.0],['아랑에미리트',23.4,53.8],['틀르키예',38.9,35.2],['이스라엘',31.0,34.9],['카자흐스탄',48.0,67.0],['우즈베키스탄',41.4,64.6],['이집트',26.8,30.8],['리비아',26.3,17.2],['알제리',28.0,1.7],['모로코',31.8,-7.1],['나이지리아',9.1,8.7],['에티오피아',9.1,40.5],['케냐',0.0,37.9],['탄자니아',-6.4,34.9],['콩고민주공화국',-4.0,21.8],['남아프리카공화국',-30.6,22.9],['마다가스카르',-18.8,46.9],['수단',12.9,30.2],['말리',17.6,-4.0],['니제르',17.6,8.1],['차드',15.5,18.7],['앙골라',-11.2,17.9],['모잠비크',-18.7,35.5],['영국',54.0,-2.5],['아일랜드',53.4,-8.2],['프랑스',46.6,2.2],['독일',51.2,10.4],['스페인',40.4,-3.7],['포르투갈',39.4,-8.2],['이탈리아',42.5,12.5],['스위스',46.8,8.2],['오스트리아',47.5,14.5],['네덜란드',52.1,5.3],['벨기에',50.5,4.5],['폴란드',51.9,19.1],['체코',49.8,15.5],['헝가리',47.2,19.5],['루마니아',45.9,25.0],['우크라이나',48.4,31.2],['그리스',39.1,21.8],['스웨덴',62.0,15.0],['노르웨이',64.0,10.0],['핀란드',64.0,26.0],['덴마크',56.0,9.5],['아이슬란드',64.9,-19.0],['미국',39.8,-98.6],['캐나다',60.0,-105.0],['멕시코',23.6,-102.6],['과테말라',15.8,-90.2],['쿠바',21.5,-79.5],['콜롬비아',4.6,-74.3],['베네수엘라',6.4,-66.6],['페루',-9.2,-75.0],['브라질',-10.0,-53.0],['볼리비아',-16.3,-63.6],['칠레',-33.0,-71.0],['아르헨티나',-36.0,-64.0],['우루과이',-32.5,-55.8],['파라과이',-23.4,-58.4],['에콰도르',-1.8,-78.2],['오스트레일리아',-25.3,133.8],['뉴질랜드',-41.5,172.5],['파푸아뉴기니',-6.3,143.9],['그린란드',72.0,-40.0]];
@@ -1250,7 +1250,7 @@ handler.setInputAction(e=>{
 /* ---------- 메뉴 확장 ---------- */
 const E = MENUS.earth; const cat = (id) => E.find(c=>c.id===id);
 cat('globe').items.splice(2, 0,
-  { id:'hillshade', q:'땅의 높낮이는', name:'지형 음영', src:'Esri World Hillshade · 과장 배율은 DEM 연결 후', type:'layer' },
+  { id:'hillshade', q:'땅의 높낮이는', name:'지형 음영', src:'Esri World Hillshade · 확대 배율은 DEM 연결 후', type:'layer' },
   { id:'ocean', q:'이 바다의 깊이는', name:'바다 깊이 (수심 음영)', src:'Esri Ocean Base · GEBCO', type:'layer' },
   { id:'trenches', q:'가장 깊은 해구는 어디인가', name:'해구 20곳', src:'GEBCO 가제티어 (대략 좌표)', type:'layer' });
 cat('globe').items = cat('globe').items.filter(i=>i.id!=='terrain');
@@ -1916,6 +1916,12 @@ setMode = function(m){
   const _cq = cycleQuality; cycleQuality = function(){ _cq(); refresh(); };
   const _co = cycleOpacity; cycleOpacity = function(){ _co(); refresh(); };
   refresh();
+})();
+
+/* ---------- 13. 설정 기본값: 태양 조명(시간 적용) 끔 · 야간면 도시 불빛 끔 ---------- */
+(function(){
+  try{ globe.enableLighting = false; $('#swLight').classList.remove('on'); }catch(e){}
+  try{ if(layersImg.nightAuto) layersImg.nightAuto.show = false; const sw = $('#swNightAuto'); if(sw) sw.classList.remove('on'); }catch(e){}
 })();
 
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
