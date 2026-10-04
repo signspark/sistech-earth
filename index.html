@@ -2904,6 +2904,21 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   NV.api = { openNav, closeNav, setPoint, computeRoute, startSim, stopSim, placeAt, setNavMode };
 })();
 
+/* ---------- 27. EARTH 버튼: 전지구 뷰로 줌아웃 + 한국 위성·스타링크 표시 · SITE/EARTH 순서 바꿈 ---------- */
+(function(){
+  const EARTH_LAYERS = ['ksat','starlink'];
+  let autoOn = new Set();
+  async function earthShow(){
+    camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(127.5, 36.5, 1.5e7), orientation:{ heading:0, pitch:-Cesium.Math.PI_OVER_TWO, roll:0 }, duration: 2.5 });
+    for(const id of EARTH_LAYERS){ if(!STATE.on.has(id)){ autoOn.add(id); try{ await toggleLayer(id, true); }catch(e){} } }
+  }
+  document.querySelectorAll('[data-mode="earth"]').forEach(b=>{ b.onclick = () => { setMode('earth'); earthShow(); }; });
+  // SITE로 가면 EARTH 버튼이 자동으로 켠 위성 레이어는 끔(사용자가 직접 켠 것은 유지)
+  const _smE = setMode; setMode = function(m){ const r = _smE(m); if(m==='site'){ for(const id of [...autoOn]){ if(STATE.on.has(id)) try{ toggleLayer(id, false); }catch(e){} } autoOn.clear(); } return r; };
+  // 순서: SITE 먼저, EARTH 다음 (상단 알약 + 좌측 레일)
+  for(const sel of ['.modes','#rail']){ const p = document.querySelector(sel); if(!p) continue; const s = p.querySelector('[data-mode="site"]'), e = p.querySelector('[data-mode="earth"]'); if(s && e) p.insertBefore(s, e); }
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
