@@ -990,7 +990,7 @@ const FIELDS = {
   wave:   { api:'marine', vars:['wave_height'], label:'유의 파고', unit:'m', stops:[[0,'#3fc7c0'],[0.5,'#a4c81c'],[1.5,'#f5d76e'],[2.5,'#f2a65a'],[4,'#ff5d5d'],[7,'#8b0000']], src:'Open-Meteo Marine · MODEL' },
   swell:  { api:'marine', vars:['swell_wave_height'], label:'너울 높이', unit:'m', stops:[[0,'#3fc7c0'],[0.5,'#a4c81c'],[1.5,'#f5d76e'],[2.5,'#f2a65a'],[4,'#ff5d5d']], src:'Open-Meteo Marine · MODEL' },
   sst:    { api:'marine', vars:['sea_surface_temperature'], label:'해수면 온도', unit:'°C', stops:[[-2,'#3b4cc0'],[8,'#7fb7f5'],[16,'#3fc7c0'],[22,'#a4c81c'],[27,'#f5d76e'],[31,'#ff5d5d']], src:'Open-Meteo Marine · MODEL' },
-  current:{ api:'marine', vars:['ocean_current_velocity','ocean_current_direction'], label:'표층 해류', unit:'m/s', stops:[[0,'rgba(0,0,0,0)'],[0.2,'#3fc7c0'],[0.5,'#a4c81c'],[1,'#f5d76e'],[1.5,'#ff5d5d']], arrows:true, toDir:true, src:'Open-Meteo Marine · MODEL · 화살표 = 흐르는 방향' },
+  current:{ api:'marine', vars:['ocean_current_velocity','ocean_current_direction'], label:'표층 해류', unit:'km/h', stops:[[0,'rgba(0,0,0,0)'],[0.7,'#3fc7c0'],[1.8,'#a4c81c'],[3.6,'#f5d76e'],[5.4,'#ff5d5d']], arrows:true, toDir:true, src:'Open-Meteo Marine · MODEL · 화살표 = 흐르는 방향 · km/h' },
   pm25:   { api:'aq', vars:['pm2_5'], label:'초미세먼지 PM2.5', unit:'µg/m³', stops:[[0,'#3fc7c0'],[15,'#a4c81c'],[35,'#f5d76e'],[75,'#f2a65a'],[150,'#ff5d5d']], src:'CAMS (Open-Meteo) · MODEL' },
   pm10:   { api:'aq', vars:['pm10'], label:'미세먼지 PM10', unit:'µg/m³', stops:[[0,'#3fc7c0'],[30,'#a4c81c'],[80,'#f5d76e'],[150,'#f2a65a'],[300,'#ff5d5d']], src:'CAMS · MODEL' },
   aqi:    { api:'aq', vars:['european_aqi'], label:'대기질 지수 (EAQI)', unit:'', stops:C_AQ, src:'CAMS · 유럽 AQI · MODEL' },
@@ -1009,20 +1009,22 @@ function viewExtent(){
   const pw=(e-w)*0.08, ph=(n-s)*0.08; w-=pw; e+=pw; s=Math.max(-85,s-ph); n=Math.min(85,n+ph);
   return { w, s, e, n };
 }
-function extentKey(x){ return [x.w,x.s,x.e,x.n].map(v=>v.toFixed(1)).join(','); }
+function extentKey(x){ return [x.w,x.s,x.e,x.n].map(v=>Math.round(v)).join(','); }
+const FCACHE = {}; // field+extent -> {t, grid}
 async function sampleField(id){
-  const F = FIELDS[id]; const ext = viewExtent(); const NX = ext.global?30:24, NY = ext.global?14:16;
+  const F = FIELDS[id]; const ext = viewExtent(); const NX = ext.global?20:16, NY = ext.global?10:11;
+  const ck = id+'|'+extentKey(ext); const cached = FCACHE[ck]; if(cached && Date.now()-cached.t < 15*60e3){ FS.grid = cached.grid; renderField(); showLegend(F.label, F.stops, F.unit, `${F.src} · 격자 ${NX}×${NY} · ${ext.global?'전지구':'현재 화면'} · 캐시`); return; }
   const lats=[], lons=[]; for(let j=0;j<NY;j++) for(let i=0;i<NX;i++){ lats.push((ext.n - (j+0.5)*(ext.n-ext.s)/NY).toFixed(3)); let lo = ext.w + (i+0.5)*(ext.e-ext.w)/NX; if(lo>180) lo-=360; lons.push(lo.toFixed(3)); }
   let url = `${API[F.api]}?latitude=${lats.join(',')}&longitude=${lons.join(',')}&timezone=Asia%2FSeoul`;
-  if(F.daily) url += `&daily=${F.daily}&forecast_days=2`; else url += `&hourly=${F.vars.join(',')}&forecast_days=3${F.api==='forecast'?'&past_days=1':''}`;
+  if(F.daily) url += `&daily=${F.daily}&forecast_days=2`; else url += `&hourly=${F.vars.join(',')}&forecast_days=2${F.api==='forecast'?'&past_days=1':''}`;
   if(F.api==='forecast') url += '&wind_speed_unit=ms';
   const tok = ++FS.token; FS.busy = true; toast(`${F.label} 격자 ${NX}×${NY} 샘플링 중…`);
   try{
     const r = await tf(url, {}, 25000); const j = await r.json(); if(tok!==FS.token) return;
     const arr = Array.isArray(j)? j : [j]; if(arr[0]?.error) throw new Error(arr[0].reason||'api error');
-    FS.grid = { id, ext, NX, NY, pts: arr, times: F.daily ? arr[0].daily.time : arr[0].hourly.time, key: extentKey(ext) };
+    FS.grid = { id, ext, NX, NY, pts: arr, times: F.daily ? arr[0].daily.time : arr[0].hourly.time, key: extentKey(ext) }; FCACHE[ck] = { t: Date.now(), grid: FS.grid };
     renderField(); showLegend(F.label, F.stops, F.unit, `${F.src} · 격자 ${NX}×${NY} · ${ext.global?'전지구':'현재 화면'}${F.daily?' · 내일':' · 시간 바 연동'}`);
-  }catch(e){ toast(`${F.label} 샘플링 실패: ${e.message}`, 4000); }
+  }catch(e){ toast(/limit/i.test(e.message) ? 'Open-Meteo 무료 한도(분당 호출) 초과 · 1분 후 다시 켜 주세요 (상용 전환 시 해제)' : `${F.label} 샘플링 실패: ${e.message}`, 5000); }
   FS.busy = false;
 }
 function fieldValue(F, p, ti){ if(F.daily) return p.daily?.[F.daily]?.[1] ?? null; const vals = F.vars.map(v => p.hourly?.[v]?.[ti]); if(vals.some(v=>v==null)) return null; return F.derive ? F.derive(vals) : vals[0]; }
@@ -1052,9 +1054,9 @@ async function renderField(){
 }
 function clearField(){ FS.token++; if(FS.layer){ viewer.imageryLayers.remove(FS.layer, true); FS.layer=null; } if(FS.arrowDS) FS.arrowDS.entities.removeAll(); FS.grid=null; FS.id=null; showLegend(null); }
 async function setField(id){ // 격자 필드는 한 번에 하나 (EARTHUS live= 와 동일)
-  if(FS.id && FS.id!==id){ STATE.on.delete(FS.id); } clearField(); FS.id = id; await sampleField(id);
+  if(FS.id && FS.id!==id){ STATE.on.delete('f_'+FS.id); } clearField(); FS.id = id; await sampleField(id);
 }
-let moveTimer=null; camera.moveEnd.addEventListener(()=>{ if(!FS.id) return; clearTimeout(moveTimer); moveTimer = setTimeout(()=>{ const k = extentKey(viewExtent()); if(FS.grid && k!==FS.grid.key && !FS.busy) sampleField(FS.id); }, 900); });
+let moveTimer=null; camera.moveEnd.addEventListener(()=>{ if(!FS.id) return; clearTimeout(moveTimer); moveTimer = setTimeout(()=>{ if(!FS.grid || FS.busy) return; const x = viewExtent(), g = FS.grid.ext; const span = Math.max(g.e-g.w, g.n-g.s); const moved = Math.max(Math.abs((x.w+x.e)/2-(g.w+g.e)/2), Math.abs((x.n+x.s)/2-(g.n+g.s)/2)); const zoom = Math.max(x.e-x.w, x.n-x.s)/span; if(moved > span*0.35 || zoom < 0.55 || zoom > 1.8 || (!!x.global)!==(!!g.global)) sampleField(FS.id); }, 1200); });
 
 /* ---------- 레이더 (RainViewer) ---------- */
 const RV = { meta:null, frames:[], layers:{}, cur:null, satFrames:[] };
@@ -1077,7 +1079,8 @@ const EONET_COL = { wildfires:'#ff5d5d', severeStorms:'#7fb7f5', volcanoes:'#f2a
 async function loadEonet(filterCat){
   const id = filterCat ? 'eonet_'+filterCat : 'eonet'; const D = ds(id); if(D.entities.values.length){ D.show=true; return; }
   toast('NASA EONET 이벤트 불러오는 중…'); const r = await tf('https://eonet.gsfc.nasa.gov/api/v3/events/geojson?status=open&days=30'); const j = await r.json(); let n=0;
-  for(const f of j.features){ const cat = f.properties.categories[0]; if(filterCat && cat.id!==filterCat) continue; let c = f.geometry.type==='Point' ? f.geometry.coordinates : (f.geometry.coordinates[0][0]||f.geometry.coordinates[0]); if(!Array.isArray(c)||c.length<2) continue; n++;
+  const latest = {}; for(const f of j.features){ const id = f.properties.id; if(!latest[id] || (f.properties.date||'') > (latest[id].properties.date||'')) latest[id] = f; }
+  for(const f of Object.values(latest)){ const cat = f.properties.categories[0]; if(filterCat && cat.id!==filterCat) continue; let c = f.geometry.type==='Point' ? f.geometry.coordinates : (f.geometry.coordinates[0][0]||f.geometry.coordinates[0]); if(!Array.isArray(c)||c.length<2) continue; n++;
     D.entities.add({ position: Cesium.Cartesian3.fromDegrees(c[0],c[1],0), point: PT(EONET_COL[cat.id]||'#a4c81c', 7), properties:{ kind:'eonet', title:f.properties.title, cat:cat.title, date:f.properties.date, link:f.properties.link, src:(f.properties.sources||[]).map(s=>s.url).join(' ') } }); }
   toast(`EONET ${filterCat? '산불':'자연재해 이벤트'} ${n}건 (최근 30일, 진행 중)`);
 }
@@ -1131,9 +1134,9 @@ async function loadGBIF(kind, lat, lon){
   toast(`${Q[1]} ${j.results.length}건 표시`);
 }
 async function loadEclipse(){ toast('일식 자료 (USNO)…'); const y = new Date().getFullYear(); const j = await (await tf(`https://aa.usno.navy.mil/api/eclipses/solar/year?year=${y}`)).json(); const list = j.eclipses_in_year||[]; CARD(`${y}년 일식`, 'US Naval Observatory', `<div class="sec">${list.map(e=>`<p class="lead" style="margin:0 0 8px"><b>${e.year}-${String(e.month).padStart(2,'0')}-${String(e.day).padStart(2,'0')}</b> ${e.event}</p>`).join('')||'<p class="lead">자료 없음</p>'}<div class="meta"><span class="tag obs">OFFICIAL</span> USNO 일식 API · 경로 지도는 NASA GSFC 자료 연결 예정</div></div>`); }
-async function loadPopulation(lat, lon){ if(lat==null) return toast('지도를 먼저 클릭해 지점을 선택하세요'); toast('WorldPop 인구 집계 중 (약 10초)…'); const d=0.045; const geo = {type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Polygon',coordinates:[[[lon-d,lat-d],[lon+d,lat-d],[lon+d,lat+d],[lon-d,lat+d],[lon-d,lat-d]]]}}]};
-  const j = await (await tf(`https://api.worldpop.org/v1/services/stats?dataset=wpgppop&year=2020&geojson=${encodeURIComponent(JSON.stringify(geo))}`)).json(); let res=null; for(let k=0;k<12;k++){ await new Promise(r=>setTimeout(r,2000)); const t = await (await tf(`https://api.worldpop.org/v1/tasks/${j.taskid}`)).json(); if(t.status==='finished'){ res=t.data; break; } }
-  const sec = `<div class="sec"><p class="lead">이 지점 주변 약 10 km × 10 km 안에 <b>${res? fmtN(res.total_population):'집계 실패'} 명</b>이 거주합니다 (2020년 추정).</p><div class="meta"><span class="tag model">MODEL</span> WorldPop 100 m 격자 인구 추정 · EARTHUS 인구 조각(21개국 격자)은 자체 자료</div></div>`;
+async function loadPopulation(lat, lon){ if(lat==null) return toast('지도를 먼저 클릭해 지점을 선택하세요'); toast('WorldPop 인구 집계 중 (약 10초)…'); const d=0.045; const geo = {type:'FeatureCollection',features:[{type:'Feature',properties:{},geometry:{type:'Polygon',coordinates:[[[lon-d,lat-d],[lon+d,lat-d],[lon+d,lat+d],[lon-d,lat+d],[lon-d,lat-d]]]}}]};
+  const j = await (await tf(`https://api.worldpop.org/v1/services/stats?dataset=wpgppop&year=2020&geojson=${encodeURIComponent(JSON.stringify(geo))}`)).json(); let res=null, errMsg=''; for(let k=0;k<15;k++){ await new Promise(r=>setTimeout(r,2500)); const t = await (await tf(`https://api.worldpop.org/v1/tasks/${j.taskid}`)).json(); if(t.status==='finished'){ if(t.error) errMsg = t.error_message; else res=t.data; break; } }
+  const sec = `<div class="sec"><p class="lead">이 지점 주변 약 10 km × 10 km 안에 <b>${res? fmtN(res.total_population)+' 명':'집계 실패'+(errMsg?' ('+errMsg.slice(0,40)+')':'')}</b>이 거주합니다 (2020년 추정).</p><div class="meta"><span class="tag model">MODEL</span> WorldPop 100 m 격자 인구 추정 · EARTHUS 인구 조각(21개국 격자)은 자체 자료</div></div>`;
   if(STATE.point){ STATE.point.pop = sec; renderCard(); } else CARD('인구', `N${lat.toFixed(3)} E${lon.toFixed(3)}`, sec); }
 
 /* ---------- 지점 카드 확장 섹션 ---------- */
@@ -1146,7 +1149,7 @@ const CARD_FETCH = {
 };
 const CARD_SECTIONS = {
   surf: { needs:['marine'], render:(P)=>{ const h=P.marine?.hourly; if(!h) return ''; const i=hourIndex(h); const sw=h.swell_wave_height[i], sp=h.swell_wave_period[i], sd=h.swell_wave_direction[i], wh=h.wave_height[i]; if(sw==null) return `<div class="sec"><p class="lead" style="color:var(--text-dim)">서핑: 바다 격자가 아닙니다(내륙).</p></div>`; const w=P.wx2?.hourly?.wind_speed_10m?.[hourIndex(P.wx2.hourly)]; const g = sp>=8 && sw>=0.5 && sw<=2.5 && (w==null||w<8) ? ['ok','서핑 양호 · 긴 주기 너울'] : sp>=6 && sw>=0.3 ? ['warn','보통 · 짧은 주기/바람'] : ['bad','너울 약함 또는 바람 강함']; return `<div class="sec"><div class="fly ${g[0]}">${g[1]}</div><p class="lead">너울 <b>${sw} m</b> · 주기 <b>${sp} s</b> · 방향 ${dirName(sd)}(${sd}°) · 전체 파고 ${wh} m${w!=null?` · 바람 ${w} m/s`:''}</p><div class="meta"><span class="tag model">MODEL</span> Open-Meteo Marine · 판정 기준은 예시(주기 8s+, 너울 0.5~2.5m, 바람 8m/s 미만)</div></div>`; } },
-  fishing: { needs:['marine','wx2'], render:(P)=>{ const h=P.marine?.hourly; if(!h) return ''; const i=hourIndex(h); const wh=h.wave_height[i]; if(wh==null) return `<div class="sec"><p class="lead" style="color:var(--text-dim)">낚시: 바다 격자가 아닙니다(내륙).</p></div>`; const cv=h.ocean_current_velocity[i], cd=h.ocean_current_direction[i], sst=h.sea_surface_temperature[i]; const w=P.wx2?.hourly?.wind_speed_10m?.[hourIndex(P.wx2.hourly)]; const g = wh<1 && (w==null||w<7) ? ['ok','출조 양호'] : wh<1.5 && (w==null||w<10) ? ['warn','주의 · 파고/바람'] : ['bad','위험 · 출조 부적합']; return `<div class="sec"><div class="fly ${g[0]}">${g[1]}</div><p class="lead">파고 <b>${wh} m</b> · 해류 <b>${cv} m/s</b> ${dirName(cd)}쪽 · 수온 ${sst}°C${w!=null?` · 바람 ${w} m/s`:''}</p><div class="meta"><span class="tag model">MODEL</span> Open-Meteo Marine · 판정 기준은 예시(파고 1m, 바람 7m/s) · 물때(조위)는 국립해양조사원 자료 필요</div></div>`; } },
+  fishing: { needs:['marine','wx2'], render:(P)=>{ const h=P.marine?.hourly; if(!h) return ''; const i=hourIndex(h); const wh=h.wave_height[i]; if(wh==null) return `<div class="sec"><p class="lead" style="color:var(--text-dim)">낚시: 바다 격자가 아닙니다(내륙).</p></div>`; const cv=h.ocean_current_velocity[i], cd=h.ocean_current_direction[i], sst=h.sea_surface_temperature[i]; const w=P.wx2?.hourly?.wind_speed_10m?.[hourIndex(P.wx2.hourly)]; const g = wh<1 && (w==null||w<7) ? ['ok','출조 양호'] : wh<1.5 && (w==null||w<10) ? ['warn','주의 · 파고/바람'] : ['bad','위험 · 출조 부적합']; return `<div class="sec"><div class="fly ${g[0]}">${g[1]}</div><p class="lead">파고 <b>${wh} m</b> · 해류 <b>${(cv/3.6).toFixed(2)} m/s</b> ${dirName(cd)}쪽 · 수온 ${sst}°C${w!=null?` · 바람 ${w} m/s`:''}</p><div class="meta"><span class="tag model">MODEL</span> Open-Meteo Marine · 판정 기준은 예시(파고 1m, 바람 7m/s) · 물때(조위)는 국립해양조사원 자료 필요</div></div>`; } },
   paraglide: { needs:['wx2'], render:(P)=>{ const h=P.wx2?.hourly; if(!h) return ''; const i=hourIndex(h); const w=h.wind_speed_10m[i], w80=h.wind_speed_80m[i], g=h.wind_gusts_10m[i], cl=h.cloud_cover_low[i], cape=h.cape[i]; const j = w>=2&&w<=7&&g<10&&cape<500&&cl<60 ? ['ok','비행 양호'] : w<=9&&g<13&&cape<1000 ? ['warn','주의 · 경험자'] : ['bad','부적합']; return `<div class="sec"><div class="fly ${j[0]}">패러글라이딩: ${j[1]}</div><p class="lead">바람 10 m <b>${w} m/s</b> · 80 m <b>${w80} m/s</b> · 돌풍 ${g} · 저층 운량 ${cl}% · CAPE ${cape} J/kg</p><div class="meta"><span class="tag model">MODEL</span> Open-Meteo · 판정 기준은 예시 · 활공장 목록은 지역 › 활공장 검색</div></div>`; } },
   summit: { needs:['elev'], render:(P)=>{ const e=P.elev; if(e==null) return ''; const t = P.wx?.hourly?.temperature_2m?.[hourIndex(P.wx.hourly)]; return `<div class="sec"><p class="lead">이 지점 표고 <b>${Math.round(e)} m</b>. ${t!=null? `1,000 m 더 오르면 약 <b>${(t-6.5).toFixed(1)}°C</b> (지금 ${t}°C, 감률 6.5°C/km)`:''}</p><div class="meta"><span class="tag model">MODEL</span> Open-Meteo 표고(Copernicus DEM 90m) · 표준 기온 감률 적용(DERIVED) · 산 정상 목록은 지역 › 산 정상 검색</div></div>`; } },
   climate: { needs:['climate'], render:(P)=>{ const d=P.climate?.daily; if(!d) return ''; const t=d.temperature_2m_mean.filter(v=>v!=null), r=d.precipitation_sum; const mn=Math.min(...t), mx=Math.max(...t), avg=t.reduce((s,x)=>s+x,0)/t.length, rs=r.reduce((s,x)=>s+(x||0),0); const W=320,H=60; const pts=t.map((v,i)=>`${(i/(t.length-1)*W).toFixed(1)},${(H-(v-mn)/(mx-mn||1)*H).toFixed(1)}`).join(' '); return `<div class="sec"><p class="lead">최근 1년 일평균 기온 <b>${avg.toFixed(1)}°C</b> (최저 ${mn.toFixed(1)} · 최고 ${mx.toFixed(1)}), 연 강수 <b>${rs.toFixed(0)} mm</b></p><svg width="${W}" height="${H}" style="display:block;margin:4px 0"><polyline points="${pts}" fill="none" stroke="#A4C81C" stroke-width="1.5"/></svg><div class="meta"><span class="tag obs">REANALYSIS</span> Open-Meteo ERA5 과거기상 · ${d.time[0]} ~ ${d.time[d.time.length-1]}</div></div>`; } },
