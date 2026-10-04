@@ -2375,14 +2375,14 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
 (function(){
   const C = Cesium;
   const MODELS = {
-    car:  { uri:'https://raw.githubusercontent.com/mrdoob/three.js/r160/examples/models/gltf/ferrari.glb', scale:1, minPx:64, off:-90, side:3.2 },
-    walk: { uri:'https://raw.githubusercontent.com/CesiumGS/cesium/1.120/Apps/SampleData/models/CesiumMan/Cesium_Man.glb', scale:1, minPx:90, off:-90, side:1.5 },
-    uam:  { uri:'https://raw.githubusercontent.com/CesiumGS/cesium/1.120/Apps/SampleData/models/CesiumDrone/CesiumDrone.glb', scale:3, minPx:110, off:90, side:0 }
+    car:  { uri:'https://raw.githubusercontent.com/mrdoob/three.js/r160/examples/models/gltf/ferrari.glb', scale:1, minPx:64, off:-90, side:0 },
+    walk: { uri:'https://raw.githubusercontent.com/CesiumGS/cesium/1.120/Apps/SampleData/models/CesiumMan/Cesium_Man.glb', scale:1, minPx:90, off:-90, side:0 },
+    uam:  { uri:null, scale:3, minPx:110, off:-90, side:0 }
   };
   const MODE = {
     car:  { name:'차량', layer:'navCar',  camH:100, pitch:-50, mul:2,  color:'#3D8BFF', speedTxt:'도로 실제 속도 (OSRM)' },
     walk: { name:'도보', layer:'navWalk', camH:50,  pitch:-50, mul:10, color:'#BFE33A', speedTxt:'보행 4.5 km/h' },
-    uam:  { name:'UAM',  layer:'navUam',  camH:400, pitch:-40, mul:3,  color:'#3FC7C0', speedTxt:'순항 150 km/h · 고도 300 m' }
+    uam:  { name:'UAM',  layer:'navUam',  camH:400, pitch:-40, mul:3,  color:'#3FC7C0', speedTxt:'고정익 VTOL · 수직 이착륙 · 순항 150 km/h · 300 m' }
   };
   const UAM_CRUISE_AGL = 300, UAM_V = 150/3.6, WALK_V = 4.5/3.6;
   const NV = { open:false, mode:'car', start:null, end:null, route:null, playing:false, t:0, mul:5, cam:'chase', camH:100,
@@ -2398,8 +2398,8 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   const site = MENUS.site; const expIdx = site.findIndex(c=>c.id==='export');
   site.splice(expIdx<0?site.length:expIdx, 0, { id:'nav', name:'내비', icon:ICON.nav, items:[
     { id:'navCar',  q:'차로 가면 어떤 길로 가나', name:'차량 내비 시뮬레이션', src:'도로 경로 (OSRM) · 3D 승용차 · 차량 100 m 위 추적 시점', type:'layer' },
-    { id:'navWalk', q:'걸어서 가면 어떤 길로 가나', name:'도보 내비 시뮬레이션', src:'보행 경로 (OSM) · 걷는 사람 · 50 m 위 시점', type:'layer' },
-    { id:'navUam',  q:'하늘길(UAM)로 가면', name:'UAM 비행 시뮬레이션', src:'직선 항로 · 수직 이착륙 · 순항 300 m · 기체 400 m 위 시점', type:'layer' }
+    { id:'navWalk', q:'걸어서 가면 어떤 길로 가나', name:'도보 내비 시뮬레이션', src:'보행 경로 (OSM) · 보도로 걷는 사람 · 50 m 위 시점', type:'layer' },
+    { id:'navUam',  q:'하늘길(UAM)로 가면', name:'UAM 비행 시뮬레이션', src:'고정익 수직이착륙기 · 90° 수직 상승 → 순항 300 m → 수직 하강 · 기체 400 m 위 시점', type:'layer' }
   ]});
 
   /* ---- 창 ---- */
@@ -2548,8 +2548,130 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   q('#nvSwap').onclick = () => { const s = NV.start, e = NV.end; NV.start = e; NV.end = s; setPin('start'); setPin('end'); q('#nvStart').value = e?e.name:''; q('#nvEnd').value = s?s.name:''; stopSim(true); clearRoute(); if(NV.start&&NV.end) computeRoute(); updHint(); };
   q('#nvReset').onclick = () => { stopSim(true); clearRoute(); NV.start = NV.end = null; setPin('start'); setPin('end'); q('#nvStart').value = q('#nvEnd').value = ''; q('#nvResS').classList.remove('open'); q('#nvResE').classList.remove('open'); updHint(); };
 
+
+  /* ---- 차선·보도 오프셋 (OSM 도로 폭·일방통행) ---- */
+  async function laneOffsets(co, mode){
+    const step = Math.max(1, Math.ceil(co.length/150)); const pts = co.filter((c,i)=> i%step===0 || i===co.length-1);
+    const ql = `[out:json][timeout:15];way(around:20,${pts.map(p=>p[1].toFixed(6)+','+p[0].toFixed(6)).join(',')})["highway"];out tags geom;`;
+    const ac = new AbortController(); const tm = setTimeout(()=>ac.abort(), 25000);
+    const one = async u => { const r = await fetch(u, { method:'POST', body:'data='+encodeURIComponent(ql), headers:{'Content-Type':'application/x-www-form-urlencoded'}, signal: ac.signal }); if(!r.ok) throw new Error(r.status); const jj = await r.json(); if(!jj.elements) throw new Error('bad'); return jj; };
+    let j = null; try{ j = await Promise.any(['https://overpass-api.de/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.private.coffee/api/interpreter'].map(one)); }catch(e){}
+    clearTimeout(tm); try{ ac.abort(); }catch(e){}
+    if(!j || !j.elements) return null;
+    const lat0 = co[0][1], lon0 = co[0][0], kx = Math.cos(rad(lat0))*R*Math.PI/180, ky = R*Math.PI/180;
+    const L = p => [(p[0]-lon0)*kx, (p[1]-lat0)*ky];
+    const DEF = { motorway:22, trunk:20, primary:18, secondary:14, tertiary:10, unclassified:7, residential:6, living_street:5, service:4, motorway_link:7, trunk_link:7, primary_link:7, secondary_link:7, tertiary_link:6, road:6 };
+    const PED = ['footway','path','pedestrian','steps','cycleway','corridor','bridleway','track'];
+    const ways = j.elements.filter(e=>e.type==='way' && e.geometry).map(e=>{ const tg = e.tags||{}, hw = tg.highway, ped = PED.includes(hw);
+      let w = parseFloat(tg.width); const lanes = parseFloat(tg.lanes); if(!(w>0)) w = lanes>0 ? lanes*3.25 : (DEF[hw]||6);
+      const one = ['yes','1','-1','true'].includes(tg.oneway) || hw==='motorway' || tg.junction==='roundabout';
+      return { ped, w: ped?0:w, one, rev: tg.oneway==='-1', g: e.geometry.map(p=>L([p.lon,p.lat])) }; });
+    if(!ways.length) return null;
+    const lc = co.map(L), out = [];
+    for(let i=0;i<lc.length;i++){
+      const p = lc[i], a = lc[Math.max(0,i-1)], b = lc[Math.min(lc.length-1,i+1)], dir = [b[0]-a[0], b[1]-a[1]];
+      let best = null, bestPed = null;
+      for(const w of ways){ for(let k=1;k<w.g.length;k++){ const s0=w.g[k-1], s1=w.g[k], vx=s1[0]-s0[0], vy=s1[1]-s0[1], l2=vx*vx+vy*vy||1e-9;
+        let u=((p[0]-s0[0])*vx+(p[1]-s0[1])*vy)/l2; u=Math.max(0,Math.min(1,u)); const d=Math.hypot(s0[0]+vx*u-p[0], s0[1]+vy*u-p[1]); const same=(vx*dir[0]+vy*dir[1])>=0;
+        if(w.ped){ if(!bestPed || d<bestPed.d) bestPed={d,w,same}; } else if(!best || d<best.d) best={d,w,same}; } }
+      let off;
+      if(mode==='walk'){
+        if(bestPed && bestPed.d < 3) off = 0;                       // 이미 보도·횡단보도 위
+        else if(best && best.d < 12){ const w = best.w; off = w.w/2 + 2.5; if(w.one){ const fwd = w.rev ? !best.same : best.same; if(!fwd) off = -off; } }
+        else off = (bestPed && bestPed.d < 8) ? 0 : 5;
+      } else {
+        if(best && best.d < 12){ const w = best.w; off = w.one ? 0 : Math.max(1.6, Math.min(6, w.w/4)); }
+        else off = 3.2;
+      }
+      out.push(off);
+    }
+    const sm = out.map((v,i)=>[out[Math.max(0,i-1)], v, out[Math.min(out.length-1,i+1)]].sort((x,y)=>x-y)[1]);
+    sm.src = 'OSM'; return sm;
+  }
+  function offsetLine(co, offs){
+    const lat0=co[0][1], lon0=co[0][0], kx=Math.cos(rad(lat0))*R*Math.PI/180, ky=R*Math.PI/180;
+    const P = co.map(c=>[(c[0]-lon0)*kx, (c[1]-lat0)*ky]), n = P.length, res = [];
+    const nrm = (a,b)=>{ const dx=b[0]-a[0], dy=b[1]-a[1], l=Math.hypot(dx,dy); if(l<1e-6) return null; return [dy/l, -dx/l]; };
+    const nxt = i => { for(let k=i+1;k<n;k++){ const v=nrm(P[i],P[k]); if(v) return v; } return null; }, prv = i => { for(let k=i-1;k>=0;k--){ const v=nrm(P[k],P[i]); if(v) return v; } return null; };
+    for(let i=0;i<n;i++){ const d = offs[i]||0; let m;
+      const n1 = prv(i), n2 = nxt(i);
+      if(!n1 && !n2) m=[0,0]; else if(!n1) m=n2; else if(!n2) m=n1;
+      else { let mx=n1[0]+n2[0], my=n1[1]+n2[1]; const l=Math.hypot(mx,my);
+        if(l<1e-6) m=n1; else { mx/=l; my/=l; const cs=Math.max(0.35, mx*n1[0]+my*n1[1]); m=[mx/cs, my/cs]; } }
+      res.push([P[i][0]+m[0]*d, P[i][1]+m[1]*d]); }
+    // 안쪽 모서리에서 뒤로 꺾이는 점은 앞 점으로 접기
+    let last = res[0];
+    for(let i=1;i<n;i++){ const ox=P[i][0]-P[i-1][0], oy=P[i][1]-P[i-1][1], sx=res[i][0]-last[0], sy=res[i][1]-last[1];
+      if(ox*sx+oy*sy < 0) res[i] = [last[0], last[1]]; else last = res[i]; }
+    return res.map(p=>[lon0 + p[0]/kx, lat0 + p[1]/ky]);
+  }
+
+  /* ---- 고정익 수직이착륙기 (쿼드플레인) glTF 생성 ---- */
+  function makeVtolGlb(){
+    const mats = [ [0.93,0.95,0.97,1], [0.03,0.14,0.30,1], [0.64,0.78,0.11,1], [0.12,0.13,0.15,1], [0.25,0.55,0.85,1] ]; // 흰 동체, 네이비, 라임, 프롭, 캐노피
+    const meshes = []; // {prims:[{mat,P,N,I}]}
+    const newMesh = () => { const m = { prims: mats.map((_,k)=>({ mat:k, P:[], N:[], I:[] })) }; meshes.push(m); return m; };
+    function quad(pr, a,b,c,d){ const ux=b[0]-a[0], uy=b[1]-a[1], uz=b[2]-a[2], vx=d[0]-a[0], vy=d[1]-a[1], vz=d[2]-a[2];
+      let nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx; const l=Math.hypot(nx,ny,nz)||1; nx/=l; ny/=l; nz/=l;
+      const o = pr.P.length/3; for(const p of [a,b,c,d]){ pr.P.push(p[0],p[1],p[2]); pr.N.push(nx,ny,nz); } pr.I.push(o,o+1,o+2, o,o+2,o+3); }
+    // 8개 꼭짓점 육면체: c[0..3] 아래(-y) , c[4..7] 위(+y), 순서: (-x,-z),(+x,-z),(+x,+z),(-x,+z)
+    function hexa(m, k, c){ const pr = m.prims[k]; const f = (i,j,l,n)=>quad(pr, c[i],c[j],c[l],c[n]);
+      f(0,1,2,3); f(4,7,6,5); f(0,4,5,1); f(1,5,6,2); f(2,6,7,3); f(3,7,4,0); }
+    function box(m, k, cx,cy,cz, sx,sy,sz){ const x0=cx-sx/2,x1=cx+sx/2,y0=cy-sy/2,y1=cy+sy/2,z0=cz-sz/2,z1=cz+sz/2;
+      hexa(m,k,[[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1],[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]); }
+    // 단면 회전체(동체): z 방향 단면 [z, rx, ry, cy]
+    function loft(m, k, secs, seg){ const pr = m.prims[k];
+      for(let s=0;s<secs.length;s++){ const [z,rx,ry,cy] = secs[s]; for(let i=0;i<=seg;i++){ const a=i/seg*Math.PI*2, ca=Math.cos(a), sa=Math.sin(a);
+        pr.P.push(rx*ca, cy+ry*sa, z); const nx=ca/Math.max(rx,1e-3), ny=sa/Math.max(ry,1e-3), l=Math.hypot(nx,ny)||1; pr.N.push(nx/l, ny/l, 0); } }
+      for(let s=0;s<secs.length-1;s++) for(let i=0;i<seg;i++){ const a=s*(seg+1)+i, b=a+1, c=a+seg+1, d=c+1; pr.I.push(a,c,b, b,c,d); } }
+    const body = newMesh();
+    loft(body, 0, [[-0.98,0.01,0.01,0.02],[-0.85,0.06,0.07,0.02],[-0.55,0.12,0.13,0.02],[-0.1,0.16,0.17,0],[0.35,0.17,0.17,0],[0.62,0.15,0.15,0],[0.82,0.10,0.10,-0.01],[0.95,0.04,0.05,-0.02],[1.0,0.005,0.005,-0.02]], 20);
+    loft(body, 4, [[0.30,0.01,0.01,0.15],[0.42,0.09,0.06,0.15],[0.62,0.10,0.06,0.14],[0.78,0.06,0.04,0.10],[0.86,0.01,0.01,0.07]], 14); // 캐노피
+    // 주익(테이퍼)
+    const wing = (sx) => { const r0=0.02*sx, r1=1.85*sx; return [[r0,0.09,0.02],[r1,0.13,0.14],[r1,0.13,0.34],[r0,0.09,0.42],[r0,0.15,0.02],[r1,0.16,0.14],[r1,0.16,0.34],[r0,0.15,0.42]]; };
+    { const c = wing(1); hexa(body,0,c); const c2 = wing(-1).map(p=>p.slice()); hexa(body,0,[c2[1],c2[0],c2[3],c2[2],c2[5],c2[4],c2[7],c2[6]]); }
+    box(body,2, 1.86,0.145,0.24, 0.04,0.05,0.21); box(body,2, -1.86,0.145,0.24, 0.04,0.05,0.21); // 라임 날개끝
+    // 붐·모터
+    for(const x of [0.6,-0.6]){ box(body,1, x,0.10,-0.25, 0.07,0.07,2.15); box(body,1, x,0.16,0.80, 0.09,0.07,0.09); box(body,1, x,0.16,-0.55, 0.09,0.07,0.09);
+      // 수직 꼬리날개
+      hexa(body,1, [[x-0.012,0.12,-1.32],[x+0.012,0.12,-1.32],[x+0.012,0.12,-1.05],[x-0.012,0.12,-1.05],[x-0.008,0.46,-1.40],[x+0.008,0.46,-1.40],[x+0.008,0.46,-1.25],[x-0.008,0.46,-1.25]]); }
+    box(body,1, 0,0.45,-1.32, 1.24,0.025,0.17);  // 수평 꼬리날개
+    box(body,2, 0,0.0,0.62, 0.05,0.012,0.25);    // 라임 줄무늬
+    // 프롭(노드별 메쉬): 리프트 로터 4개, 푸셔 1개
+    const lift = newMesh(); box(lift,3, 0,0,0, 0.78,0.012,0.06); box(lift,1, 0,0.01,0, 0.06,0.03,0.06);
+    const push = newMesh(); box(push,3, 0,0,0, 0.52,0.06,0.012); box(push,1, 0,0,0.01, 0.05,0.05,0.04);
+    // glTF 직렬화
+    const bin = []; let off = 0; const bufferViews = [], accessors = [];
+    function addArr(arr, type, comp, target, minmax){ const ta = comp===5126 ? new Float32Array(arr) : new Uint16Array(arr); const pad = (4 - (ta.byteLength % 4)) % 4;
+      bufferViews.push({ buffer:0, byteOffset:off, byteLength:ta.byteLength, target }); bin.push(new Uint8Array(ta.buffer)); if(pad) bin.push(new Uint8Array(pad)); off += ta.byteLength + pad;
+      const acc = { bufferView: bufferViews.length-1, componentType: comp, count: type==='VEC3'? arr.length/3 : arr.length, type };
+      if(minmax){ const mn=[1e9,1e9,1e9], mx=[-1e9,-1e9,-1e9]; for(let i=0;i<arr.length;i+=3) for(let k=0;k<3;k++){ mn[k]=Math.min(mn[k],arr[i+k]); mx[k]=Math.max(mx[k],arr[i+k]); } acc.min=mn; acc.max=mx; }
+      accessors.push(acc); return accessors.length-1; }
+    const gMeshes = meshes.map(m=>({ primitives: m.prims.filter(p=>p.I.length).map(p=>({ attributes:{ POSITION: addArr(p.P,'VEC3',5126,34962,true), NORMAL: addArr(p.N,'VEC3',5126,34962) }, indices: addArr(p.I,'SCALAR',5123,34963), material: p.mat })) }));
+    // 회전 애니메이션 (Y축: 리프트, Z축: 푸셔)
+    const T = [0, 0.1, 0.2, 0.3, 0.4]; const tAcc = (()=>{ const ta = new Float32Array(T); bufferViews.push({ buffer:0, byteOffset:off, byteLength:ta.byteLength }); bin.push(new Uint8Array(ta.buffer)); off += ta.byteLength; accessors.push({ bufferView:bufferViews.length-1, componentType:5126, count:T.length, type:'SCALAR', min:[0], max:[0.4] }); return accessors.length-1; })();
+    const qAcc = (ax, dirSign) => { const q = []; for(let i=0;i<T.length;i++){ const a = dirSign*i*Math.PI/2/2; const s=Math.sin(a), c=Math.cos(a); q.push(ax==='y'?0:0, ax==='y'?s:0, ax==='z'?s:0, c); }
+      const ta = new Float32Array(q); bufferViews.push({ buffer:0, byteOffset:off, byteLength:ta.byteLength }); bin.push(new Uint8Array(ta.buffer)); off += ta.byteLength; accessors.push({ bufferView:bufferViews.length-1, componentType:5126, count:T.length, type:'VEC4' }); return accessors.length-1; };
+    const qy1 = qAcc('y', 1), qy2 = qAcc('y', -1), qz = qAcc('z', 1);
+    const nodes = [ { mesh:0 } ]; const rotorPos = [[0.6,0.205,0.80,qy1],[-0.6,0.205,0.80,qy2],[0.6,0.205,-0.55,qy2],[-0.6,0.205,-0.55,qy1]];
+    for(const r of rotorPos) nodes.push({ mesh:1, translation:[r[0],r[1],r[2]] });
+    nodes.push({ mesh:2, translation:[0,0.0,-1.0] });
+    const samplers = [], channels = [];
+    rotorPos.forEach((r,i)=>{ samplers.push({ input:tAcc, output:r[3], interpolation:'LINEAR' }); channels.push({ sampler:samplers.length-1, target:{ node:i+1, path:'rotation' } }); });
+    samplers.push({ input:tAcc, output:qz, interpolation:'LINEAR' }); channels.push({ sampler:samplers.length-1, target:{ node:5, path:'rotation' } });
+    const json = { asset:{ version:'2.0', generator:'SISTECH VTOL' }, scene:0, scenes:[{ nodes:[0,1,2,3,4,5] }], nodes, meshes:gMeshes,
+      materials: mats.map((c,k)=>({ pbrMetallicRoughness:{ baseColorFactor:c, metallicFactor: k===4?0.3:0.05, roughnessFactor: k===4?0.2:0.55 }, doubleSided:true })),
+      animations:[{ samplers, channels }], accessors, bufferViews, buffers:[{ byteLength: off }] };
+    let js = new TextEncoder().encode(JSON.stringify(json)); const jpad = (4 - js.length % 4) % 4; if(jpad){ const t = new Uint8Array(js.length+jpad); t.set(js); t.fill(0x20, js.length); js = t; }
+    const total = 12 + 8 + js.length + 8 + off; const out = new Uint8Array(total); const dv = new DataView(out.buffer);
+    dv.setUint32(0, 0x46546C67, true); dv.setUint32(4, 2, true); dv.setUint32(8, total, true);
+    dv.setUint32(12, js.length, true); dv.setUint32(16, 0x4E4F534A, true); out.set(js, 20);
+    let p = 20 + js.length; dv.setUint32(p, off, true); dv.setUint32(p+4, 0x004E4942, true); p += 8; for(const b of bin){ out.set(b, p); p += b.length; }
+    return URL.createObjectURL(new Blob([out], { type:'model/gltf-binary' }));
+  }
+
   /* ---- 경로 ---- */
-  function clearRoute(){ for(const e of NV.ents) viewer.entities.remove(e); NV.ents = []; if(NV.veh){ viewer.entities.remove(NV.veh); NV.veh = null; } NV.route = null; q('#nvSum').classList.remove('open'); }
+  function clearRoute(){ for(const e of NV.ents) viewer.entities.remove(e); NV.ents = []; NV.lineEnts = []; if(NV.veh){ viewer.entities.remove(NV.veh); NV.veh = null; } NV.route = null; q('#nvSum').classList.remove('open'); }
   const MOD = { 'left':'좌회전', 'right':'우회전', 'slight left':'왼쪽 방향', 'slight right':'오른쪽 방향', 'sharp left':'급좌회전', 'sharp right':'급우회전', 'straight':'직진', 'uturn':'유턴' };
   function stepText(s){ const m = s.maneuver||{}, md = MOD[m.modifier]||'';
     switch(m.type){ case 'depart': return '출발'; case 'arrive': return '목적지 도착';
@@ -2560,7 +2682,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
       case 'continue': case 'new name': return md && md!=='직진' ? md : '직진';
       default: return md || '직진'; } }
   function arrowSvg(mod, type){ let d = 'M12 21V5M6 11l6-6 6 6';
-    if(type==='arrive') d = 'M12 3a6 6 0 0 1 6 6c0 5-6 12-6 12S6 14 6 9a6 6 0 0 1 6-6zM12 7.5v3';
+    if(mod==='up') d = 'M12 21V4M6 10l6-6 6 6M5 21h14'; else if(mod==='down') d = 'M12 3v17M6 14l6 6 6-6M5 3h14'; else if(type==='arrive') d = 'M12 3a6 6 0 0 1 6 6c0 5-6 12-6 12S6 14 6 9a6 6 0 0 1 6-6zM12 7.5v3';
     else if(/sharp left|^left/.test(mod)) d = 'M17 21v-8a4 4 0 0 0-4-4H5M9 5 5 9l4 4';
     else if(/sharp right|^right/.test(mod)) d = 'M7 21v-8a4 4 0 0 1 4-4h8M15 5l4 4-4 4';
     else if(/slight left/.test(mod)) d = 'M14 21v-7L7 7M7 13V7h6';
@@ -2577,7 +2699,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     const id = ++NV.routing; const mode = NV.mode, A = NV.start, B = NV.end;
     q('#nvBusy').textContent = '경로 계산 중…';
     try{
-      let S = [], steps = [], total = 0, dur = 0;
+      let S = [], steps = [], total = 0, dur = 0, extra = {};
       if(mode==='uam'){
         let hA = A.h!=null ? A.h : groundAt(A.lon,A.lat), hB = B.h!=null ? B.h : groundAt(B.lon,B.lat);
         const D = hav([A.lon,A.lat],[B.lon,B.lat]);
@@ -2586,30 +2708,35 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
           if(isFinite(smp[0].height) && !(Math.abs(hA - smp[0].height) < 400)) hA = smp[0].height; if(isFinite(smp[n].height) && !(Math.abs(hB - smp[n].height) < 400)) hB = smp[n].height; }catch(e){}
         if(!isFinite(hA)) hA = 0; if(!isFinite(hB)) hB = 0; terrMax = Math.max(terrMax, hA, hB);
         const cruise = Math.max(Math.max(hA,hB) + UAM_CRUISE_AGL, terrMax + 150);
-        const sm = x => x<=0?0:x>=1?1:x*x*(3-2*x);
-        const Lc = Math.min(D*0.4, Math.max(400, (cruise-hA-60)/0.09)), Ld = Math.min(D*0.4, Math.max(400, (cruise-hB-60)/0.09));
-        const alt = s => Math.min(hA+60 + (cruise-hA-60)*sm(s/Lc), hB+60 + (cruise-hB-60)*sm((D-s)/Ld));
-        const acc = 1.2, vAt = s => Math.max(4, Math.min(UAM_V, Math.sqrt(2*acc*s)+4, Math.sqrt(2*acc*Math.max(0,D-s))+4));
-        let t = 0; for(let k=0;k<=10;k++){ S.push({ lon:A.lon, lat:A.lat, h: hA+1+59*k/10, t, s:0 }); t += 2; }
+        const VUP = 5, VDN = 4, acc = 1.5;
+        let t = 0;
+        // 1) 출발지에서 수직(90°) 상승
+        const nUp = Math.max(2, Math.ceil((cruise-hA)/10));
+        for(let k=0;k<=nUp;k++){ const h = hA + 0.5 + (cruise-hA-0.5)*k/nUp; if(k>0) t += (cruise-hA)/nUp/VUP; S.push({ lon:A.lon, lat:A.lat, h, t, s:0 }); }
+        const t1 = t;
+        // 2) 순항 고도에서 수평 이동 (가속 → 150 km/h → 감속)
+        const vAt = s => Math.max(3, Math.min(UAM_V, Math.sqrt(2*acc*s)+3, Math.sqrt(2*acc*Math.max(0,D-s))+3));
         const N = Math.max(50, Math.min(1500, Math.round(D/15)));
-        for(let i=1;i<=N;i++){ const s0=(i-1)/N*D, s1=i/N*D; t += (s1-s0)/vAt((s0+s1)/2); const f=i/N; S.push({ lon:A.lon+(B.lon-A.lon)*f, lat:A.lat+(B.lat-A.lat)*f, h: alt(s1), t, s:s1 }); }
-        for(let k=1;k<=10;k++){ t += 2; S.push({ lon:B.lon, lat:B.lat, h: hB+60-59*k/10, t, s:D }); }
+        for(let i=1;i<=N;i++){ const s0=(i-1)/N*D, s1=i/N*D; t += (s1-s0)/vAt((s0+s1)/2); const f=i/N; S.push({ lon:A.lon+(B.lon-A.lon)*f, lat:A.lat+(B.lat-A.lat)*f, h: cruise, t, s:s1 }); }
+        const t2 = t;
+        // 3) 도착지에서 수직 하강
+        const nDn = Math.max(2, Math.ceil((cruise-hB)/10));
+        for(let k=1;k<=nDn;k++){ t += (cruise-hB)/nDn/VDN; S.push({ lon:B.lon, lat:B.lat, h: cruise - (cruise-hB-0.5)*k/nDn, t, s:D }); }
         total = D; dur = t; NV.uamCruise = cruise;
-        steps = [ { at:0, text:'수직 이륙', mod:'straight', name:'고도 60 m까지 상승' }, { at:Math.min(Lc, D/2), text:'순항', mod:'straight', name:`고도 약 ${Math.round(cruise-Math.max(hA,hB))} m · 150 km/h` }, { at:Math.max(D-Ld, D/2), text:'강하 시작', mod:'straight', name:'착륙장 접근' }, { at:D, text:'수직 착륙', mod:'', type:'arrive', name: B.name } ];
+        extra = { t1, t2, cruise, hA, hB, hdgFix: bearing([A.lon,A.lat],[B.lon,B.lat]) };
+        steps = [ { at:0, text:'수직 이륙', mod:'up', name:'' }, { at:D, text:'수직 착륙', mod:'down', type:'arrive', name:B.name } ];
       } else {
         const rt = await osrm(mode, A, B); if(id!==NV.routing) return;
-        const co = rt.geometry.coordinates; const ann = rt.legs[0].annotation || {};
-        let s = 0, t = 0; S.push({ lon:co[0][0], lat:co[0][1], h:null, t:0, s:0 });
-        for(let i=1;i<co.length;i++){ const d = hav(co[i-1], co[i]); s += d; let dt;
-          if(mode==='walk') dt = d / WALK_V; else { dt = ann.duration && ann.duration[i-1]!=null ? ann.duration[i-1] : d/ (30/3.6); dt = Math.max(dt, d/(110/3.6)); }
-          t += dt; S.push({ lon:co[i][0], lat:co[i][1], h:null, t, s }); }
-        total = s; dur = t;
-        let acc = 0; const scale = rt.distance>0 ? s/rt.distance : 1;
-        for(const st of rt.legs[0].steps){ steps.push({ at: acc*scale, text: stepText(st), mod: (st.maneuver||{}).modifier||'', type:(st.maneuver||{}).type, name: st.name || (st.ref||'') }); acc += st.distance; }
+        let co = rt.geometry.coordinates; const ann = rt.legs[0].annotation || {};
+        const built = buildLinear(co, co.map(()=> mode==='walk' ? 5 : 3.2), ann, mode, rt);
+        S = built.S; total = built.total; dur = built.dur; steps = built.steps;
+        const coRef = co, annRef = ann, rtRef = rt;
+        setTimeout(()=> refineLanes(id, coRef, annRef, mode, rtRef), 0);
+        extra = { offsetSrc: 'default' };
       }
       if(id!==NV.routing) return;
       // 도로 이름: 기동 이후 도로명
-      NV.route = { S, steps, total, dur, mode };
+      NV.route = Object.assign({ S, steps, total, dur, mode }, extra);
       drawRoute(); makeVehicle(); NV.t = 0; placeAt(0, true); updPanel();
       q('#nvSum').classList.add('open'); q('#nvBusy').textContent = '';
       const pts = S.filter((x,i)=>i%Math.max(1,Math.floor(S.length/200))===0).map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat, x.h!=null?x.h:(A.h||0)));
@@ -2619,22 +2746,44 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     updHint();
   }
 
+  function buildLinear(co, offs, ann, mode, rt){
+    const co2 = offsetLine(co, offs); const S = [];
+    let s = 0, t = 0; S.push({ lon:co2[0][0], lat:co2[0][1], h:null, t:0, s:0 });
+    for(let i=1;i<co2.length;i++){ const d = hav(co2[i-1], co2[i]), d0 = hav(co[i-1], co[i]); s += d; let dt;
+      if(mode==='walk') dt = d / WALK_V; else { dt = ann.duration && ann.duration[i-1]!=null && d0>0 ? ann.duration[i-1] * d/d0 : d/(30/3.6); dt = Math.max(dt, d/(110/3.6)); }
+      t += Math.max(dt, 0.01); S.push({ lon:co2[i][0], lat:co2[i][1], h:null, t, s }); }
+    const steps = []; let acc = 0; const scale = rt.distance>0 ? s/rt.distance : 1;
+    for(const st of rt.legs[0].steps){ steps.push({ at: acc*scale, text: stepText(st), mod: (st.maneuver||{}).modifier||'', type:(st.maneuver||{}).type, name: st.name || (st.ref||'') }); acc += st.distance; }
+    return { S, total:s, dur:t, steps };
+  }
+  async function refineLanes(id, co, ann, mode, rt){
+    let offs = null; try{ offs = await laneOffsets(co, mode); }catch(e){}
+    const r = NV.route; if(id!==NV.routing || !r || r.mode!==mode) return;
+    if(!offs){ r.offsetSrc = 'default'; return; }
+    const fr = r.dur ? NV.t / r.dur : 0; const b = buildLinear(co, offs, ann, mode, rt);
+    r.S = b.S; r.total = b.total; r.dur = b.dur; r.steps = b.steps; r.offsetSrc = 'OSM'; NV.t = fr * b.dur;
+    drawRoute(); placeAt(NV.t, true); updPanel();
+    toast(mode==='walk' ? 'OSM 도로 폭을 반영해 보도 쪽으로 경로를 맞췄습니다' : 'OSM 차로 정보를 반영해 주행 차선으로 경로를 맞췄습니다', 3000);
+  }
   function drawRoute(){ const r = NV.route, m = MODE[r.mode];
+    for(const e of (NV.lineEnts||[])){ viewer.entities.remove(e); const k = NV.ents.indexOf(e); if(k>=0) NV.ents.splice(k,1); }
+    NV.lineEnts = [];
+    const add = o => { const e = viewer.entities.add(o); NV.ents.push(e); NV.lineEnts.push(e); return e; };
     if(r.mode==='uam'){
-      const pos = r.S.filter((x,i)=>i%3===0 || i===r.S.length-1).map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat, x.h));
-      NV.ents.push(viewer.entities.add({ polyline:{ positions: pos, width: 10, material: new C.PolylineGlowMaterialProperty({ glowPower:.25, color: C.Color.fromCssColorString(m.color) }), arcType: C.ArcType.NONE } }));
-      NV.ents.push(viewer.entities.add({ polyline:{ positions: r.S.filter((x,i)=>i%3===0).map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat)), width: 3, clampToGround:true, classificationType: C.ClassificationType.BOTH, material: new C.PolylineDashMaterialProperty({ color: C.Color.fromCssColorString(m.color).withAlpha(.7), dashLength: 18 }) } }));
+      const pos = r.S.filter((x,i)=>i%3===0 || i===r.S.length-1 || x.s===0 || x.s===r.total).map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat, x.h));
+      add({ polyline:{ positions: pos, width: 10, material: new C.PolylineGlowMaterialProperty({ glowPower:.25, color: C.Color.fromCssColorString(m.color) }), arcType: C.ArcType.NONE } });
+      add({ polyline:{ positions: r.S.filter((x,i)=>i%3===0).map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat)), width: 3, clampToGround:true, classificationType: C.ClassificationType.BOTH, material: new C.PolylineDashMaterialProperty({ color: C.Color.fromCssColorString(m.color).withAlpha(.7), dashLength: 18 }) } });
     } else {
-      const pos = r.S.map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat));
-      NV.ents.push(viewer.entities.add({ polyline:{ positions: pos, width: r.mode==='car'? 12 : 8, clampToGround:true, classificationType: C.ClassificationType.BOTH, material: C.Color.fromCssColorString('#06224A').withAlpha(.6) } }));
-      NV.ents.push(viewer.entities.add({ polyline:{ positions: pos, width: r.mode==='car'? 8 : 5, clampToGround:true, classificationType: C.ClassificationType.BOTH,
-        material: r.mode==='walk' ? new C.PolylineDashMaterialProperty({ color: C.Color.fromCssColorString(m.color), dashLength: 14 }) : C.Color.fromCssColorString(m.color).withAlpha(.95) } }));
+      const pos = r.S.filter((x,i,a)=> i===0 || hav([a[i-1].lon,a[i-1].lat],[x.lon,x.lat])>0.05).map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat));
+      add({ polyline:{ positions: pos, width: r.mode==='car'? 12 : 8, clampToGround:true, classificationType: C.ClassificationType.BOTH, material: C.Color.fromCssColorString('#06224A').withAlpha(.6) } });
+      add({ polyline:{ positions: pos, width: r.mode==='car'? 8 : 5, clampToGround:true, classificationType: C.ClassificationType.BOTH,
+        material: r.mode==='walk' ? new C.PolylineDashMaterialProperty({ color: C.Color.fromCssColorString(m.color), dashLength: 14 }) : C.Color.fromCssColorString(m.color).withAlpha(.95) } });
     }
   }
   function ringImg(color){ const c=document.createElement('canvas'); c.width=c.height=96; const g=c.getContext('2d'); g.lineWidth=7; g.strokeStyle='rgba(3,18,42,.65)'; g.beginPath(); g.arc(48,52,34,0,Math.PI*2); g.stroke(); g.lineWidth=3.5; g.strokeStyle=color; g.beginPath(); g.arc(48,52,34,0,Math.PI*2); g.stroke();
     g.fillStyle=color; g.strokeStyle='rgba(3,18,42,.8)'; g.lineWidth=2; g.beginPath(); g.moveTo(48,2); g.lineTo(60,20); g.lineTo(48,15); g.lineTo(36,20); g.closePath(); g.fill(); g.stroke(); return c.toDataURL(); }
   const RING = {}; 
-  function makeVehicle(){ const md = MODELS[NV.route.mode]; const col = MODE[NV.route.mode].color; RING[col] = RING[col] || ringImg(col);
+  function makeVehicle(){ const md = MODELS[NV.route.mode]; if(!md.uri) md.uri = makeVtolGlb(); const col = MODE[NV.route.mode].color; RING[col] = RING[col] || ringImg(col);
     NV.ents.push(viewer.entities.add({ position: new C.CallbackProperty(()=>NV.cur, false), billboard:{ image: RING[col], width: 64, height: 64, disableDepthTestDistance: Number.POSITIVE_INFINITY, rotation: new C.CallbackProperty(()=> -C.Math.toRadians(NV.hdg) + camera.heading, false) } }));
     NV.veh = viewer.entities.add({ position: new C.CallbackProperty(()=>NV.cur, false), orientation: new C.CallbackProperty(()=> NV.cur ? C.Transforms.headingPitchRollQuaternion(NV.cur, new C.HeadingPitchRoll(C.Math.toRadians(NV.hdg + md.off), 0, 0)) : undefined, false),
       model:{ uri: md.uri, scale: md.scale, minimumPixelSize: md.minPx, maximumScale: 40, runAnimations: true } });
@@ -2647,6 +2796,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     let lon = a.lon+(b.lon-a.lon)*f, lat = a.lat+(b.lat-a.lat)*f; let h;
     const segD = hav([a.lon,a.lat],[b.lon,b.lat]);
     if(segD > 0.5){ const br = bearing([a.lon,a.lat],[b.lon,b.lat]); NV.hdg = snap ? br : NV.hdg + angDiff(NV.hdg, br) * Math.min(1, (dtReal||0.016)*6); }
+    if(r.hdgFix!=null) NV.hdg = r.hdgFix;
     const side = MODELS[r.mode].side || 0; if(side){ const br2 = rad(NV.hdg + 90); lat += deg(side*Math.cos(br2)/R); lon += deg(side*Math.sin(br2)/(R*Math.cos(rad(lat)))); }
     if(a.h!=null){ h = a.h+(b.h-a.h)*f; }
     else { let g = groundAt(lon, lat); if(g===undefined || g===null || isNaN(g)) g = NV.hs!=null ? NV.hs : 0;
@@ -2670,6 +2820,14 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     q('#nvDist').textContent = NV.t>0 ? fmtD(remS) : fmtD(r.total); q('#nvDur').textContent = fmtT(NV.t>0 ? remT : r.dur);
     const eta = new Date(Date.now() + remT*1000); q('#nvEta').textContent = eta.toTimeString().slice(0,5);
     q('#nvSpd').textContent = NV.playing || NV.t>0 ? Math.round((NV.curSpd||0)*3.6)+' km/h' : MODE[r.mode].name;
+    if(r.mode==='uam'){ const curH = NV.curLL ? NV.curLL.h : r.hA; let tx, sub, md;
+      if(NV.t < r.t1){ tx = NV.t>0 ? '수직 상승 중' : '수직 이륙 대기'; sub = `고도 ${Math.round(curH-r.hA)} / ${Math.round(r.cruise-r.hA)} m · 90° 수직 상승`; md='up'; }
+      else if(NV.t < r.t2){ tx = `${fmtD(Math.max(0, r.total-(NV.curS||0)))} 앞 수직 착륙`; sub = `순항 고도 ${Math.round(r.cruise-Math.max(r.hA,r.hB))} m · ${Math.round((NV.curSpd||0)*3.6)} km/h`; md='straight'; }
+      else if(NV.t < r.dur){ tx = '수직 하강 중'; sub = `남은 고도 ${Math.round(curH-r.hB)} m · ${NV.end?NV.end.name:''}`; md='down'; }
+      else { tx = '목적지 도착'; sub = NV.end?NV.end.name:''; md=''; }
+      q('#nvTurn').textContent = tx; q('#nvRoad').textContent = sub; q('#nvArrow').innerHTML = arrowSvg(md, md===''?'arrive':'');
+      if(!NV.dragProg) q('#nvProg').value = Math.round(1000 * NV.t / r.dur);
+      q('#nvGo').textContent = NV.playing ? '⏸ 일시정지' : (NV.t>0 && NV.t<r.dur ? '▶ 계속' : '▶ 시뮬레이션 시작'); return; }
     let nx = r.steps.find(s => s.at > (NV.curS||0) + 1); if(!nx) nx = r.steps[r.steps.length-1];
     const dist = Math.max(0, nx.at - (NV.curS||0));
     const arrive = nx.type==='arrive' || nx===r.steps[r.steps.length-1];
