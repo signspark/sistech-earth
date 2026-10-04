@@ -2182,9 +2182,9 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   document.head.appendChild(css);
   $('#tPlay').insertAdjacentElement('afterend', seg);
   const mark = ()=> seg.querySelectorAll('button').forEach(b=>b.classList.toggle('on', Math.abs(+b.dataset.sp-speed)<1e-6));
-  const start = ()=>{ if(playTimer) clearInterval(playTimer); playTimer = setInterval(()=>{ if(STATE.tIdx>=120) return stopPlay(); setT(STATE.tIdx+0.5); }, BASE_MS/speed); $('#tPlay').textContent='❚❚'; };
+  const start = ()=>{ if(playTimer) clearInterval(playTimer); playTimer = setInterval(()=>{ const mx = +($('#tRange').max||120); if(STATE.tIdx>=mx) return stopPlay(); setT(Math.min(mx, STATE.tIdx+0.5)); }, BASE_MS/speed); $('#tPlay').textContent='❚❚'; };
   seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{ speed = +b.dataset.sp; localStorage.setItem('tbar.speed', speed); mark(); if(playTimer) start(); toast('재생 속도 '+b.textContent+' · 30분마다 '+(BASE_MS/speed/1000).toFixed(2)+'초', 1800); });
-  $('#tPlay').onclick = ()=>{ if(playTimer) return stopPlay(); if(STATE.tIdx>=120) setT(0); start(); };
+  $('#tPlay').onclick = ()=>{ if(playTimer) return stopPlay(); const mn = +($('#tRange').min||-24), mx = +($('#tRange').max||120); if(mx - STATE.tIdx < 1) setT(mx<=1 ? mn : 0); start(); };
   $('#tPlay').setAttribute('aria-label','재생 (30분 간격)'); $('#tPlay').title = '재생 · 30분 간격 · 옆에서 속도 선택';
   mark();
 })();
@@ -2315,12 +2315,30 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   apply();
 })();
 
-/* ---------- 23. 하단 시간 바: SITE › 분석 창을 열었을 때만 표시 ---------- */
+/* ---------- 23. 하단 시간 바: SITE › 분석, 그리고 EARTH에서 시계열 자료가 있는 레이어가 켜졌을 때 표시 · 자료 범위 표시 ---------- */
 (function(){
   const bar = $('#timebar'); if(!bar) return;
-  function syncTimebar(){ const show = STATE.mode==='site' && STATE.cat==='analysis'; bar.style.display = show ? '' : 'none';
-    if(!show){ try{ stopPlay(); }catch(e){} if(STATE.tIdx && !STATE.on.has('shadow')) setT(0); } }
+  const css = document.createElement('style'); css.textContent = '#tInfo{font-size:11px;color:var(--text-dim);white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;margin-left:6px}#tInfo b{color:var(--lime-bright);font-weight:600}'; document.head.appendChild(css);
+  const info = document.createElement('div'); info.id = 'tInfo'; bar.appendChild(info);
+  const rng = $('#tRange');
+  const FC = { r:[-24,120], n:'Open-Meteo 예보', d:'−24h ~ +120h (5일)' };
+  const TL = { radar:{ r:[-2,0.5], n:'강수 레이더', d:'과거 2h ~ 예측 30분' }, gk2a:{ r:[-48,0], n:'천리안 2A', d:'과거 48h' },
+    sats:{ r:[-24,120], n:'위성 궤도 (SGP4)', d:'−24h ~ +120h' }, ksat:{ r:[-24,120], n:'한국 위성 궤도', d:'−24h ~ +120h' }, starlink:{ r:[-24,120], n:'스타링크 궤도', d:'−24h ~ +120h' } };
+  const PT = { ptwx:'지점 기상', flight:'비행 판정', aq:'지점 대기질', card_surf:'서핑 판정', card_fishing:'낚시 판정' };
+  function active(){ const out = []; for(const id of STATE.on){ if(TL[id]) out.push({ id, ...TL[id] }); else if(id.startsWith('f_')) { const it = MENUS.earth.flatMap(c=>c.items).find(i=>i.id===id); out.push({ id, r:FC.r, n:(it?it.name:id)+' 예보', d:FC.d }); } else if(PT[id] && STATE.point) out.push({ id, r:[-24,120], n:PT[id], d:'−24h ~ +120h' }); } return out; }
+  let lastKey = '';
+  function syncTimebar(){
+    const act = STATE.mode==='earth' ? active() : [];
+    const show = (STATE.mode==='site' && STATE.cat==='analysis') || act.length>0;
+    bar.style.display = show ? '' : 'none';
+    if(!show){ try{ stopPlay(); }catch(e){} if(STATE.tIdx && !STATE.on.has('shadow')) setT(0); lastKey=''; return; }
+    let mn = -24, mx = 120;
+    if(act.length){ mn = Math.min(...act.map(a=>a.r[0])); mx = Math.max(...act.map(a=>a.r[1])); info.innerHTML = '<b>'+act.slice(0,2).map(a=>a.n).join(' · ')+(act.length>2?' 외 '+(act.length-2):'')+'</b> '+(act.length===1? act[0].d : (mn<0?'−'+Math.abs(mn):'+'+mn)+'h ~ +'+mx+'h'); info.style.display=''; }
+    else { info.style.display='none'; }
+    const key = mn+'/'+mx; if(key!==lastKey){ rng.min = mn; rng.max = mx; lastKey = key; if(STATE.tIdx<mn || STATE.tIdx>mx){ stopPlay(); setT(Math.max(mn, Math.min(mx, STATE.tIdx))); } }
+  }
   const _rc = renderCats; renderCats = function(){ const r = _rc.apply(this, arguments); syncTimebar(); return r; };
+  setInterval(syncTimebar, 1000);
   syncTimebar();
 })();
 
