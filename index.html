@@ -1892,6 +1892,16 @@ window.sistechKorea = { KSAT, KSAT_NOTLE, loadKoreanSats, showKsatList, showGk2a
 /* ---------- 초기 복원 ---------- */
 for(const id of ['ksat','gk2a']) if(STATE.on.has(id)) { try{ L3[id].on(); }catch(e){} }
 renderCats(); renderSub(); updateSrc();
+
+/* ---------- 11. SITE 전환 시 위성 영상 레이어 끄기 · EARTH 메뉴에서 측정·비교 제거 ---------- */
+MENUS.earth = MENUS.earth.filter(c=>c.id!=='measure' && c.id!=='compare');
+const SAT_IMG_IDS = ['hima_ir','hima_vis','gk2a','viirs','dnb','cth','wv','imerg','aod','snow','seaice'];
+const _setMode3 = setMode;
+setMode = function(m){
+  if(m==='site' && STATE.mode!=='site'){ const off = SAT_IMG_IDS.filter(id=>STATE.on.has(id)); for(const id of off) toggleLayer(id, false); if(off.length) setTimeout(()=>toast(`SITE 모드: 위성 영상 레이어 ${off.length}개(${off.map(id=>(MENUS.earth.find(c=>c.id==='sat').items.find(i=>i.id===id)||{}).name||id).join(', ')})를 껐습니다`, 4000), 50); }
+  return _setMode3(m);
+};
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
