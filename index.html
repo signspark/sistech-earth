@@ -1,0 +1,947 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SISTECH EARTH · 지구 → 지역 → 현장 (데모)</title>
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.126/Build/Cesium/Cesium.js"></script>
+<link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.126/Build/Cesium/Widgets/widgets.css">
+<style>
+:root{
+  --navy-950:#03122A; --navy-900:#06224A; --navy:#003A80; --navy-700:#0B4FA3;
+  --panel:rgba(6,34,74,.86); --panel-solid:#06224A; --line:rgba(127,178,230,.22); --line-strong:rgba(127,178,230,.45);
+  --text:#DCE8F5; --text-dim:#8FA7C4; --lime:#A4C81C; --lime-bright:#BFE33A; --lime-dim:rgba(164,200,28,.18);
+  --amber:#F2A65A; --red:#FF5D5D; --cyan:#3FC7C0; --sky:#7FB7F5;
+  --r:12px; --r-sm:8px; --tap:40px;
+  --font:Inter,"Noto Sans KR","Segoe UI","Malgun Gothic",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--navy-950);color:var(--text);font-family:var(--font);font-size:14px;overflow:hidden}
+#cesium{position:fixed;inset:0}
+#cesium .cesium-viewer-bottom{display:none}
+button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid var(--lime);outline-offset:2px}
+.panel{background:var(--panel);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 12px 32px rgba(0,0,0,.45)}
+
+/* 상단 바 */
+#topbar{position:fixed;top:0;left:0;right:0;height:56px;display:flex;align-items:center;gap:14px;padding:0 14px;z-index:30;pointer-events:none}
+#topbar>*{pointer-events:auto}
+.brand{display:flex;align-items:baseline;gap:8px;user-select:none}
+.brand .word{font-weight:800;font-size:19px;letter-spacing:.06em;color:#fff}
+.brand .word b{color:var(--lime);font-weight:900}
+.brand .sub{font-weight:300;font-size:13px;letter-spacing:.32em;color:var(--text-dim)}
+.modes{display:flex;gap:4px;background:rgba(3,18,42,.7);border:1px solid var(--line);border-radius:999px;padding:3px}
+.modes button{padding:6px 16px;border-radius:999px;font-weight:600;font-size:13px;color:var(--text-dim)}
+.modes button.on{background:var(--navy);color:#fff;box-shadow:inset 0 0 0 1px var(--line-strong)}
+.modes button.on::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--lime);margin-right:8px;vertical-align:1px}
+.icons{display:flex;gap:4px}
+.icons button{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:var(--text-dim)}
+.icons button:hover{background:rgba(255,255,255,.08);color:#fff}
+.icons svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+#stage{display:flex;gap:2px;align-items:center;background:rgba(3,18,42,.7);border:1px solid var(--line);border-radius:999px;padding:3px 6px;font-size:12px;color:var(--text-dim)}
+#stage span{padding:3px 10px;border-radius:999px}
+#stage span.on{background:var(--lime-dim);color:var(--lime-bright);font-weight:700}
+#alert{margin-left:auto;display:flex;align-items:center;gap:10px;padding:7px 10px 7px 14px;background:rgba(3,18,42,.92);border:1px solid var(--amber);border-radius:var(--r-sm);font-size:13px}
+#alert .dot{width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber)}
+#alert b{color:#fff}
+#alert small{color:var(--text-dim)}
+#alert button{color:var(--text-dim);font-size:16px;line-height:1}
+
+/* 검색 */
+#search{position:fixed;top:60px;left:50%;transform:translateX(-50%);width:min(560px,92vw);z-index:40;display:none;padding:10px}
+#search.open{display:block}
+#search input{width:100%;height:42px;border-radius:var(--r-sm);border:1px solid var(--line-strong);background:rgba(3,18,42,.8);color:#fff;padding:0 14px;font-size:15px;font-family:inherit}
+#search ul{list-style:none;margin:8px 0 0;padding:0;max-height:40vh;overflow:auto}
+#search li{padding:9px 12px;border-radius:var(--r-sm);cursor:pointer;display:flex;justify-content:space-between;gap:10px}
+#search li:hover{background:rgba(255,255,255,.07)}
+#search li small{color:var(--text-dim)}
+#search .hint{font-size:12px;color:var(--text-dim);padding:6px 4px 0}
+
+/* 설정 */
+#settings{position:fixed;top:60px;left:360px;width:320px;z-index:40;display:none;padding:14px 16px}
+#settings.open{display:block}
+#settings h3{margin:0 0 10px;font-size:13px;color:var(--text-dim);font-weight:600;letter-spacing:.04em}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:0}
+.seg{display:flex;gap:3px;background:rgba(3,18,42,.6);border:1px solid var(--line);border-radius:999px;padding:2px}
+.seg button{padding:4px 11px;border-radius:999px;font-size:12px;color:var(--text-dim)}
+.seg button.on{background:var(--lime);color:var(--navy-950);font-weight:700}
+.seg button:disabled{opacity:.4;cursor:not-allowed}
+.switch{width:38px;height:22px;border-radius:999px;background:rgba(255,255,255,.12);position:relative;transition:.2s}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}
+.switch.on{background:var(--lime)}
+.switch.on::after{left:19px;background:var(--navy-950)}
+
+/* 좌측 레일 */
+#rail{position:fixed;left:10px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:8px;z-index:25}
+#rail button{writing-mode:vertical-rl;transform:rotate(180deg);padding:18px 9px;border-radius:var(--r-sm);background:var(--panel);border:1px solid var(--line);color:var(--text-dim);font-size:12px;letter-spacing:.22em;font-weight:700}
+#rail button.on{color:#fff;border-color:var(--lime);box-shadow:inset 3px 0 0 var(--lime)}
+
+/* 메뉴 */
+#menu{position:fixed;left:48px;top:72px;bottom:120px;display:flex;z-index:20;max-height:calc(100vh - 192px)}
+#cats{width:150px;display:flex;flex-direction:column;padding:10px 8px;overflow:auto}
+#cats .hd{display:flex;justify-content:space-between;align-items:center;padding:4px 6px 10px;font-size:11px;letter-spacing:.2em;color:var(--text-dim);font-weight:700}
+#cats .hd button{color:var(--text-dim);font-size:16px}
+#cats .cat{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--r-sm);font-size:14px;color:var(--text);text-align:left;width:100%}
+#cats .cat:hover{background:rgba(255,255,255,.06)}
+#cats .cat.on{background:var(--navy);color:#fff;box-shadow:inset 0 0 0 1px var(--line-strong)}
+#cats .cat.on::after{content:"›";margin-left:auto;color:var(--lime)}
+#cats .cat svg{width:18px;height:18px;stroke:var(--lime);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
+#cats .cat .n{position:relative}
+#cats .cat .cnt{position:absolute;top:-6px;right:-14px;font-size:9px;background:var(--lime);color:var(--navy-950);border-radius:999px;padding:0 4px;font-weight:800;line-height:14px}
+#cats .quick{margin-top:auto;display:grid;grid-template-columns:1fr 1fr;gap:5px;padding-top:10px}
+#cats .quick button{padding:8px 4px;border-radius:var(--r-sm);border:1px solid var(--line);font-size:12px;color:var(--text)}
+#cats .quick button:hover{border-color:var(--lime);color:#fff}
+#sub{width:272px;margin-left:6px;display:none;flex-direction:column;overflow:hidden}
+#sub.open{display:flex}
+#sub .hd{display:flex;align-items:center;gap:8px;padding:12px 14px 8px;font-weight:700;font-size:15px;border-bottom:1px solid var(--line)}
+#sub .hd button{color:var(--text-dim)}
+#sub .hd small{margin-left:auto;font-weight:400;font-size:11px;color:var(--text-dim)}
+#sub .filter{display:flex;align-items:center;gap:8px;padding:8px 14px;font-size:12px;color:var(--text-dim);border-bottom:1px solid var(--line)}
+#sub .filter input{accent-color:var(--lime)}
+#sub .list{overflow:auto;padding:6px;flex:1}
+.item{display:flex;align-items:flex-start;gap:10px;width:100%;padding:9px 10px;border-radius:var(--r-sm);text-align:left;color:var(--text)}
+.item:hover{background:rgba(255,255,255,.06)}
+.item .ind{flex:none;width:14px;height:14px;border-radius:50%;border:1.5px solid var(--line-strong);margin-top:3px;position:relative}
+.item.on .ind{border-color:var(--lime);background:var(--lime);box-shadow:0 0 10px rgba(164,200,28,.6)}
+.item .t{display:flex;flex-direction:column;gap:2px;flex:1}
+.item .t b{font-weight:600;font-size:14px}
+.item .t span{font-size:12px;color:var(--text-dim)}
+.item .badge{flex:none;font-size:10px;padding:2px 6px;border-radius:999px;border:1px solid var(--line);color:var(--text-dim);margin-top:3px}
+.item.soon{opacity:.55}
+.item.soon .badge{border-color:var(--amber);color:var(--amber)}
+.item.site .badge{border-color:var(--sky);color:var(--sky)}
+.item.action .ind{border-radius:3px;border-color:var(--lime)}
+.item.action .ind::after{content:"";position:absolute;inset:3px;background:var(--lime);border-radius:1px;opacity:.7}
+.item .src{font-size:11px;color:var(--text-dim);opacity:.8}
+.proj{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border-radius:var(--r-sm);text-align:left}
+.proj:hover{background:rgba(255,255,255,.06)}
+.proj .pin{width:10px;height:10px;border-radius:50%;background:var(--lime);box-shadow:0 0 0 3px rgba(164,200,28,.25);flex:none}
+.proj .pin.plan{background:var(--amber);box-shadow:0 0 0 3px rgba(242,166,90,.25)}
+.proj b{font-size:14px;font-weight:600;display:block}
+.proj span{font-size:12px;color:var(--text-dim)}
+.note{font-size:12px;color:var(--text-dim);padding:8px 12px;line-height:1.5}
+
+/* 지점 카드 */
+#card{position:fixed;right:14px;top:72px;width:360px;max-height:calc(100vh - 200px);z-index:20;display:none;flex-direction:column;overflow:hidden}
+#card.open{display:flex}
+#card .hd{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+#card .hd h2{margin:0;font-size:15px;font-weight:700;flex:1;line-height:1.3}
+#card .hd h2 small{display:block;font-weight:400;color:var(--text-dim);font-size:12px}
+#card .hd button{color:var(--text-dim);font-size:18px}
+#card .body{overflow:auto;padding:4px 14px 12px}
+.sec{padding:12px 0;border-bottom:1px solid var(--line)}
+.sec:last-child{border-bottom:0}
+.sec .lead{font-size:14px;line-height:1.55;margin:0 0 8px}
+.sec .lead b{color:#fff}
+.kv{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px}
+.kv div{color:var(--text-dim)}
+.kv div b{color:#fff;font-weight:600;margin-left:4px}
+.meta{margin-top:8px;font-size:11px;color:var(--text-dim);line-height:1.5;display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center}
+.tag{font-size:10px;font-weight:800;letter-spacing:.05em;padding:2px 6px;border-radius:4px}
+.tag.obs{background:var(--lime);color:var(--navy-950)}
+.tag.model{background:rgba(127,183,245,.2);color:var(--sky);border:1px solid rgba(127,183,245,.4)}
+.tag.derived{background:rgba(242,166,90,.18);color:var(--amber);border:1px solid rgba(242,166,90,.4)}
+.tag.drone{background:var(--navy);color:var(--lime-bright);border:1px solid var(--lime)}
+.fly{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:var(--r-sm);font-weight:700;font-size:13px;margin-bottom:8px}
+.fly.ok{background:var(--lime-dim);color:var(--lime-bright);border:1px solid rgba(164,200,28,.5)}
+.fly.warn{background:rgba(242,166,90,.15);color:var(--amber);border:1px solid rgba(242,166,90,.5)}
+.fly.bad{background:rgba(255,93,93,.15);color:var(--red);border:1px solid rgba(255,93,93,.5)}
+.cta{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:11px;border-radius:var(--r-sm);background:var(--lime);color:var(--navy-950);font-weight:800;font-size:14px;text-decoration:none;margin-top:10px}
+.cta:hover{background:var(--lime-bright)}
+.cta.ghost{background:transparent;color:var(--text);border:1px solid var(--line-strong);font-weight:600}
+.skeleton{height:12px;border-radius:6px;background:linear-gradient(90deg,rgba(255,255,255,.06),rgba(255,255,255,.14),rgba(255,255,255,.06));background-size:200% 100%;animation:sk 1.2s infinite;margin:6px 0}
+@keyframes sk{to{background-position:-200% 0}}
+
+/* 하단 */
+#hud{position:fixed;left:14px;bottom:14px;z-index:20;max-width:min(520px,calc(50vw - 290px));min-width:240px;font-size:12px;color:var(--text-dim);line-height:1.5;text-shadow:0 1px 2px #000}
+#hud .top{display:flex;gap:12px;align-items:center;font-size:13px;color:var(--text);margin-bottom:3px}
+#hud .top b{color:var(--lime-bright);font-weight:700}
+#hud .src b{color:var(--text)}
+#timebar{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:20;display:flex;align-items:center;gap:10px;padding:8px 12px;width:min(520px,60vw)}
+#timebar button{height:32px;padding:0 12px;border-radius:var(--r-sm);border:1px solid var(--line);font-size:13px;font-weight:600;color:var(--text)}
+#timebar button:hover{border-color:var(--lime)}
+#timebar button.on{background:var(--lime);color:var(--navy-950);border-color:var(--lime)}
+#timebar input[type=range]{flex:1;accent-color:var(--lime);height:4px}
+#timebar .lbl{min-width:112px;text-align:right;font-size:13px;font-variant-numeric:tabular-nums}
+#timebar .lbl small{display:block;font-size:10px;color:var(--text-dim);letter-spacing:.1em}
+#measure{position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:30;display:none;align-items:center;gap:10px;padding:8px 12px;font-size:13px}
+#measure.open{display:flex}
+#measure b{color:var(--lime-bright)}
+#measure button{padding:5px 10px;border-radius:6px;border:1px solid var(--line);font-size:12px}
+#toast{position:fixed;left:50%;bottom:76px;transform:translateX(-50%);z-index:50;padding:8px 14px;font-size:13px;display:none}
+#toast.open{display:block}
+.mlabel{position:absolute;transform:translate(-50%,-130%);padding:3px 8px;border-radius:6px;background:var(--navy);border:1px solid var(--lime);color:var(--lime-bright);font-size:12px;font-weight:700;white-space:nowrap;pointer-events:none;font-variant-numeric:tabular-nums}
+#labels{position:fixed;inset:0;pointer-events:none;z-index:15}
+@media (max-width:900px){#menu{left:44px}#sub{width:230px}#card{width:300px}#alert{display:none}#stage{display:none}}
+</style>
+</head>
+<body>
+<div id="cesium"></div>
+<div id="labels"></div>
+
+<header id="topbar">
+  <div class="brand"><span class="word">SI<b>S</b>TECH</span><span class="sub">EARTH</span></div>
+  <div class="modes" role="tablist" aria-label="모드">
+    <button class="on" data-mode="earth" role="tab">EARTH</button>
+    <button data-mode="site" role="tab">SITE</button>
+  </div>
+  <div id="stage" aria-label="단계"><span data-s="earth" class="on">지구</span><span data-s="region">지역</span><span data-s="site">현장</span></div>
+  <div class="icons">
+    <button id="btnSearch" title="찾기 · 나라·도시·주소" aria-label="검색"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+    <button id="btnSettings" title="설정" aria-label="설정"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+    <button title="계정 (데모)" aria-label="계정"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></button>
+  </div>
+  <div id="alert" role="status"><span class="dot"></span><span><b>인천 강풍주의보</b> 발효 중 · 예시 데이터 · <small>기상청 특보 연동 예정</small></span><button aria-label="배너 닫기" onclick="this.parentElement.remove()">✕</button></div>
+</header>
+
+<div id="search" class="panel">
+  <input id="q" type="search" placeholder="나라 · 도시 · 주소 · 프로젝트 이름 (Enter)" autocomplete="off">
+  <ul id="qres"></ul>
+  <div class="hint">OpenStreetMap Nominatim 검색 · 프로젝트 이름(인천, 부산, 분당, 고양, 다르항)도 바로 이동</div>
+</div>
+
+<div id="settings" class="panel">
+  <h3>설정</h3>
+  <div class="row"><span>언어</span><div class="seg"><button class="on">한국어</button><button disabled title="준비 중">English</button><button disabled title="준비 중">Монгол</button></div></div>
+  <div class="row"><span>태양 조명 <small style="color:var(--text-dim)" id="sunInfo"></small></span><button class="switch on" id="swLight" aria-label="태양 조명"></button></div>
+  <div class="row"><span>지명 표시</span><button class="switch on" id="swLabels" aria-label="지명"></button></div>
+  <div class="row"><span>자동 회전</span><button class="switch" id="swSpin" aria-label="자동 회전"></button></div>
+  <div class="row"><span>지형 과장</span><div class="seg" id="segEx"><button class="on" data-v="1">1×</button><button data-v="3">3×</button><button data-v="10">10×</button></div></div>
+  <div class="note" style="padding:10px 0 0">지형: 현재 타원체(평면). Cesium World Terrain 또는 자체 DEM 연결 시 과장 배율이 적용됩니다.<br>영상: Esri World Imagery · 지명: Esri Reference</div>
+</div>
+
+<nav id="rail" aria-label="모드 레일">
+  <button class="on" data-mode="earth">EARTH</button>
+  <button data-mode="site">SITE</button>
+</nav>
+
+<div id="menu">
+  <div id="cats" class="panel"></div>
+  <div id="sub" class="panel">
+    <div class="hd"><button id="subBack" aria-label="전체 메뉴">‹</button><span id="subTitle"></span><small id="subCount"></small></div>
+    <label class="filter"><input type="checkbox" id="onlyOn"> 켜진 자료만</label>
+    <div class="list" id="subList"></div>
+  </div>
+</div>
+
+<aside id="card" class="panel" aria-label="지점 정보">
+  <div class="hd"><h2 id="cardTitle">지점</h2><button id="cardClose" aria-label="정보 닫기">✕</button></div>
+  <div class="body" id="cardBody"></div>
+</aside>
+
+<div id="measure" class="panel"><span id="mText">지도를 클릭해 점을 찍으세요</span><b id="mVal"></b><button id="mDone">완료</button><button id="mClear">지우기</button><button id="mExit">종료</button></div>
+<div id="toast" class="panel"></div>
+
+<div id="hud">
+  <div class="top"><span>단계 <b id="hudStage">지구</b></span><span>고도 <b id="hudAlt">—</b></span><span>과장 <b id="hudEx">1×</b></span><span id="hudCursor"></span></div>
+  <div class="src" id="hudSrc"></div>
+</div>
+
+<div id="timebar" class="panel" aria-label="시간 탐색">
+  <button id="tNow" class="on">지금</button>
+  <button id="tPlay" aria-label="5일 예보 재생">▶</button>
+  <input id="tRange" type="range" min="-24" max="120" step="1" value="0" aria-label="자료 시간 이동">
+  <div class="lbl" id="tLbl">NOW<small>KST</small></div>
+</div>
+
+<script>
+/* =========================================================
+   SISTECH EARTH 데모 · 지구 → 지역 → 현장
+   엔진: CesiumJS (ion 미사용) · 영상: Esri World Imagery
+   공개 데이터: USGS 지진, NASA GIBS, Open-Meteo, Nominatim
+   ========================================================= */
+const $ = s => document.querySelector(s);
+const toast = (m, ms=2600) => { const t=$('#toast'); t.textContent=m; t.classList.add('open'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('open'), ms); };
+const fmtKm = m => m>=1e6 ? (m/1e6).toFixed(1)+'천 km' : m>=1000 ? Math.round(m/1000).toLocaleString()+' km' : Math.round(m)+' m';
+const pad = n => String(n).padStart(2,'0');
+const ymd = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`;
+
+/* ---------- 프로젝트 (SISTECH 3D 모델) ---------- */
+const VIEWER_URL = 'https://3dview.sistech3d.com/ko/viewer';
+const PROJECTS = [
+  { id:'incheon1', name:'인천-1', desc:'인천 전체 3D 모델', lat:37.4561, lon:126.7052, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'인천광역시', tsId:'incheon_01' },
+  { id:'busan1', name:'부산-1', desc:'부산 마린시티·해운대 3D 모델', lat:35.1565, lon:129.1455, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'부산 해운대구', tsId:'busan_01' },
+  { id:'bundang1', name:'분당-1', desc:'분당 신도시 3D 모델', lat:37.3826, lon:127.1189, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'성남시 분당구', tsId:'bundang_01' },
+  { id:'goyang1', name:'고양-1', desc:'고양시 3D 모델', lat:37.6584, lon:126.8320, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'고양시', tsId:'goyang_01' },
+  { id:'darkhan', name:'다르항-올', desc:'몽골 다르항-올 도시 3D 모델 (MOU 2026-10-02)', lat:49.4867, lon:105.9228, status:'기획', shot:'예정', gsd:'—', rmse:'—', area:'Darkhan-Uul, Mongolia', plan:true },
+];
+
+/* ---------- Cesium 초기화 ---------- */
+Cesium.Ion.defaultAccessToken = undefined;
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const ESRI_REF = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
+const yesterday = new Date(Date.now()-36*3600e3);
+const GIBS_CLOUD = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${ymd(yesterday)}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
+const GIBS_NIGHT = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png';
+
+const creditBox = document.createElement('div'); creditBox.style.display='none'; document.body.appendChild(creditBox);
+const viewer = new Cesium.Viewer('cesium', {
+  baseLayer: new Cesium.ImageryLayer(new Cesium.UrlTemplateImageryProvider({ url: ESRI, maximumLevel: 19, credit: 'Esri, Maxar, Earthstar Geographics' })),
+  animation:false, timeline:false, geocoder:false, homeButton:false, sceneModePicker:false, baseLayerPicker:false,
+  navigationHelpButton:false, fullscreenButton:false, infoBox:false, selectionIndicator:false, creditContainer: creditBox,
+});
+const scene = viewer.scene, camera = viewer.camera, globe = scene.globe;
+globe.enableLighting = true; globe.showGroundAtmosphere = true; scene.skyAtmosphere.show = true;
+globe.baseColor = Cesium.Color.fromCssColorString('#06224A');
+scene.screenSpaceCameraController.minimumZoomDistance = 60;
+viewer.clock.shouldAnimate = true; // 실시간 태양
+// Viewer 기본 클릭/더블클릭(엔티티 선택·추적) 제거 → 직접 처리
+viewer.screenSpaceEventHandler.removeInputAction(Cesium.ScreenSpaceEventType.LEFT_CLICK);
+viewer.screenSpaceEventHandler.removeInputAction(Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+
+const layersImg = {};
+layersImg.labels = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({ url: ESRI_REF, maximumLevel: 19 }));
+layersImg.labels.alpha = .9;
+
+/* ---------- 프로젝트 핀 ---------- */
+const pinDS = new Cesium.CustomDataSource('projects'); viewer.dataSources.add(pinDS);
+for (const p of PROJECTS) {
+  pinDS.entities.add({
+    id:'proj:'+p.id, position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 0),
+    point:{ pixelSize: 11, color: Cesium.Color.fromCssColorString(p.plan?'#F2A65A':'#A4C81C'), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    label:{ text: p.name, font: '600 13px Inter, "Noto Sans KR", sans-serif', fillColor: Cesium.Color.WHITE, outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0,-16), verticalOrigin: Cesium.VerticalOrigin.BOTTOM, disableDepthTestDistance: Number.POSITIVE_INFINITY, scaleByDistance: new Cesium.NearFarScalar(1e5, 1.0, 1.5e7, 0.75) },
+    properties:{ kind:'project', pid:p.id }
+  });
+}
+// 가까운 핀은 묶어서 표시 (지구 스케일에서 라벨 겹침 방지)
+pinDS.clustering.enabled = true; pinDS.clustering.pixelRange = 36; pinDS.clustering.minimumClusterSize = 2;
+pinDS.clustering.clusterEvent.addEventListener((entities, cluster) => {
+  cluster.billboard.show = false; cluster.label.show = true; cluster.point.show = true;
+  cluster.point.pixelSize = 16; cluster.point.color = Cesium.Color.fromCssColorString('#A4C81C'); cluster.point.outlineColor = Cesium.Color.fromCssColorString('#03122A'); cluster.point.outlineWidth = 2; cluster.point.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+  cluster.label.text = `프로젝트 ${entities.length}곳`; cluster.label.font = '600 13px Inter, "Noto Sans KR", sans-serif'; cluster.label.fillColor = Cesium.Color.WHITE; cluster.label.outlineColor = Cesium.Color.fromCssColorString('#03122A'); cluster.label.outlineWidth = 3; cluster.label.style = Cesium.LabelStyle.FILL_AND_OUTLINE; cluster.label.horizontalOrigin = Cesium.HorizontalOrigin.CENTER; cluster.label.verticalOrigin = Cesium.VerticalOrigin.BOTTOM; cluster.label.pixelOffset = new Cesium.Cartesian2(0, -14); cluster.label.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+});
+// 지구 뒷면에 있는 점은 숨김 (disableDepthTest 때문에 비쳐 보이는 것 방지)
+function cullBackside(){
+  const occ = new Cesium.EllipsoidalOccluder(globe.ellipsoid, camera.position);
+  const check = ds => { if(!ds) return; const es = ds.entities.values; for(let i=0;i<es.length;i++){ const e=es[i]; const p=e.position && e.position.getValue(viewer.clock.currentTime); if(p) e.show = occ.isPointVisible(p); } };
+  check(pinDS); check(quakeDS);
+}
+setInterval(cullBackside, 250);
+
+/* ---------- 상태 ---------- */
+const STATE = { mode:'earth', cat:null, on:new Set(['imagery','labels','projects','tiles']), stage:'earth', tIdx:0, measure:null, point:null, data:{}, sse:16, tsAlpha:1, quality:'중' };
+const simTime = () => new Date(Date.now() + STATE.tIdx*3600e3); // 시간 바 연동 시각
+
+/* ---------- NASA GIBS 위성 영상 카탈로그 ---------- */
+const gibs10 = (hoursAgo) => new Date(Math.floor((Date.now()-hoursAgo*3600e3)/600e3)*600e3).toISOString().slice(0,19)+'Z';
+const GIBS = {
+  hima_ir: { layer:'Himawari_AHI_Band13_Clean_Infrared', tm:'GoogleMapsCompatible_Level6', ext:'png', time:()=>gibs10(1.2), alpha:.75, label:'히마와리-9 적외(10분)' },
+  hima_vis: { layer:'Himawari_AHI_Band3_Red_Visible_1km', tm:'GoogleMapsCompatible_Level7', ext:'png', time:()=>gibs10(1.2), alpha:.8, label:'히마와리-9 가시 1km(10분)' },
+  viirs: { layer:'VIIRS_SNPP_CorrectedReflectance_TrueColor', tm:'GoogleMapsCompatible_Level9', ext:'jpg', time:()=>ymd(yesterday), alpha:.85, label:'Suomi NPP VIIRS 컴러' },
+  dnb: { layer:'VIIRS_SNPP_DayNightBand_At_Sensor_Radiance', tm:'GoogleMapsCompatible_Level8', ext:'jpg', time:()=>ymd(yesterday), alpha:.85, label:'VIIRS 야간 밴드' },
+  snow: { layer:'MODIS_Terra_NDSI_Snow_Cover', tm:'GoogleMapsCompatible_Level8', ext:'png', time:()=>ymd(yesterday), alpha:.8, label:'MODIS 눈 덮임' },
+  seaice: { layer:'MODIS_Terra_Sea_Ice', tm:'GoogleMapsCompatible_Level7', ext:'png', time:()=>ymd(yesterday), alpha:.8, label:'MODIS 해빙' },
+  wv: { layer:'MODIS_Terra_Water_Vapor_5km_Day', tm:'GoogleMapsCompatible_Level6', ext:'png', time:()=>ymd(yesterday), alpha:.65, label:'MODIS 수증기' },
+  cth: { layer:'MODIS_Terra_Cloud_Top_Height_Day', tm:'GoogleMapsCompatible_Level6', ext:'png', time:()=>ymd(yesterday), alpha:.7, label:'MODIS 구름 꼭대기 높이' },
+  aod: { layer:'MODIS_Combined_Value_Added_AOD', tm:'GoogleMapsCompatible_Level6', ext:'png', time:()=>ymd(yesterday), alpha:.7, label:'MODIS 에어로졸(AOD)' },
+  imerg: { layer:'IMERG_Precipitation_Rate', tm:'GoogleMapsCompatible_Level6', ext:'png', time:()=>ymd(yesterday), alpha:.75, label:'GPM IMERG 강수' },
+  lst: { layer:'MODIS_Terra_Land_Surface_Temp_Day', tm:'GoogleMapsCompatible_Level7', ext:'jpg', time:()=>ymd(yesterday), alpha:.7, label:'MODIS 지표온도' },
+  ndvi: { layer:'MODIS_Terra_NDVI_8Day', tm:'GoogleMapsCompatible_Level9', ext:'jpg', time:()=>ymd(new Date(Date.now()-10*86400e3)), alpha:.75, label:'MODIS 식생(NDVI 8일)' },
+};
+
+/* ---------- 메뉴 정의 (질문형) ---------- */
+const I = {
+  globe:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
+  weather:'<svg viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-.6-8A6 6 0 0 1 18 9a4 4 0 0 1 0 9z"/></svg>',
+  sea:'<svg viewBox="0 0 24 24"><path d="M3 12c2-2 4-2 6 0s4 2 6 0 4-2 6 0M3 17c2-2 4-2 6 0s4 2 6 0 4-2 6 0M3 7c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/></svg>',
+  air:'<svg viewBox="0 0 24 24"><path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7a2 2 0 1 1-2 2"/></svg>',
+  hazard:'<svg viewBox="0 0 24 24"><path d="M12 3 2 21h20zM12 10v5M12 18v.5"/></svg>',
+  region:'<svg viewBox="0 0 24 24"><path d="M12 21s-6-5.3-6-11a6 6 0 1 1 12 0c0 5.7-6 11-6 11z"/><circle cx="12" cy="10" r="2"/></svg>',
+  measure:'<svg viewBox="0 0 24 24"><path d="m3 17 14-14 4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2"/></svg>',
+  compare:'<svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="16" rx="1"/><rect x="13" y="4" width="8" height="16" rx="1"/><path d="M12 2v20"/></svg>',
+  model:'<svg viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12 4 7.5M12 12l8-4.5M12 12v9"/></svg>',
+  export:'<svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 17v3h16v-3"/></svg>',
+  analysis:'<svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
+  sat:'<svg viewBox="0 0 24 24"><path d="m13 7 4-4 4 4-4 4zM3 17l4-4 4 4-4 4zM9 9l6 6M12 3a9 9 0 0 1 9 9M12 7a5 5 0 0 1 5 5"/></svg>',
+};
+const MENUS = {
+  earth: [
+    { id:'globe', name:'지구', icon:I.globe, items:[
+      { id:'imagery', q:'지금 땅은 어떻게 생겼나', name:'위성 영상', src:'Esri World Imagery', type:'layer', locked:true },
+      { id:'labels', q:'여기가 어디인가', name:'지명·경계', src:'Esri Reference', type:'layer' },
+      { id:'night', q:'밤에 밝은 도시는 어디인가', name:'밤의 불빛', src:'NASA VIIRS Black Marble 2016', type:'layer' },
+      { id:'lst', q:'땅 표면이 얼마나 뜨거운가', name:'지표온도', src:'NASA MODIS Terra (어제)', type:'layer' },
+      { id:'ndvi', q:'식생은 얼마나 우거진가', name:'식생 지수', src:'NASA MODIS NDVI 8일 합성', type:'layer' },
+      { id:'terrain', q:'땅의 높낮이는', name:'지형 음영', src:'Cesium World Terrain · 자체 DEM', type:'soon' },
+      { id:'projects', q:'SISTECH가 촬영한 곳은 어디인가', name:'프로젝트 핀', src:'SISTECH', type:'layer' },
+      { id:'tiles', q:'드론 3D 모델을 보려면', name:'SISTECH 3D 모델', src:'3D-View 타일셋 · 현장 근처에서 자동 로드', type:'layer' },
+    ]},
+    { id:'sat', name:'위성', icon:I.sat, items:[
+      { id:'hima_ir', q:'지금 구름은 어디에 있나 (야간 포함)', name:'히마와리-9 적외', src:'JMA Himawari-9 · NASA GIBS · 10분 간격, 약 1시간 전', type:'layer' },
+      { id:'hima_vis', q:'낮에 보이는 구름은', name:'히마와리-9 가시 1km', src:'JMA Himawari-9 · NASA GIBS · 10분', type:'layer' },
+      { id:'gk2a', q:'천리안 2A가 본 한반도는', name:'천리안 2A (GK2A)', src:'기상청 위성센터 API 키 필요', type:'soon' },
+      { id:'viirs', q:'어제 위성이 본 지구는', name:'Suomi NPP 컴러 영상', src:'NASA VIIRS · 어제 · 250m', type:'layer' },
+      { id:'dnb', q:'어제밤 불빛과 밤 구름은', name:'VIIRS 야간 밴드', src:'NASA VIIRS DNB · 어제', type:'layer' },
+      { id:'cth', q:'구름이 얼마나 높이 떠 있나', name:'구름 꼭대기 높이', src:'NASA MODIS · 어제', type:'layer' },
+      { id:'wv', q:'상층 대기의 수증기는', name:'수증기', src:'NASA MODIS · 어제', type:'layer' },
+      { id:'imerg', q:'위성이 추정한 비는 어디에', name:'위성 강수 추정', src:'NASA GPM IMERG · 어제', type:'layer' },
+      { id:'aod', q:'연무와 먼지는 어디에', name:'에어로졸 (AOD)', src:'NASA MODIS · 어제', type:'layer' },
+      { id:'snow', q:'오늘 어디에 눈이 덮여 있나', name:'눈 덮임', src:'NASA MODIS NDSI · 어제', type:'layer' },
+      { id:'seaice', q:'극지 얼음은', name:'해빙', src:'NASA MODIS · 어제', type:'layer' },
+      { id:'sats', q:'위성은 지금 어디에 있나', name:'위성 위치 (한국·지구관측·ISS)', src:'CelesTrak TLE · SGP4 · 시간 바 연동', type:'layer' },
+      { id:'pass', q:'내 현장 위를 언제 지나가나', name:'현장 위성 통과 예보 (24h)', src:'아리랑·차세대중형·Sentinel-2·Landsat·WorldView', type:'action', run:()=>runPassForecast() },
+      { id:'starlink', q:'스타링크는 얼마나 많은가', name:'스타링크 (상위 1,500기)', src:'CelesTrak · 데이터 약 1MB', type:'layer' },
+      { id:'launch', q:'다음 로켓 발사는 언제인가', name:'로켓 발사 일정', src:'Launch Library 2', type:'action', run:()=>showLaunches() },
+      { id:'debris', q:'관심 물체와 근접 사건은', name:'우주 쓰레기', src:'Space-Track 계정 필요', type:'soon' },
+    ]},
+    { id:'weather', name:'날씨', icon:I.weather, items:[
+      { id:'ptwx', q:'선택한 곳은 몇 도이고 바람은 얼마나 부나', name:'지점 기상', src:'Open-Meteo (GFS·ECMWF)', type:'layer', note:'지도를 클릭하면 카드에 표시' },
+      { id:'flight', q:'지금 드론을 띄울 수 있나', name:'비행 가능 판정', src:'풍속·돌풍·강수·시정·운량 규칙 (예시 기준)', type:'layer' },
+      { id:'cloud', q:'구름은 어디에 있나', name:'구름 (어제 위성)', src:'NASA GIBS MODIS Terra', type:'layer' },
+      { id:'forecast', q:'내일, 모레는 어떤가', name:'5일 예보', src:'하단 시간 바로 이동', type:'action', run:()=>{ $('#tRange').focus(); toast('하단 시간 바를 움직이면 지점 카드 값이 바뀝니다'); } },
+      { id:'radar', q:'지금 비가 오나', name:'레이더 강수', src:'기상청 레이더', type:'soon' },
+      { id:'wind', q:'어느 방향으로 얼마나 세게 부나', name:'바람 입자', src:'GFS u/v', type:'soon' },
+      { id:'kma', q:'가까운 관측소 실측은', name:'기상청 관측 (AWS)', src:'기상청 API허브 · 국내 한정', type:'soon' },
+    ]},
+    { id:'sea', name:'바다', icon:I.sea, items:[
+      { id:'wave', q:'선택 해역의 파고와 너울은', name:'파고·너울', src:'Open-Meteo Marine', type:'soon' },
+      { id:'sst', q:'바다 표면 온도는', name:'해수면 온도', src:'NOAA OISST', type:'soon' },
+      { id:'tide', q:'물때는', name:'조위', src:'국립해양조사원', type:'soon' },
+      { id:'ais', q:'선박은 어디에 있나', name:'선박 (AIS)', src:'AIS', type:'soon' },
+    ]},
+    { id:'air', name:'대기', icon:I.air, items:[
+      { id:'aq', q:'공기가 얼마나 탁한가', name:'미세먼지·AQI', src:'Open-Meteo Air Quality (CAMS)', type:'layer', note:'지도를 클릭하면 카드에 표시' },
+      { id:'uv', q:'자외선은', name:'자외선', src:'Open-Meteo', type:'soon' },
+    ]},
+    { id:'hazard', name:'재난', icon:I.hazard, items:[
+      { id:'quake', q:'최근 일주일 지진은 어디서 났나', name:'지진 (M2.5+)', src:'USGS 실시간 피드', type:'layer' },
+      { id:'warn', q:'내 현장의 공식 특보는', name:'기상 특보', src:'기상청 (상단 배너 예시)', type:'soon' },
+      { id:'fire', q:'지금 어디가 불타나', name:'산불', src:'NASA FIRMS (키 필요)', type:'soon' },
+      { id:'flood', q:'물이 차면 어디까지 잠기나', name:'침수 시뮬레이션', src:'자체 DEM + 수위', type:'site' },
+      { id:'typhoon', q:'공식 태풍 경로는', name:'태풍', src:'기상청·JMA', type:'soon' },
+    ]},
+    { id:'region', name:'지역', icon:I.region, projects:true, items:[
+      { id:'admin', q:'시·군·구 경계는', name:'행정구역', src:'통계청 SGIS', type:'soon' },
+      { id:'pop', q:'어디에 사람이 사나', name:'인구', src:'통계청', type:'soon' },
+      { id:'me', q:'내가 있는 곳은', name:'내 위치', src:'브라우저 위치', type:'action', run: goMyLocation },
+    ]},
+    { id:'measure', name:'측정', icon:I.measure, items:[
+      { id:'mdist', q:'두 점 사이 거리는', name:'거리', src:'측지선 거리 · 더블클릭 종료', type:'action', run:()=>startMeasure('dist') },
+      { id:'marea', q:'이 땅의 넓이는', name:'면적', src:'다각형 · ㎡ · 평 · ha', type:'action', run:()=>startMeasure('area') },
+      { id:'mheight', q:'건물 높이는', name:'높이', src:'3D 모델 위 두 점 · 수직·수평·직선', type:'action', run:()=>startMeasure('height') },
+      { id:'mvol', q:'흙은 얼마나 쌓였나', name:'체적', src:'3D 모델 표면', type:'site' },
+    ]},
+    { id:'compare', name:'비교', icon:I.compare, items:[
+      { id:'epoch', q:'촬영 회차별로 무엇이 달라졌나', name:'회차 비교', src:'시간 바 → 회차 슬라이더', type:'site' },
+    ]},
+  ],
+  site: [
+    { id:'model', name:'3D 모델', icon:I.model, items:[
+      { id:'tiles', q:'드론 3D 모델 보기', name:'3D Tiles (SISTECH)', src:'3dview.sistech3d.com 타일셋 · 현장 근처에서 자동 로드', type:'layer' },
+      { id:'quality', q:'화질을 바꾸려면', name:'화질 (누를 때마다 저→중→고)', src:'maximumScreenSpaceError 32 · 16 · 6', type:'action', run:()=>cycleQuality() },
+      { id:'opacity', q:'모델을 반투명하게', name:'투명도 (100 → 70 → 40%)', src:'', type:'action', run:()=>cycleOpacity() },
+    ]},
+    { id:'smeasure', name:'측정', icon:I.measure, items:[
+      { id:'s1', q:'두 점 사이 거리는', name:'거리', src:'모델 표면 기준', type:'action', run:()=>startMeasure('dist') },{ id:'s2', q:'이 땅의 넓이는', name:'면적', src:'모델 표면 기준', type:'action', run:()=>startMeasure('area') },{ id:'s3', q:'건물 높이는', name:'높이', src:'수직·수평·직선', type:'action', run:()=>startMeasure('height') },{ id:'s4', q:'반경', name:'반경', src:'', type:'soon' },{ id:'s5', q:'체적', name:'체적', src:'', type:'soon' },{ id:'s6', q:'단면', name:'단면', src:'', type:'soon' },
+    ]},
+    { id:'scompare', name:'비교', icon:I.compare, items:[
+      { id:'ab', q:'회차 A/B 분할', name:'회차 비교', src:'', type:'site' },{ id:'diff', q:'바뀐 곳만 보기', name:'변화 하이라이트', src:'', type:'site' },
+    ]},
+    { id:'analysis', name:'분석', icon:I.analysis, items:[
+      { id:'shadow', q:'해가 어디까지 드나', name:'일조·그림자', src:'시간 바 연동', type:'site' },{ id:'view', q:'여기서 어디까지 보이나', name:'가시권', src:'', type:'site' },{ id:'fl', q:'물이 차면', name:'침수 수위', src:'', type:'site' },
+    ]},
+    { id:'export', name:'내보내기', icon:I.export, items:[
+      { id:'png', q:'화면을 저장', name:'PNG 저장', src:'', type:'action', run: savePng },{ id:'ortho', q:'정사영상으로', name:'GeoTIFF', src:'', type:'site' },{ id:'kml', q:'측정 결과를', name:'KML · GeoJSON', src:'', type:'site' },{ id:'mp4', q:'비행 영상으로', name:'영상 녹화', src:'', type:'site' },
+    ]},
+  ]
+};
+
+/* ---------- 메뉴 렌더 ---------- */
+function renderCats(){
+  const cats = MENUS[STATE.mode];
+  const el = $('#cats');
+  el.innerHTML = `<div class="hd"><span>${STATE.mode==='earth'?'EARTH':'SITE'}</span></div>` +
+    cats.map(c=>{ const n = c.items.filter(i=>STATE.on.has(i.id)).length; return `<button class="cat ${STATE.cat===c.id?'on':''}" data-cat="${c.id}">${c.icon}<span class="n">${c.name}${n?`<span class="cnt">${n}</span>`:''}</span></button>`; }).join('') +
+    `<div class="quick"><button data-q="ask">물어보기</button><button data-q="me">내 위치</button><button data-q="home">전지구로</button><button data-q="viewer">3D-View</button></div>`;
+  el.querySelectorAll('.cat').forEach(b=>b.onclick=()=>{ STATE.cat = STATE.cat===b.dataset.cat?null:b.dataset.cat; renderCats(); renderSub(); });
+  el.querySelectorAll('.quick button').forEach(b=>b.onclick=()=>{
+    const q=b.dataset.q;
+    if(q==='home') flyHome();
+    else if(q==='me') goMyLocation();
+    else if(q==='viewer') window.open(VIEWER_URL,'_blank');
+    else toast('물어보기(AI 질의)는 지점 카드 데이터를 문장으로 답하는 기능으로 준비 중입니다');
+  });
+}
+function renderSub(){
+  const cat = MENUS[STATE.mode].find(c=>c.id===STATE.cat);
+  const sub = $('#sub');
+  if(!cat){ sub.classList.remove('open'); return; }
+  sub.classList.add('open');
+  $('#subTitle').textContent = cat.name;
+  const only = $('#onlyOn').checked;
+  let html = '';
+  if(cat.projects){
+    html += `<div class="note">SISTECH 3D 모델 프로젝트 · 클릭하면 현장으로 이동</div>` + PROJECTS.map(p=>`<button class="proj" data-p="${p.id}"><span class="pin ${p.plan?'plan':''}"></span><span><b>${p.name}</b><span>${p.desc}</span></span></button>`).join('') + `<div class="note" style="border-top:1px solid var(--line);margin-top:4px">● 연두: 서비스 중 · ● 주황: 기획 단계</div>`;
+  }
+  const items = cat.items.filter(i=>!only || STATE.on.has(i.id));
+  html += items.map(i=>{
+    const on = STATE.on.has(i.id);
+    const cls = ['item', i.type, on?'on':''].join(' ');
+    const badge = i.type==='soon'?'<span class="badge">준비 중</span>': i.type==='site'?'<span class="badge">SITE 전용</span>': i.locked?'<span class="badge">기본</span>':'';
+    return `<button class="${cls}" data-i="${i.id}" title="${i.q}"><span class="ind"></span><span class="t"><b>${i.name}</b><span>${i.q}</span>${i.src?`<span class="src">${i.src}${i.note?' · '+i.note:''}</span>`:''}</span>${badge}</button>`;
+  }).join('');
+  $('#subList').innerHTML = html;
+  $('#subCount').textContent = `${cat.items.filter(i=>STATE.on.has(i.id)).length} / ${cat.items.length} 켜짐`;
+  sub.querySelectorAll('.proj').forEach(b=>b.onclick=()=>flyToProject(b.dataset.p));
+  sub.querySelectorAll('.item').forEach(b=>b.onclick=()=>{
+    const it = cat.items.find(x=>x.id===b.dataset.i);
+    if(it.type==='soon') return toast(`"${it.name}"은(는) 데이터 연동 준비 중입니다 (${it.src})`);
+    if(it.type==='site') return toast(`"${it.name}"은(는) 현장(SITE) 모드에서 3D 모델 위에 제공됩니다`);
+    if(it.type==='action') return it.run && it.run();
+    if(it.locked) return toast('기본 영상은 끌 수 없습니다');
+    toggleLayer(it.id);
+  });
+}
+$('#subBack').onclick = ()=>{ STATE.cat=null; renderCats(); renderSub(); };
+$('#onlyOn').onchange = renderSub;
+
+/* ---------- 레이어 토글 ---------- */
+let quakeDS = null;
+async function toggleLayer(id, force){
+  const want = force!==undefined ? force : !STATE.on.has(id);
+  if(want) STATE.on.add(id); else STATE.on.delete(id);
+  if(id==='labels'){ layersImg.labels.show = want; $('#swLabels').classList.toggle('on', want); }
+  if(id==='projects'){ pinDS.show = want; }
+  if(id==='night'){
+    if(want && !layersImg.night){ layersImg.night = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({ url: GIBS_NIGHT, maximumLevel: 8, credit:'NASA GIBS VIIRS Black Marble' })); layersImg.night.alpha=.85; viewer.imageryLayers.raiseToTop(layersImg.labels); }
+    else if(layersImg.night) layersImg.night.show = want;
+  }
+  if(id==='cloud'){
+    if(want && !layersImg.cloud){ layersImg.cloud = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({ url: GIBS_CLOUD, maximumLevel: 9, credit:'NASA GIBS MODIS Terra' })); layersImg.cloud.alpha=.8; viewer.imageryLayers.raiseToTop(layersImg.labels); toast(`구름: NASA MODIS Terra ${ymd(yesterday)} (UTC) 일별 합성 영상`); }
+    else if(layersImg.cloud) layersImg.cloud.show = want;
+  }
+  if(id==='quake'){
+    if(want && !quakeDS){ await loadQuakes(); }
+    else if(quakeDS) quakeDS.show = want;
+  }
+  if(GIBS[id]){
+    const g = GIBS[id];
+    if(want && !layersImg[id]){ const t = g.time(); layersImg[id] = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({ url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${g.layer}/default/${t}/${g.tm}/{z}/{y}/{x}.${g.ext}`, maximumLevel: +g.tm.slice(-1), credit: 'NASA GIBS' })); layersImg[id].alpha = g.alpha; layersImg[id]._gibsTime = t; viewer.imageryLayers.raiseToTop(layersImg.labels); toast(`${g.label} · ${t.replace('T',' ').replace('Z',' UTC')}`); }
+    else if(layersImg[id]) layersImg[id].show = want;
+  }
+  if(id==='tiles'){ for(const p of PROJECTS) if(p.ts) p.ts.show = want; if(want) autoLoadTileset(); }
+  if(id==='sats'){ if(want) loadSats(); else if(satDS) satDS.show=false; }
+  if(id==='starlink'){ if(want) loadStarlink(); else if(starPts) starPts.show=false; }
+  if(id==='ptwx' || id==='aq' || id==='flight'){ if(STATE.point) renderCard(); }
+  renderCats(); renderSub(); updateSrc();
+}
+
+/* ---------- SISTECH 3D Tiles (3D-View 타일셋 직접 로드) ---------- */
+const TILESET_BASE = 'https://3dview.sistech3d.com/api/tileset/project/';
+async function ensureTileset(p){
+  if(!p.tsId || p.ts || p.tsLoading) return p.ts;
+  p.tsLoading = true; toast(`${p.name} 3D 모델 불러오는 중… (3D-View 타일셋)`);
+  try{
+    const ts = await Cesium.Cesium3DTileset.fromUrl(`${TILESET_BASE}${p.tsId}/tileset.json`, { maximumScreenSpaceError: STATE.sse, skipLevelOfDetail: true, dynamicScreenSpaceError: true, cacheBytes: 512*1024*1024, foveatedScreenSpaceError: true });
+    p.ts = ts; scene.primitives.add(ts); ts.show = STATE.on.has('tiles'); applyTsStyle(ts);
+    toast(`${p.name} 3D 모델 로드 완료 · SISTECH 드론 촬영 3D Tiles`); updateSrc();
+  }catch(e){ toast(`${p.name} 3D 모델 로드 실패: ${e.message}`, 5000); }
+  p.tsLoading = false; return p.ts;
+}
+function applyTsStyle(ts){ ts.style = new Cesium.Cesium3DTileStyle({ color: `color('white', ${STATE.tsAlpha})` }); ts.maximumScreenSpaceError = STATE.sse; }
+function autoLoadTileset(){
+  if(!STATE.on.has('tiles')) return;
+  const h = camera.positionCartographic.height; if(h > 120000) { for(const p of PROJECTS) if(p.ts) p.ts.show=false; return; }
+  const c = camera.positionCartographic;
+  for(const p of PROJECTS){ if(!p.tsId) continue; const d = new Cesium.EllipsoidGeodesic(new Cesium.Cartographic(c.longitude,c.latitude), Cesium.Cartographic.fromDegrees(p.lon,p.lat)).surfaceDistance; if(d < 60000){ if(!p.ts) ensureTileset(p); else p.ts.show = true; } else if(p.ts) p.ts.show = false; }
+}
+function cycleQuality(){ const seq = [['저',32],['중',16],['고',6]]; const i = seq.findIndex(s=>s[0]===STATE.quality); const n = seq[(i+1)%seq.length]; STATE.quality=n[0]; STATE.sse=n[1]; for(const p of PROJECTS) if(p.ts) p.ts.maximumScreenSpaceError = n[1]; toast(`3D 모델 화질: ${n[0]} (SSE ${n[1]})`); }
+function cycleOpacity(){ const seq=[1,.7,.4]; const i=seq.indexOf(STATE.tsAlpha); STATE.tsAlpha = seq[(i+1)%seq.length]; for(const p of PROJECTS) if(p.ts) applyTsStyle(p.ts); toast(`3D 모델 불투명도 ${Math.round(STATE.tsAlpha*100)}%`); }
+
+/* ---------- 위성 위치 (CelesTrak + satellite.js SGP4) ---------- */
+let satDS = null, satLib = null, SATS = [], starPts = null, STARS = [], satTrack = null;
+const SAT_WHITELIST = /^(ISS \(ZARYA\)|SUOMI NPP|HIMAWARI-9|NOAA 2[01]|GEO-KOMPSAT-2[AB]|TERRA$|AQUA$|ARIRANG-[235]|KOMPSAT-3A|CAS500-[123]|SENTINEL-2[ABC]|LANDSAT [89]|WORLDVIEW-3|PLEIADES NEO [34]|KOREASAT (5A|6A|7|116))/;
+const SAT_IMAGING = /^(ARIRANG-[35]|KOMPSAT-3A|CAS500-[12]|SENTINEL-2[ABC]|LANDSAT [89]|WORLDVIEW-3|PLEIADES NEO [34])/;
+const satKo = n => n.replace('ARIRANG-2 (KOMPSAT-2)','아리랑 2호').replace('ARIRANG-3 (KOMPSAT-3)','아리랑 3호').replace('ARIRANG-5 (KOMPSAT-5)','아리랑 5호(SAR)').replace('KOMPSAT-3A','아리랑 3A').replace(/CAS500-(\d)/,'차세대중형 $1호').replace('GEO-KOMPSAT-2A','천리안 2A').replace('GEO-KOMPSAT-2B','천리안 2B').replace(/KOREASAT (\S+)/,'무궁화 $1').replace('ISS (ZARYA)','ISS 국제우주정거장').replace('HIMAWARI-9','히마와리-9').replace('NOAA 20 (JPSS-1)','NOAA-20').replace('NOAA 21 (JPSS-2)','NOAA-21');
+const isKorean = n => /ARIRANG|KOMPSAT|CAS500|KOREASAT/.test(n);
+function loadLib(){ if(satLib) return Promise.resolve(satLib); return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src='https://unpkg.com/satellite.js@5.0.0/dist/satellite.min.js'; s.onload=()=>{ satLib = window.satellite; res(satLib); }; s.onerror=()=>rej(new Error('satellite.js 로드 실패')); document.head.appendChild(s); }); }
+// CelesTrak TLE 텍스트 → {OBJECT_NAME, NORAD_CAT_ID, EPOCH, INCLINATION, MEAN_MOTION, l1, l2}
+function parseTle(text){ const L = text.split(/\r?\n/).map(s=>s.trimEnd()).filter(Boolean); const out=[]; for(let i=0;i+2<L.length;i+=3){ const name=L[i].trim(), l1=L[i+1], l2=L[i+2]; if(!l1.startsWith('1 ')||!l2.startsWith('2 ')) { i-=2; continue; } const yy=+l1.slice(18,20), dd=+l1.slice(20,32); const year = yy<57?2000+yy:1900+yy; const epoch = new Date(Date.UTC(year,0,1) + (dd-1)*86400e3).toISOString(); out.push({ OBJECT_NAME:name, NORAD_CAT_ID:+l1.slice(2,7), EPOCH:epoch, INCLINATION:+l2.slice(8,16), MEAN_MOTION:+l2.slice(52,63), l1, l2 }); } return out; }
+async function fetchGroups(groups){ const out=[]; for(const g of groups){ const r = await fetch(`https://celestrak.org/NORAD/elements/gp.php?GROUP=${g}&FORMAT=TLE`); out.push(...parseTle(await r.text())); } return out; }
+function satrecFromOmm(o){ const rec = satLib.twoline2satrec(o.l1, o.l2); if(rec.error) throw new Error('TLE 오류 '+rec.error); return rec; }
+function satPos(s, date){ const pv = satLib.propagate(s.rec, date); if(!pv.position) return null; const gmst = satLib.gstime(date); const gd = satLib.eciToGeodetic(pv.position, gmst); const v = pv.velocity; return { lon: satLib.degreesLong(gd.longitude), lat: satLib.degreesLat(gd.latitude), h: gd.height*1000, speed: Math.hypot(v.x,v.y,v.z), ecf: satLib.eciToEcf(pv.position, gmst) }; }
+async function loadSats(){
+  if(satDS){ satDS.show = true; return; }
+  toast('위성 궤도 요소(CelesTrak) 불러오는 중…');
+  try{
+    await loadLib();
+    const all = await fetchGroups(['stations','weather','resource','geo']);
+    const seen = new Set(); SATS = [];
+    for(const o of all){ if(!SAT_WHITELIST.test(o.OBJECT_NAME) || seen.has(o.NORAD_CAT_ID)) continue; seen.add(o.NORAD_CAT_ID); try{ SATS.push({ name:o.OBJECT_NAME, ko:satKo(o.OBJECT_NAME), id:o.NORAD_CAT_ID, epoch:o.EPOCH, inc:o.INCLINATION, period: o.MEAN_MOTION? 1440/o.MEAN_MOTION : null, rec: satrecFromOmm(o) }); }catch(e){} }
+    satDS = new Cesium.CustomDataSource('sats'); viewer.dataSources.add(satDS);
+    for(const s of SATS){
+      const col = isKorean(s.name) ? '#BFE33A' : SAT_IMAGING.test(s.name) ? '#3FC7C0' : '#FFFFFF';
+      s.ent = satDS.entities.add({ id:'sat:'+s.id, position: new Cesium.CallbackProperty(()=>{ const p = satPos(s, simTime()); return p ? Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.h) : undefined; }, false),
+        point:{ pixelSize: isKorean(s.name)?9:7, color: Cesium.Color.fromCssColorString(col), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth: 2 },
+        label:{ text: s.ko, font:'600 12px Inter, "Noto Sans KR", sans-serif', fillColor: Cesium.Color.fromCssColorString(col), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0,-12), verticalOrigin: Cesium.VerticalOrigin.BOTTOM, scaleByDistance: new Cesium.NearFarScalar(1e6, 1.0, 4e7, 0.6) },
+        properties:{ kind:'sat', sid:s.id } });
+    }
+    toast(`위성 ${SATS.length}기 표시 · 연두: 한국 위성 · 청록: 지구관측 · 흰색: 기상·ISS · 시간 바를 움직이면 위치도 이동`);
+    updateSrc();
+  }catch(e){ toast('위성 데이터 실패: '+e.message, 5000); STATE.on.delete('sats'); renderSub(); }
+}
+async function loadStarlink(){
+  if(starPts){ starPts.show = true; return; }
+  toast('스타링크 궤도 요소 불러오는 중… (약 1MB)');
+  try{
+    await loadLib();
+    const all = parseTle(await (await fetch('https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=TLE')).text());
+    STARS = all.slice(0, 1500).map(o=>{ try{ return { rec: satrecFromOmm(o) }; }catch(e){ return null; } }).filter(Boolean);
+    starPts = scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    for(const s of STARS){ s.pt = starPts.add({ position: Cesium.Cartesian3.ZERO, pixelSize: 2.5, color: Cesium.Color.fromCssColorString('#8FA7C4').withAlpha(.8) }); }
+    updateStarlink(); setInterval(updateStarlink, 2000);
+    toast(`스타링크 ${STARS.length}기 (전체 ${all.length}기 중) · 회색 점`); updateSrc();
+  }catch(e){ toast('스타링크 데이터 실패: '+e.message, 5000); STATE.on.delete('starlink'); renderSub(); }
+}
+function updateStarlink(){ if(!starPts || !starPts.show) return; const t = simTime(); for(const s of STARS){ const p = satPos(s, t); if(p) s.pt.position = Cesium.Cartesian3.fromDegrees(p.lon,p.lat,p.h); } }
+function showSatCard(s){
+  STATE.point = null; $('#card').classList.add('open');
+  const p = satPos(s, simTime()) || {};
+  $('#cardTitle').innerHTML = `${s.ko}<small>${s.name} · NORAD ${s.id}</small>`;
+  const n = nearestProject();
+  $('#cardBody').innerHTML = `<div class="sec"><p class="lead">${STATE.tIdx===0?'지금':'시간 바 시각 기준'} <b>${s.ko}</b>는 고도 <b>${Math.round(p.h/1000).toLocaleString()} km</b>, 속도 <b>${(p.speed||0).toFixed(2)} km/s</b>로 ${p.lat>0?'N':'S'}${Math.abs(p.lat||0).toFixed(1)}° ${p.lon>0?'E':'W'}${Math.abs(p.lon||0).toFixed(1)}° 상공을 지나고 있습니다.</p>
+    <div class="kv"><div>고도<b>${Math.round(p.h/1000)} km</b></div><div>경사각<b>${(+s.inc).toFixed(1)}°</b></div><div>주기<b>${s.period? s.period.toFixed(0)+' 분':'—'}</b></div><div>종류<b>${isKorean(s.name)?'한국 위성': SAT_IMAGING.test(s.name)?'지구관측':'기상·기타'}</b></div></div>
+    <div class="meta"><span class="tag derived">DERIVED</span> CelesTrak GP(TLE) epoch ${s.epoch.slice(0,16).replace('T',' ')} UTC · SGP4 전파 · 오차 수 km 수준</div>
+    <button class="cta ghost" id="btnTrack">궤도 선 보기 (±45분)</button>
+    ${SAT_IMAGING.test(s.name)&&n?`<button class="cta" id="btnPass1">${n.p.name} 통과 예보 (24h)</button>`:''}</div>`;
+  $('#btnTrack').onclick = ()=>drawTrack(s);
+  const b = $('#btnPass1'); if(b) b.onclick = ()=>runPassForecast(n.p, [s]);
+}
+function drawTrack(s){
+  if(satTrack) satDS.entities.remove(satTrack);
+  const pts=[]; const t0 = simTime().getTime(); for(let m=-45;m<=45;m+=1){ const p = satPos(s, new Date(t0+m*60e3)); if(p) pts.push(Cesium.Cartesian3.fromDegrees(p.lon,p.lat,p.h)); }
+  satTrack = satDS.entities.add({ polyline:{ positions: pts, width: 2, material: new Cesium.PolylineDashMaterialProperty({ color: Cesium.Color.fromCssColorString('#BFE33A'), dashLength: 12 }) } });
+  toast(`${s.ko} 궤도 선 (±45분)`);
+}
+/* 현장 위 통과 예보 */
+async function runPassForecast(p, sats){
+  p = p || nearestProject()?.p; if(!p) return;
+  if(!satDS){ await loadSats(); if(!satDS) return; }
+  sats = sats || SATS.filter(s=>SAT_IMAGING.test(s.name));
+  const obs = { longitude: satLib.degreesToRadians(p.lon), latitude: satLib.degreesToRadians(p.lat), height: 0.05 };
+  const t0 = Date.now(); const passes=[];
+  for(const s of sats){ let inPass=null; for(let t=0;t<=24*3600e3;t+=20e3){ const d=new Date(t0+t); const pv=satLib.propagate(s.rec,d); if(!pv.position) break; const ecf=satLib.eciToEcf(pv.position, satLib.gstime(d)); const la=satLib.ecfToLookAngles(obs, ecf); const el=satLib.radiansToDegrees(la.elevation); if(el>20){ if(!inPass) inPass={s, start:d, max:el, maxT:d}; else if(el>inPass.max){ inPass.max=el; inPass.maxT=d; } } else if(inPass){ inPass.end=d; passes.push(inPass); inPass=null; } } }
+  passes.sort((a,b)=>a.maxT-b.maxT);
+  STATE.point=null; $('#card').classList.add('open');
+  $('#cardTitle').innerHTML = `${p.name} 위성 통과 예보<small>앞으로 24시간 · 고도각 20° 이상</small>`;
+  const fmt = d => d.toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+  $('#cardBody').innerHTML = `<div class="sec"><p class="lead">${p.name} 상공을 지나는 지구관측위성 <b>${passes.length}회</b> (최대 고도각 60° 이상이면 수직 촬영에 유리).</p>
+    ${passes.length? `<table style="width:100%;border-collapse:collapse;font-size:13px">${passes.map(x=>`<tr style="border-top:1px solid var(--line)"><td style="padding:6px 0">${fmt(x.maxT)}</td><td>${x.s.ko}</td><td style="text-align:right;color:${x.max>=60?'var(--lime-bright)':'var(--text)'}">${x.max.toFixed(0)}°</td></tr>`).join('')}</table>`:'<p class="lead">24시간 내 통과 없음</p>'}
+    <div class="meta"><span class="tag derived">DERIVED</span> CelesTrak TLE · SGP4 · 20초 간격 계산 · 실제 촬영 여부·구름은 미반영 · KST</div></div>`;
+}
+/* 로켓 발사 */
+async function showLaunches(){
+  toast('발사 일정 불러오는 중…');
+  try{ const j = await (await fetch('https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=10&mode=list')).json();
+    STATE.point=null; $('#card').classList.add('open'); $('#cardTitle').innerHTML = `다음 로켓 발사<small>Launch Library 2 · 예정 ${j.count}건 중 10건</small>`;
+    const fmt = s => new Date(s).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+    $('#cardBody').innerHTML = `<div class="sec">${j.results.map(l=>`<p class="lead" style="margin:0 0 10px"><b>${fmt(l.net)}</b> KST · ${l.name}<br><span style="color:var(--text-dim);font-size:12px">${l.launch_service_provider?.name||''} · ${l.pad?.location?.name||l.location||''} · ${l.status?.abbrev||''}</span></p>`).join('')}<div class="meta"><span class="tag obs">SCHEDULE</span> The Space Devs Launch Library 2 · 시간은 KST</div></div>`;
+  }catch(e){ toast('발사 일정 실패 (시간당 요청 제한 가능성): '+e.message, 5000); }
+}
+async function loadQuakes(){
+  toast('USGS 지진 피드 불러오는 중…');
+  try{
+    const r = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson'); const g = await r.json();
+    quakeDS = new Cesium.CustomDataSource('quakes'); viewer.dataSources.add(quakeDS);
+    for(const f of g.features){
+      const [lon,lat,depth] = f.geometry.coordinates; const m = f.properties.mag||0;
+      const col = m>=6?'#FF5D5D': m>=5?'#F2A65A': m>=4?'#F5D76E':'#A4C81C';
+      quakeDS.entities.add({ id:'quake:'+f.id, position: Cesium.Cartesian3.fromDegrees(lon,lat,0),
+        point:{ pixelSize: 3+m*1.6, color: Cesium.Color.fromCssColorString(col).withAlpha(.8), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth: 1, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+        properties:{ kind:'quake', mag:m, place:f.properties.place, time:f.properties.time, depth, url:f.properties.url, lat, lon } });
+    }
+    STATE.data.quakeCount = g.features.length; STATE.data.quakeGen = g.metadata.generated;
+    toast(`지진 ${g.features.length}건 (최근 7일, M2.5+) · USGS`);
+  }catch(e){ toast('USGS 피드를 불러오지 못했습니다: '+e.message); STATE.on.delete('quake'); }
+}
+
+/* ---------- 출처 줄 / HUD ---------- */
+function updateSrc(){
+  const parts = ['<b>Esri World Imagery</b> 영상'];
+  if(STATE.on.has('labels')) parts.push('Esri Reference 지명');
+  if(STATE.on.has('night')) parts.push('<b>NASA VIIRS</b> Black Marble 2016 밤의 불빛');
+  if(STATE.on.has('cloud')) parts.push(`<b>NASA MODIS Terra</b> ${ymd(yesterday)} 구름`);
+  if(STATE.on.has('quake')) parts.push(`<b>USGS</b> 지진 M2.5+ 7일${STATE.data.quakeCount?` (${STATE.data.quakeCount}건)`:''}`);
+  if(STATE.on.has('ptwx')) parts.push('<b>Open-Meteo</b> GFS·ECMWF 지점 예보 (MODEL)');
+  if(STATE.on.has('aq')) parts.push('<b>CAMS</b> 대기질 (MODEL)');
+  for(const id in GIBS) if(STATE.on.has(id) && layersImg[id]) parts.push(`<b>NASA GIBS</b> ${GIBS[id].label} ${layersImg[id]._gibsTime.slice(0,16).replace('T',' ')}${/T/.test(layersImg[id]._gibsTime)?' UTC':''}`);
+  if(STATE.on.has('sats') && SATS.length) parts.push(`<b>CelesTrak</b> 위성 ${SATS.length}기 SGP4 (DERIVED)`);
+  if(STATE.on.has('starlink') && STARS.length) parts.push(`스타링크 ${STARS.length}기`);
+  if(STATE.on.has('projects')) parts.push('<b>SISTECH</b> 프로젝트 위치');
+  const loaded = PROJECTS.filter(p=>p.ts && p.ts.show).map(p=>p.name); if(loaded.length) parts.push(`<b>SISTECH 3D Tiles</b> ${loaded.join(', ')} (DRONE)`);
+  parts.push('지형 없음(타원체) · 비상업 데모');
+  $('#hudSrc').innerHTML = '출처: ' + parts.join(' · ');
+}
+function updateHud(){
+  const h = camera.positionCartographic.height;
+  $('#hudAlt').textContent = fmtKm(h);
+  const stage = h > 2.0e6 ? 'earth' : h > 8000 ? 'region' : 'site';
+  if(stage!==STATE.stage){ STATE.stage = stage; document.querySelectorAll('#stage span').forEach(s=>s.classList.toggle('on', s.dataset.s===stage)); $('#hudStage').textContent = {earth:'지구',region:'지역',site:'현장'}[stage]; if(stage==='site') onEnterSite(); }
+  autoLoadTileset();
+  // 해시 딥링크
+  const c = camera.positionCartographic;
+  const hash = `at=${Cesium.Math.toDegrees(c.latitude).toFixed(4)},${Cesium.Math.toDegrees(c.longitude).toFixed(4)},${Math.round(h)},${Math.round(Cesium.Math.toDegrees(camera.heading))}&on=${[...STATE.on].join(',')}`;
+  history.replaceState(null,'','#'+hash);
+}
+camera.changed.addEventListener(updateHud); camera.percentageChanged = 0.01;
+
+function onEnterSite(){
+  const p = nearestProject();
+  if(p && p.dist < 30000 && !STATE.point){ showProjectCard(p.p, p.dist); }
+}
+function nearestProject(){
+  const c = camera.positionCartographic; let best=null;
+  for(const p of PROJECTS){ const g = new Cesium.EllipsoidGeodesic(new Cesium.Cartographic(c.longitude,c.latitude), Cesium.Cartographic.fromDegrees(p.lon,p.lat)); const d=g.surfaceDistance; if(!best||d<best.dist) best={p,dist:d}; }
+  return best;
+}
+
+/* ---------- 카메라 ---------- */
+function flyHome(){ camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(127.5, 36.5, 1.2e7), orientation:{heading:0,pitch:-Cesium.Math.PI_OVER_TWO,roll:0}, duration:2 }); }
+function flyToProject(id){
+  const p = PROJECTS.find(x=>x.id===id); if(!p) return;
+  // 고도 2.2 km, 내려다보는 각도 38° → 대상이 화면 중앙에 오도록 남쪽으로 약 2.8 km 물러섬
+  camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(p.lon, p.lat-0.0253, 2200), orientation:{ heading:0, pitch:Cesium.Math.toRadians(-38), roll:0 }, duration: 3.2, complete:()=>showProjectCard(p,0) });
+}
+function goMyLocation(){
+  if(!navigator.geolocation) return toast('이 브라우저는 위치를 지원하지 않습니다');
+  toast('내 위치 확인 중…');
+  navigator.geolocation.getCurrentPosition(pos=>{ const {latitude:la,longitude:lo}=pos.coords; camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(lo,la,60000),duration:2.5,complete:()=>pickPoint(la,lo)}); }, e=>toast('위치를 가져오지 못했습니다: '+e.message));
+}
+
+/* ---------- 지점 카드 ---------- */
+const H = {
+  pick:(la,lo)=>`N${la.toFixed(3)}° ${lo>=0?'E':'W'}${Math.abs(lo).toFixed(3)}°`,
+};
+async function pickPoint(lat, lon){
+  STATE.point = { lat, lon, place:null, wx:null, aq:null, err:{} };
+  $('#card').classList.add('open'); renderCard();
+  const tz = 'Asia/Seoul';
+  const jobs = [
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=10&accept-language=ko`).then(r=>r.json()).then(j=>{ STATE.point.place = j.display_name ? (j.address ? [j.address.country, j.address.state||j.address.province, j.address.city||j.address.county||j.address.town].filter(Boolean).join(' ') : j.display_name) : null; }).catch(e=>STATE.point.err.place=e),
+    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,wind_gusts_10m,wind_direction_10m,visibility,cloud_cover,pressure_msl&past_days=1&forecast_days=6&timezone=${tz}&wind_speed_unit=ms`).then(r=>r.json()).then(j=>STATE.point.wx=j).catch(e=>STATE.point.err.wx=e),
+    fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=pm10,pm2_5,european_aqi&past_days=1&forecast_days=5&timezone=${tz}`).then(r=>r.json()).then(j=>STATE.point.aq=j).catch(e=>STATE.point.err.aq=e),
+  ];
+  for(const j of jobs){ j.then(()=>{ if(STATE.point && STATE.point.lat===lat) renderCard(); }); }
+}
+function hourIndex(series){
+  // series.time: ISO 로컬 시각 배열 (past_days=1 포함). "지금"에 가장 가까운 index + tIdx
+  const now = new Date(); const nowStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:00`;
+  let i = series.time.indexOf(nowStr); if(i<0) i = 24;
+  return Math.max(0, Math.min(series.time.length-1, i + STATE.tIdx));
+}
+function dirName(d){ return ['북','북동','동','남동','남','남서','서','북서'][Math.round(d/45)%8]; }
+function flightCheck(w){
+  const reasons=[]; let level='ok';
+  if(w.wind>8){ reasons.push(`풍속 ${w.wind} m/s`); level='bad'; } else if(w.wind>6){ reasons.push(`풍속 ${w.wind} m/s`); level='warn'; }
+  if(w.gust>12){ reasons.push(`돌풍 ${w.gust} m/s`); level='bad'; } else if(w.gust>9){ reasons.push(`돌풍 ${w.gust}`); if(level==='ok') level='warn'; }
+  if(w.rain>0){ reasons.push(`강수 ${w.rain} mm`); level='bad'; }
+  if(w.vis!=null && w.vis<3000){ reasons.push(`시정 ${(w.vis/1000).toFixed(1)} km`); level='bad'; } else if(w.vis!=null && w.vis<5000){ reasons.push('시정 저하'); if(level==='ok') level='warn'; }
+  if(w.cloud>=90){ reasons.push(`운량 ${w.cloud}%`); if(level==='ok') level='warn'; }
+  return { level, reasons, text: level==='ok'?'비행 조건 양호': level==='warn'?'주의 · 현장 판단 필요':'비행 부적합' };
+}
+function renderCard(){
+  const P = STATE.point; if(!P) return;
+  $('#cardTitle').innerHTML = `${H.pick(P.lat,P.lon)}<small>${P.place || (P.err.place?'지명 조회 실패':'지명 조회 중…')}</small>`;
+  let html = '';
+  const wxOn = STATE.on.has('ptwx') || STATE.on.has('flight');
+  // 날씨
+  if(wxOn){
+    if(P.wx && P.wx.hourly){
+      const h = P.wx.hourly, i = hourIndex(h);
+      const w = { t:h.temperature_2m[i], rh:h.relative_humidity_2m[i], rain:h.precipitation[i], wind:h.wind_speed_10m[i], gust:h.wind_gusts_10m[i], dir:h.wind_direction_10m[i], vis:h.visibility?.[i], cloud:h.cloud_cover[i], p:h.pressure_msl[i] };
+      const when = h.time[i].replace('T',' ').slice(5);
+      const fc = flightCheck(w);
+      html += `<div class="sec">`;
+      if(STATE.on.has('flight')) html += `<div class="fly ${fc.level}">${fc.level==='ok'?'✔':fc.level==='warn'?'!':'✕'} ${fc.text}${fc.reasons.length?` · ${fc.reasons.join(', ')}`:''}</div>`;
+      html += `<p class="lead">${STATE.tIdx===0?'지금':when+' 기준'} 이곳은 기온 <b>${w.t}°C</b>, ${dirName(w.dir)}풍 <b>${w.wind} m/s</b>(돌풍 ${w.gust}), 강수 <b>${w.rain} mm</b>, 운량 ${w.cloud}%입니다.</p>
+        <div class="kv"><div>기온<b>${w.t}°C</b></div><div>습도<b>${w.rh}%</b></div><div>풍속<b>${w.wind} m/s</b></div><div>돌풍<b>${w.gust} m/s</b></div><div>풍향<b>${dirName(w.dir)} ${w.dir}°</b></div><div>강수<b>${w.rain} mm</b></div><div>시정<b>${w.vis!=null?(w.vis/1000).toFixed(0)+' km':'—'}</b></div><div>운량<b>${w.cloud}%</b></div><div>해면기압<b>${Math.round(w.p)} hPa</b></div></div>
+        <div class="meta"><span class="tag model">MODEL</span> Open-Meteo (GFS·ECMWF 혼합) · ${when} KST · 격자 ≈ 11 km · 선택 지점의 실측이 아닌 모델 격자값입니다${STATE.on.has('flight')?' · 비행 판정 기준은 예시(풍속 8 · 돌풍 12 · 강수 0 · 시정 3 km)':''}</div></div>`;
+    } else if(P.err.wx) html += `<div class="sec"><p class="lead">기상 데이터를 불러오지 못했습니다.</p></div>`;
+    else html += `<div class="sec"><div class="skeleton" style="width:90%"></div><div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:50%"></div></div>`;
+  }
+  // 대기질
+  if(STATE.on.has('aq')){
+    if(P.aq && P.aq.hourly){
+      const h=P.aq.hourly, i=hourIndex(h); const aqi=h.european_aqi[i];
+      const grade = aqi==null?'—': aqi<=20?'좋음': aqi<=40?'양호': aqi<=60?'보통': aqi<=80?'나쁨': aqi<=100?'매우 나쁨':'극히 나쁨';
+      html += `<div class="sec"><p class="lead">미세먼지 PM10 <b>${h.pm10[i]} µg/m³</b>, 초미세먼지 PM2.5 <b>${h.pm2_5[i]}</b>, 대기질 지수 <b>${aqi} (${grade})</b>.</p>
+        <div class="meta"><span class="tag model">MODEL</span> CAMS 대기질 예측 (Open-Meteo) · ${h.time[i].replace('T',' ').slice(5)} KST · 격자 ≈ 11 km · 유럽 AQI 기준</div></div>`;
+    } else if(P.err.aq) html += `<div class="sec"><p class="lead">대기질 데이터를 불러오지 못했습니다.</p></div>`;
+    else html += `<div class="sec"><div class="skeleton" style="width:80%"></div></div>`;
+  }
+  if(!wxOn && !STATE.on.has('aq')) html += `<div class="sec"><p class="lead" style="color:var(--text-dim)">날씨 › 지점 기상, 대기 › 미세먼지 레이어를 켜면 이 지점의 값이 표시됩니다.</p></div>`;
+  // 가장 가까운 프로젝트
+  let best=null; for(const p of PROJECTS){ const g=new Cesium.EllipsoidGeodesic(Cesium.Cartographic.fromDegrees(P.lon,P.lat),Cesium.Cartographic.fromDegrees(p.lon,p.lat)); if(!best||g.surfaceDistance<best.d) best={p,d:g.surfaceDistance}; }
+  if(best){ html += projectSection(best.p, best.d); }
+  $('#cardBody').innerHTML = html;
+  $('#cardBody').querySelectorAll('[data-fly]').forEach(b=>b.onclick=()=>flyToProject(b.dataset.fly));
+}
+function projectSection(p, d){
+  return `<div class="sec"><p class="lead">가장 가까운 SISTECH 3D 모델: <b>${p.name}</b> (${fmtKm(d)}) · ${p.desc}</p>
+    <div class="kv"><div>상태<b>${p.status}</b></div><div>촬영<b>${p.shot}</b></div><div>GSD<b>${p.gsd}</b></div><div>정확도<b>${p.rmse}</b></div><div>지역<b>${p.area}</b></div></div>
+    <div class="meta"><span class="tag drone">DRONE</span> SISTECH 자체 항공촬영 · 메타데이터는 데모 예시 값${p.tsId?` · 3D Tiles: ${p.ts?(p.ts.show?'표시 중':'숨김'):p.tsLoading?'로드 중':'현장 근처에서 자동 로드'}`:''}</div>
+    <button class="cta" data-fly="${p.id}">${p.tsId?'현장 3D 모델로 이동':'현장으로 이동'}</button>
+    ${p.plan?'':`<a class="cta ghost" href="${VIEWER_URL}" target="_blank" rel="noopener">3D-View 원본 뷰어 열기 ↗</a>`}</div>`;
+}
+function showProjectCard(p, d){
+  STATE.point = null;
+  $('#card').classList.add('open');
+  $('#cardTitle').innerHTML = `${p.name}<small>${p.desc}</small>`;
+  $('#cardBody').innerHTML = projectSection(p, d) + (p.tsId ? `<div class="sec"><p class="lead" style="color:var(--text-dim)">3D-View의 실제 타일셋(3dview.sistech3d.com/api/tileset/project/${p.tsId})을 이 화면에 직접 띄웁니다. 모델 위를 클릭하면 그 지점 정보, 측정 › 높이로 건물 높이를 재 수 있습니다. 지형이 없어 모델이 타원체면보다 약간 떠 보일 수 있습니다.</p></div>` : `<div class="sec"><p class="lead" style="color:var(--text-dim)">기획 단계 프로젝트로 아직 3D 모델이 없습니다.</p></div>`);
+  $('#cardBody').querySelectorAll('[data-fly]').forEach(b=>b.onclick=()=>flyToProject(b.dataset.fly));
+}
+function showQuakeCard(pr){
+  STATE.point = null; $('#card').classList.add('open');
+  const t = new Date(pr.time); const kst = t.toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false});
+  $('#cardTitle').innerHTML = `M ${pr.mag.toFixed(1)} 지진<small>${pr.place||''}</small>`;
+  $('#cardBody').innerHTML = `<div class="sec"><p class="lead"><b>${kst}</b>(KST)에 ${pr.place||'해당 위치'}에서 규모 <b>M${pr.mag.toFixed(1)}</b>, 깊이 <b>${pr.depth.toFixed(0)} km</b> 지진이 있었습니다.</p>
+    <div class="kv"><div>규모<b>M${pr.mag.toFixed(1)}</b></div><div>깊이<b>${pr.depth.toFixed(0)} km</b></div><div>위치<b>${pr.lat.toFixed(3)}, ${pr.lon.toFixed(3)}</b></div></div>
+    <div class="meta"><span class="tag obs">OBS</span> USGS Earthquake Hazards Program · 실시간 피드 (M2.5+, 7일)</div>
+    <a class="cta ghost" href="${pr.url}" target="_blank" rel="noopener">USGS 상세 ↗</a></div>`;
+}
+$('#cardClose').onclick = ()=>{ $('#card').classList.remove('open'); STATE.point=null; };
+
+/* ---------- 클릭 처리 ---------- */
+const handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
+handler.setInputAction(e=>{
+  if(STATE.measure) return measureClick(e.position);
+  const picked = scene.pick(e.position);
+  if(Cesium.defined(picked) && picked.id && picked.id.properties){
+    const kind = picked.id.properties.kind?.getValue();
+    if(kind==='project'){ const p = PROJECTS.find(x=>x.id===picked.id.properties.pid.getValue()); flyToProject(p.id); return; }
+    if(kind==='quake'){ const pr = {}; for(const k of ['mag','place','time','depth','url','lat','lon']) pr[k]=picked.id.properties[k].getValue(); showQuakeCard(pr); return; }
+    if(kind==='sat'){ const s = SATS.find(x=>x.id===picked.id.properties.sid.getValue()); if(s) showSatCard(s); return; }
+  }
+  // 3D 모델 위를 클릭하면 모델 표면 좌표를 사용
+  if(picked && picked.primitive instanceof Cesium.Cesium3DTileset && scene.pickPositionSupported){ const pp = scene.pickPosition(e.position); if(pp){ const c = Cesium.Cartographic.fromCartesian(pp); pickPoint(+Cesium.Math.toDegrees(c.latitude).toFixed(5), +Cesium.Math.toDegrees(c.longitude).toFixed(5)); return; } }
+  const cart = camera.pickEllipsoid(e.position, globe.ellipsoid); if(!cart) return;
+  const c = Cesium.Cartographic.fromCartesian(cart);
+  pickPoint(+Cesium.Math.toDegrees(c.latitude).toFixed(4), +Cesium.Math.toDegrees(c.longitude).toFixed(4));
+}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+handler.setInputAction(e=>{
+  const cart = camera.pickEllipsoid(e.endPosition, globe.ellipsoid);
+  if(cart){ const c=Cesium.Cartographic.fromCartesian(cart); $('#hudCursor').textContent = `커서 ${Cesium.Math.toDegrees(c.latitude).toFixed(4)}, ${Cesium.Math.toDegrees(c.longitude).toFixed(4)}`; }
+  if(STATE.measure) measureMove(cart, e.endPosition);
+}, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+handler.setInputAction(()=>{ if(STATE.measure) finishMeasure(); }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+
+/* ---------- 측정 (거리/면적) ---------- */
+const mDS = new Cesium.CustomDataSource('measure'); viewer.dataSources.add(mDS);
+let mLabelEls = [];
+function startMeasure(type){
+  clearMeasure(); STATE.measure = { type, pts:[], hover:null, done:false };
+  $('#measure').classList.add('open'); $('#mText').textContent = type==='dist'?'거리: 점을 클릭 · 더블클릭으로 끝': type==='height'?'높이: 바닥 한 점, 옥상 한 점을 클릭 (3D 모델 위에서)':'면적: 꼭짓점을 클릭 · 더블클릭으로 끝'; $('#mVal').textContent='';
+  scene.canvas.style.cursor='crosshair';
+  mDS.entities.add({ polyline:{ positions: new Cesium.CallbackProperty(()=>{ const M=STATE.measure; if(!M) return []; const p=[...M.pts]; if(M.hover&&!M.done) p.push(M.hover); if(M.type==='area'&&p.length>2) p.push(p[0]); return p; }, false), width:3, material: Cesium.Color.fromCssColorString('#BFE33A'), clampToGround:false } });
+  mDS.entities.add({ polygon:{ hierarchy: new Cesium.CallbackProperty(()=>{ const M=STATE.measure; if(!M||M.type!=='area') return new Cesium.PolygonHierarchy([]); const p=[...M.pts]; if(M.hover&&!M.done) p.push(M.hover); return new Cesium.PolygonHierarchy(p.length>2?p:[]); }, false), material: Cesium.Color.fromCssColorString('#A4C81C').withAlpha(.25) } });
+}
+function pickSurface(pos){
+  // 3D 모델(타일셋)이 있으면 모델 표면, 없으면 타원체면
+  const picked = scene.pick(pos);
+  if(picked && picked.primitive instanceof Cesium.Cesium3DTileset && scene.pickPositionSupported){ const pp = scene.pickPosition(pos); if(pp) return { cart: pp, onModel: true }; }
+  const c = camera.pickEllipsoid(pos, globe.ellipsoid); return c ? { cart: c, onModel: false } : null;
+}
+function measureClick(pos){
+  const hit = pickSurface(pos); if(!hit) return; const cart = hit.cart; STATE.measure.onModel = STATE.measure.onModel || hit.onModel;
+  const M = STATE.measure; if(M.done) return;
+  M.pts.push(cart);
+  mDS.entities.add({ position: cart, point:{ pixelSize:7, color: Cesium.Color.fromCssColorString('#BFE33A'), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth:2, disableDepthTestDistance: Number.POSITIVE_INFINITY } });
+  updateMeasureValue();
+}
+function measureMove(cart, pos){ if(STATE.measure && !STATE.measure.done){ const hit = pos ? pickSurface(pos) : null; STATE.measure.hover = hit ? hit.cart : (cart||null); updateMeasureValue(); } }
+function measureStats(){
+  const M = STATE.measure; const p=[...M.pts]; if(M.hover&&!M.done) p.push(M.hover);
+  const cg = p.map(x=>Cesium.Cartographic.fromCartesian(x));
+  if(M.type==='dist'){ let d=0, d3=0; for(let i=1;i<cg.length;i++){ d += new Cesium.EllipsoidGeodesic(cg[i-1],cg[i]).surfaceDistance; d3 += Cesium.Cartesian3.distance(p[i-1],p[i]); } return {d, d3, n:p.length}; }
+  if(M.type==='height'){ if(cg.length<2) return {n:p.length}; const a=cg[0], b=cg[1]; return { n:p.length, v: Math.abs(b.height-a.height), hz: new Cesium.EllipsoidGeodesic(a,b).surfaceDistance, sl: Cesium.Cartesian3.distance(p[0],p[1]) }; }
+  // 면적: 구면 과잉 (타원체 근사, R=6371km)
+  if(cg.length<3) return {a:0,n:p.length};
+  const R=6371008.8; let s=0; for(let i=0;i<cg.length;i++){ const a=cg[i], b=cg[(i+1)%cg.length]; s += (b.longitude-a.longitude)*(2+Math.sin(a.latitude)+Math.sin(b.latitude)); }
+  return {a: Math.abs(s*R*R/2), n:p.length};
+}
+function fmtArea(a){ return a>=1e6? `${(a/1e6).toFixed(2)} ㎢ · ${(a/1e4).toFixed(1)} ha` : `${Math.round(a).toLocaleString()} ㎡ · ${(a/3.3058).toFixed(0).toLocaleString()} 평${a>=1e4?` · ${(a/1e4).toFixed(2)} ha`:''}`; }
+function updateMeasureValue(){
+  const M = STATE.measure; if(!M) return; const s = measureStats();
+  $('#mVal').textContent = M.type==='dist' ? (s.n>1? fmtKm(s.d) + (s.d>=1000?` (${(s.d/1000).toFixed(2)} km)`: M.onModel?` · 직선 ${s.d3.toFixed(1)} m`:'') : '')
+    : M.type==='height' ? (s.n>1? `수직 ${s.v.toFixed(1)} m · 수평 ${s.hz.toFixed(1)} m · 직선 ${s.sl.toFixed(1)} m` : '')
+    : (s.n>2? fmtArea(s.a):'');
+  if(M.type==='height' && M.pts.length>=2 && !M.done) finishMeasure();
+}
+function finishMeasure(){ const M=STATE.measure; if(!M) return;
+  // 더블클릭으로 들어온 중복 점 제거 (같은 자리에 찍힌 연속 점)
+  while(M.pts.length>1 && Cesium.Cartesian3.distance(M.pts[M.pts.length-1], M.pts[M.pts.length-2]) < 0.5){ M.pts.pop(); const pe = mDS.entities.values.filter(e=>e.point); const last = pe[pe.length-1]; if(last) mDS.entities.remove(last); }
+  M.done=true; M.hover=null; updateMeasureValue(); $('#mText').textContent = ({dist:'거리',area:'면적',height:'높이'})[M.type]+' 측정 완료 · '+(M.onModel?'3D 모델 표면 기준 (DRONE)':'타원체면 기준(지형 미반영)'); scene.canvas.style.cursor=''; }
+function clearMeasure(){ mDS.entities.removeAll(); if(STATE.measure){ STATE.measure.pts=[]; STATE.measure.done=false; } $('#mVal').textContent=''; }
+$('#mDone').onclick = finishMeasure; $('#mClear').onclick = ()=>{ const t=STATE.measure?.type; clearMeasure(); if(t) startMeasure(t); };
+$('#mExit').onclick = ()=>{ clearMeasure(); STATE.measure=null; $('#measure').classList.remove('open'); scene.canvas.style.cursor=''; };
+document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ $('#mExit').click(); $('#search').classList.remove('open'); $('#settings').classList.remove('open'); } });
+
+/* ---------- 시간 바 ---------- */
+let playTimer=null;
+function setT(v){ STATE.tIdx = +v; $('#tRange').value = v; $('#tNow').classList.toggle('on', STATE.tIdx===0);
+  if(STATE.tIdx===0) $('#tLbl').innerHTML='NOW<small>KST</small>';
+  else { const d=new Date(Date.now()+STATE.tIdx*3600e3); $('#tLbl').innerHTML = `${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:00<small>${STATE.tIdx>0?'+':''}${STATE.tIdx}h 예보</small>`; }
+  if(STATE.point) renderCard();
+  if(starPts) updateStarlink();
+}
+$('#tRange').oninput = e=>setT(e.target.value);
+$('#tNow').onclick = ()=>{ stopPlay(); setT(0); };
+function stopPlay(){ if(playTimer){ clearInterval(playTimer); playTimer=null; $('#tPlay').textContent='▶'; } }
+$('#tPlay').onclick = ()=>{ if(playTimer) return stopPlay(); $('#tPlay').textContent='❚❚'; if(STATE.tIdx>=120) setT(0); playTimer=setInterval(()=>{ if(STATE.tIdx>=120) return stopPlay(); setT(STATE.tIdx+1); }, 350); };
+
+/* ---------- 모드 / 레일 ---------- */
+// SITE에서 열린 창(지점 카드·측정·하위 메뉴·설정·검색) 모두 닫기
+function closeAllPanels(){
+  $('#card').classList.remove('open'); STATE.point = null;
+  if(STATE.measure){ clearMeasure(); STATE.measure = null; $('#measure').classList.remove('open'); scene.canvas.style.cursor=''; }
+  $('#settings').classList.remove('open'); $('#search').classList.remove('open');
+  if(satTrack && satDS){ satDS.entities.remove(satTrack); satTrack = null; }
+  STATE.cat = null; $('#sub').classList.remove('open');
+}
+function setMode(m){
+  const prev = STATE.mode; STATE.mode=m;
+  if(m==='earth' && prev==='site'){ closeAllPanels(); toast('EARTH 모드 · SITE에서 열린 창을 모두 닫았습니다'); }
+  STATE.cat = m==='site'?'model':null; document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on', b.dataset.mode===m)); renderCats(); renderSub();
+  if(m==='site'){ const n=nearestProject(); if(n && STATE.stage!=='site'){ toast(`SITE 모드: 가장 가까운 프로젝트 ${n.p.name}로 이동합니다`); flyToProject(n.p.id); } } }
+document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+
+/* ---------- 검색 ---------- */
+$('#btnSearch').onclick = ()=>{ const s=$('#search'); s.classList.toggle('open'); $('#settings').classList.remove('open'); if(s.classList.contains('open')) $('#q').focus(); };
+$('#q').onkeydown = async e=>{
+  if(e.key!=='Enter') return; const q=$('#q').value.trim(); if(!q) return;
+  const pj = PROJECTS.find(p=>p.name.includes(q)||p.desc.includes(q)||p.area.includes(q)); if(pj){ $('#search').classList.remove('open'); return flyToProject(pj.id); }
+  $('#qres').innerHTML = '<li><small>검색 중…</small></li>';
+  try{ const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&accept-language=ko&q=${encodeURIComponent(q)}`); const j = await r.json();
+    $('#qres').innerHTML = j.length? j.map((x,i)=>`<li data-i="${i}"><span>${x.display_name.split(',').slice(0,3).join(',')}</span><small>${x.type}</small></li>`).join('') : '<li><small>결과 없음</small></li>';
+    $('#qres').querySelectorAll('li[data-i]').forEach(li=>li.onclick=()=>{ const x=j[+li.dataset.i]; const bb=x.boundingbox.map(Number); const span=Math.max(bb[1]-bb[0], bb[3]-bb[2]); const h=Math.max(3000, span*111000*1.8); $('#search').classList.remove('open'); camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(+x.lon,+x.lat,h),duration:2.5,complete:()=>pickPoint(+(+x.lat).toFixed(4),+(+x.lon).toFixed(4))}); });
+  }catch(err){ $('#qres').innerHTML='<li><small>검색 실패: '+err.message+'</small></li>'; }
+};
+
+/* ---------- 설정 ---------- */
+$('#btnSettings').onclick = ()=>{ $('#settings').classList.toggle('open'); $('#search').classList.remove('open'); };
+$('#swLight').onclick = e=>{ const on=!e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on',on); globe.enableLighting=on; };
+$('#swLabels').onclick = ()=>toggleLayer('labels');
+let spinOff=null;
+$('#swSpin').onclick = e=>{ const on=!e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on',on); if(on){ spinOff = viewer.clock.onTick.addEventListener(()=>camera.rotate(Cesium.Cartesian3.UNIT_Z, -0.0015)); } else if(spinOff){ spinOff(); spinOff=null; } };
+$('#segEx').querySelectorAll('button').forEach(b=>b.onclick=()=>{ $('#segEx').querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); if('verticalExaggeration' in scene) scene.verticalExaggeration=+b.dataset.v; else globe.terrainExaggeration=+b.dataset.v; $('#hudEx').textContent=b.dataset.v+'×'; toast('지형이 연결되면 과장 배율이 화면에 반영됩니다'); });
+function sunInfo(){ const d=new Date(); $('#sunInfo').textContent = `· ${pad(d.getHours())}:${pad(d.getMinutes())} KST 실시간`; }
+sunInfo(); setInterval(sunInfo, 30000);
+
+/* ---------- PNG 저장 ---------- */
+function savePng(){ scene.render(); const a=document.createElement('a'); a.download=`sistech-earth-${Date.now()}.png`; a.href=scene.canvas.toDataURL('image/png'); a.click(); toast('PNG 저장'); }
+
+/* ---------- 시작 ---------- */
+(function init(){
+  renderCats(); updateSrc(); setT(0);
+  // 해시 복원
+  const h = new URLSearchParams(location.hash.slice(1));
+  if(h.get('on')){ for(const id of h.get('on').split(',')) if(id && !STATE.on.has(id)) toggleLayer(id, true); }
+  if(h.get('at')){ const [la,lo,alt,hd]=h.get('at').split(',').map(Number); camera.setView({destination:Cesium.Cartesian3.fromDegrees(lo,la,alt),orientation:{heading:Cesium.Math.toRadians(hd||0),pitch:-Cesium.Math.PI_OVER_TWO,roll:0}}); }
+  else { camera.setView({destination:Cesium.Cartesian3.fromDegrees(127.5, 36.5, 2.4e7)}); setTimeout(flyHome, 400); }
+  updateHud();
+  setTimeout(()=>toast('SISTECH EARTH 데모 · 지도를 클릭하면 지점 카드, 왼쪽 메뉴에서 레이어를 켜세요'), 1200);
+})();
+</script>
+</body>
+</html>
