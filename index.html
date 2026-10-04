@@ -1927,6 +1927,92 @@ setMode = function(m){
 /* ---------- 14. 설정 창: 바깥(다른 버튼·지도)을 누르면 자동으로 닫힘 ---------- */
 document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.classList.contains('open')) return; if(st.contains(e.target) || e.target.closest('#btnSettings')) return; st.classList.remove('open'); }, true);
 
+/* ---------- 15. SITE › 분석 › 일조·그림자 (Cesium 그림자 맵 + 태양 위치 계산 · 시간 바 연동) ---------- */
+(function(){
+  const an = MENUS.site.find(c=>c.id==='analysis'); const it = an && an.items.find(i=>i.id==='shadow'); if(!it) return;
+  Object.assign(it, { type:'layer', name:'일조·그림자 분석', q:'해가 어디까지 드나 · 그림자는 어디로', src:'태양 위치 계산 + 3D 모델 그림자 · 날짜·시각 선택 · 시간 바 연동' });
+  const SH = { on:false, date:null, prevLight:null, prevNight:null, timer:null, hud:null };
+  const pad = n => String(n).padStart(2,'0');
+  const kstParts = d => { const s = new Date(d.getTime()+9*3600e3); return { y:s.getUTCFullYear(), m:s.getUTCMonth()+1, d:s.getUTCDate(), h:s.getUTCHours()+s.getUTCMinutes()/60 }; };
+  const fromKst = (y,m,d,h) => new Date(Date.UTC(y,m-1,d) + h*3600e3 - 9*3600e3);
+  // NOAA 간이 태양 위치 (오차 < 0.5°)
+  function sunPos(date, lat, lon){
+    const jd = date.getTime()/86400e3 + 2440587.5; const T = (jd-2451545)/36525;
+    const L0 = (280.46646 + T*(36000.76983 + T*0.0003032)) % 360; const M = 357.52911 + T*(35999.05029 - 0.0001537*T); const Mr = M*Math.PI/180;
+    const C = Math.sin(Mr)*(1.914602 - T*(0.004817+0.000014*T)) + Math.sin(2*Mr)*(0.019993-0.000101*T) + Math.sin(3*Mr)*0.000289;
+    const trueLon = L0 + C; const omega = 125.04 - 1934.136*T; const lambda = trueLon - 0.00569 - 0.00478*Math.sin(omega*Math.PI/180);
+    const eps0 = 23 + (26 + (21.448 - T*(46.815 + T*(0.00059 - T*0.001813)))/60)/60; const eps = eps0 + 0.00256*Math.cos(omega*Math.PI/180);
+    const decl = Math.asin(Math.sin(eps*Math.PI/180)*Math.sin(lambda*Math.PI/180));
+    const y = Math.tan(eps*Math.PI/360)**2; const L0r = L0*Math.PI/180; const e = 0.016708634 - T*(0.000042037+0.0000001267*T);
+    const eot = 4*(180/Math.PI)*(y*Math.sin(2*L0r) - 2*e*Math.sin(Mr) + 4*e*y*Math.sin(Mr)*Math.cos(2*L0r) - 0.5*y*y*Math.sin(4*L0r) - 1.25*e*e*Math.sin(2*Mr)); // 분
+    const utcMin = (date.getUTCHours()*60 + date.getUTCMinutes() + date.getUTCSeconds()/60); const tst = (utcMin + eot + 4*lon) % 1440; const ha = (tst/4 - 180)*Math.PI/180;
+    const latr = lat*Math.PI/180; const cosZ = Math.sin(latr)*Math.sin(decl) + Math.cos(latr)*Math.cos(decl)*Math.cos(ha); const z = Math.acos(Math.max(-1,Math.min(1,cosZ)));
+    let az = Math.acos(Math.max(-1,Math.min(1,((Math.sin(latr)*cosZ) - Math.sin(decl))/(Math.cos(latr)*Math.sin(z)))))*180/Math.PI; az = ha>0 ? (az+180)%360 : (540-az)%360;
+    const elev = 90 - z*180/Math.PI;
+    // 일출·일몰 (고도 -0.833°)
+    const cosH = (Math.cos(90.833*Math.PI/180)/(Math.cos(latr)*Math.cos(decl))) - Math.tan(latr)*Math.tan(decl); let rise=null, set=null;
+    if(Math.abs(cosH)<=1){ const H = Math.acos(cosH)*180/Math.PI; const noonUtc = 720 - 4*lon - eot; rise = noonUtc - 4*H; set = noonUtc + 4*H; }
+    return { elev, az, decl: decl*180/Math.PI, eot, riseUtcMin: rise, setUtcMin: set };
+  }
+  const dirName = a => ['북','북북동','북동','동북동','동','동남동','남동','남남동','남','남남서','남서','서남서','서','서북서','북서','북북서'][Math.round(a/22.5)%16];
+  function sitePoint(){ const n = nearestProject(); if(n && n.p) return { lat:n.p.lat, lon:n.p.lon, name:n.p.name }; const c = camera.positionCartographic; return { lat: Cesium.Math.toDegrees(c.latitude), lon: Cesium.Math.toDegrees(c.longitude), name:'현재 위치' }; }
+  function applyTime(d){ SH.date = d; viewer.clock.currentTime = Cesium.JulianDate.fromDate(d); viewer.clock.shouldAnimate = false; renderReadout(); }
+  function renderReadout(){ if(!SH.on) return; const P = sitePoint(); const s = sunPos(SH.date, P.lat, P.lon); const k = kstParts(SH.date);
+    const minToKst = m => { if(m==null) return '—'; let t = (m + 540 + 1440) % 1440; return pad(Math.floor(t/60))+':'+pad(Math.round(t%60)); };
+    const shadowRatio = s.elev>0.5 ? 1/Math.tan(s.elev*Math.PI/180) : null;
+    const el = $('#shReadout'); if(!el) return;
+    el.innerHTML = '<div class="kv"><div>태양 고도<b>'+(s.elev>0? s.elev.toFixed(1)+'°' : '지평선 아래 ('+s.elev.toFixed(0)+'°)')+'</b></div><div>방위각<b>'+s.az.toFixed(0)+'° ('+dirName(s.az)+')</b></div><div>일출<b>'+minToKst(s.riseUtcMin)+'</b></div><div>일몰<b>'+minToKst(s.setUtcMin)+'</b></div></div>'
+      + '<p class="lead" style="margin-top:8px">'+(shadowRatio? '높이 10 m 물체의 그림자 길이 약 <b>'+(shadowRatio*10).toFixed(1)+' m</b> (높이의 '+shadowRatio.toFixed(2)+'배) · 그림자는 <b>'+dirName((s.az+180)%360)+'</b>쪽으로 집니다.' : '해가 떠 있지 않아 그림자가 없습니다.')+'</p>'
+      + '<div class="meta"><span class="tag derived">DERIVED</span> '+P.name+' ('+P.lat.toFixed(4)+', '+P.lon.toFixed(4)+') · '+k.y+'-'+pad(k.m)+'-'+pad(k.d)+' '+pad(Math.floor(k.h))+':'+pad(Math.round((k.h%1)*60))+' KST · NOAA 태양 위치식 · 적위 '+s.decl.toFixed(1)+'°</div>';
+    const hs = $('#shHour'); if(hs && Math.abs(+hs.value - k.h) > 0.01) hs.value = k.h.toFixed(2); const hl = $('#shHourLbl'); if(hl) hl.textContent = pad(Math.floor(k.h))+':'+pad(Math.round((k.h%1)*60)); const di = $('#shDate'); if(di) di.value = k.y+'-'+pad(k.m)+'-'+pad(k.d);
+    if(SH.hud) SH.hud.textContent = '☀ '+k.y+'-'+pad(k.m)+'-'+pad(k.d)+' '+pad(Math.floor(k.h))+':'+pad(Math.round((k.h%1)*60))+' KST · 고도 '+s.elev.toFixed(0)+'° · 방위 '+s.az.toFixed(0)+'°';
+  }
+  function showCard(){
+    const k = kstParts(SH.date); STATE.point = null; $('#card').classList.add('open');
+    $('#cardTitle').innerHTML = '일조·그림자 분석<small>'+sitePoint().name+' · 3D 모델에 실제 그림자 표시</small>';
+    $('#cardBody').innerHTML = '<div class="sec"><div id="shReadout"></div></div>'
+      + '<div class="sec"><h4 style="margin:0 0 6px;font-size:13px">날짜 · 시각 (KST)</h4>'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input type="date" id="shDate" value="'+k.y+'-'+pad(k.m)+'-'+pad(k.d)+'" style="background:var(--panel-2,#0b1a30);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px"><b id="shHourLbl" style="min-width:48px">'+pad(Math.floor(k.h))+':'+pad(Math.round((k.h%1)*60))+'</b></div>'
+      + '<input type="range" id="shHour" min="0" max="24" step="0.25" value="'+k.h.toFixed(2)+'" style="width:100%;margin:8px 0">'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap">'+[['춘분','03-20'],['하지','06-21'],['추분','09-23'],['동지','12-22']].map(x=>'<button class="cta ghost" data-md="'+x[1]+'" style="flex:1;margin:0;padding:8px 6px">'+x[0]+'</button>').join('')+'</div>'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="cta" id="shPlay" style="flex:1;margin:0">▶ 하루 재생 (06→18시)</button><button class="cta ghost" id="shNow" style="flex:1;margin:0">지금</button></div>'
+      + '<div class="meta">그림자는 <b>SITE › 3D 모델 › 3D Tiles</b>가 켜져 있고 현장 근처(60 km 이내)에서 모델이 로드된 뒤 보입니다. 하단 시간 바를 움직여도 시각이 바뀝니다. 끄려면 분석 › 일조·그림자를 다시 누르세요.</div></div>';
+    renderReadout();
+    $('#shHour').oninput = e=>{ const k2 = kstParts(SH.date); applyTime(fromKst(k2.y,k2.m,k2.d,+e.target.value)); };
+    $('#shDate').onchange = e=>{ const [y,m,d] = e.target.value.split('-').map(Number); if(!y) return; const k2 = kstParts(SH.date); applyTime(fromKst(y,m,d,k2.h)); };
+    $('#cardBody').querySelectorAll('button[data-md]').forEach(b=>b.onclick=()=>{ const [m,d] = b.dataset.md.split('-').map(Number); const k2 = kstParts(SH.date); applyTime(fromKst(k2.y,m,d,12)); });
+    $('#shNow').onclick = ()=>{ stopPlay(); applyTime(new Date()); };
+    $('#shPlay').onclick = ()=>{ if(SH.timer) return stopPlay(); const k2 = kstParts(SH.date); let h = 6; $('#shPlay').textContent='■ 정지'; SH.timer = setInterval(()=>{ h += 0.1; if(h>18){ h = 6; } applyTime(fromKst(k2.y,k2.m,k2.d,h)); }, 100); };
+  }
+  function stopPlay(){ if(SH.timer){ clearInterval(SH.timer); SH.timer=null; const b=$('#shPlay'); if(b) b.textContent='▶ 하루 재생 (06→18시)'; } }
+  function on(){
+    SH.on = true; SH.prevLight = globe.enableLighting; SH.prevNight = layersImg.nightAuto ? layersImg.nightAuto.show : null;
+    globe.enableLighting = true; $('#swLight').classList.add('on'); if(layersImg.nightAuto) layersImg.nightAuto.show = false;
+    viewer.shadows = true; viewer.terrainShadows = Cesium.ShadowMode.RECEIVE_ONLY; const sm = viewer.shadowMap; sm.size = 2048; sm.softShadows = true; sm.darkness = 0.35; sm.maximumDistance = 3000; sm.normalOffset = true;
+    for(const p of PROJECTS) if(p.ts) p.ts.shadows = Cesium.ShadowMode.ENABLED;
+    if(!SH.hud){ SH.hud = document.createElement('div'); SH.hud.id='shHud'; SH.hud.style.cssText='position:fixed;left:50%;transform:translateX(-50%);top:64px;z-index:25;background:rgba(3,18,42,.85);border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:12.5px;color:var(--text);pointer-events:none'; document.body.appendChild(SH.hud); }
+    SH.hud.style.display='block';
+    const d = STATE.tIdx ? simTime() : new Date(); const k = kstParts(d); // 야간이면 정오로
+    const P = sitePoint(); applyTime(sunPos(d, P.lat, P.lon).elev > 0 ? d : fromKst(k.y,k.m,k.d,12));
+    showCard();
+    if(!STATE.on.has('tiles')) toast('3D 모델이 꺼져 있습니다 · SITE › 3D 모델 › 3D Tiles를 켜면 모델 그림자가 보입니다', 5000);
+    else toast('일조·그림자 분석 · 날짜·시각을 바꾸면 3D 모델 그림자가 바로 바뀝니다', 4000);
+  }
+  function off(){
+    SH.on = false; stopPlay(); viewer.shadows = false; viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date()); viewer.clock.shouldAnimate = true;
+    if(SH.prevLight!=null){ globe.enableLighting = SH.prevLight; $('#swLight').classList.toggle('on', SH.prevLight); }
+    if(SH.prevNight!=null && layersImg.nightAuto) layersImg.nightAuto.show = SH.prevNight;
+    if(SH.hud) SH.hud.style.display='none';
+    if($('#shReadout')) $('#card').classList.remove('open');
+  }
+  L3.shadow = { on, off, src:()=> SH.on ? '<b>일조·그림자</b> 태양 위치 계산 (DERIVED)' : '' };
+  // 시간 바 연동
+  const _setT5 = setT; setT = function(v){ _setT5(v); if(SH.on) applyTime(simTime()); };
+  // 타일셋이 나중에 로드되면 그림자 적용
+  const _ensure = ensureTileset; ensureTileset = async function(p){ const ts = await _ensure(p); if(ts && SH.on) ts.shadows = Cesium.ShadowMode.ENABLED; return ts; };
+  window.sistechShadow = SH;
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
