@@ -937,7 +937,7 @@ function savePng(){ scene.render(); const a=document.createElement('a'); a.downl
   // 해시 복원
   const h = new URLSearchParams(location.hash.slice(1));
   if(h.get('on')){ for(const id of h.get('on').split(',')) if(id && !STATE.on.has(id)) toggleLayer(id, true); }
-  if(h.get('at')){ const [la,lo,alt,hd]=h.get('at').split(',').map(Number); camera.setView({destination:Cesium.Cartesian3.fromDegrees(lo,la,alt),orientation:{heading:Cesium.Math.toRadians(hd||0),pitch:-Cesium.Math.PI_OVER_TWO,roll:0}}); }
+  if(h.get('at') && !h.has('v')){ const [la,lo,alt,hd]=h.get('at').split(',').map(Number); camera.setView({destination:Cesium.Cartesian3.fromDegrees(lo,la,alt),orientation:{heading:Cesium.Math.toRadians(hd||0),pitch:-Cesium.Math.PI_OVER_TWO,roll:0}}); }
   else { camera.setView({destination:Cesium.Cartesian3.fromDegrees(127.5, 36.5, 2.4e7)}); setTimeout(flyHome, 400); }
   updateHud();
   setTimeout(()=>toast('SISTECH EARTH 데모 · 지도를 클릭하면 지점 카드, 왼쪽 메뉴에서 레이어를 켜세요'), 1200);
@@ -1398,9 +1398,18 @@ window.sistechApply = async function(s){
   return { applied:[...MIRROR.applied], notes };
 };
 
+// EARTHUS형 해시(#v=1&at=…&live=…&pressed=…&cloud=…)가 들어오면 자동 적용 (북마클릿 · 링크 붙여넣기)
+function applyEarthusHash(){ const h = location.hash; if(!/(^|[#&])v=1(&|$)/.test(h) && !/[#&]pressed=/.test(h)) return false; const p = new URLSearchParams(h.replace(/^#/,'')); const pressed = (p.get('pressed')||'').split('|').map(s=>decodeURIComponent(s)).filter(Boolean); MIRROR.lastAt=''; window.sistechApply({ hash:h, pressed, cloudMode: p.get('cloudmode')||null }).then(r=>{ toast(`EARTHUS 동기화 · 적용 ${r.applied.length}개${r.notes.length?' · 미지원 '+r.notes.join(', '):''}`, 4000); }); return true; }
+window.addEventListener('hashchange', applyEarthusHash);
+const BOOKMARKLET = `javascript:(()=>{const p=[...document.querySelectorAll('.mp-item[aria-pressed="true"]')].map(b=>b.innerText.split('\\n')[0].replace(/(자체 분석|제공자 모델|공식 관측|공식 발표|정적 참고).*$/,'').trim());const c=([...document.querySelectorAll('button')].find(b=>/^(없음|관측|천리안|모델|정적)$/.test(b.textContent.trim())&&/\\bon\\b|active|selected/.test(b.className))||{}).textContent;const h=location.hash+'&pressed='+p.map(encodeURIComponent).join('|')+(c?'&cloudmode='+encodeURIComponent(c.trim()):'');window.open('https://signspark.github.io/sistech-earth/'+h,'sistech_earth');})();`;
+window.SISTECH_BOOKMARKLET = BOOKMARKLET;
+// 설정 패널에 북마클릿 안내
+(function(){ const row = document.createElement('div'); row.className='row'; row.style.display='block'; row.innerHTML = `<div style="margin-bottom:6px">EARTHUS 동기화</div><div class="note" style="padding:0 0 6px">아래 버튼을 <b>북마크 바로 끌어다 놓고</b>, EARTHUS 탭에서 그 북마크를 누르면 위치·레이어·구름 모드가 이 사이트에 바로 적용됩니다. EARTHUS 주소(#v=1&at=…)를 이 사이트 주소 뒤에 붙여넣어도 같은 화면이 나옵니다.</div><a href="${BOOKMARKLET.replace(/"/g,'&quot;')}" class="cta" style="margin:0" onclick="return false" draggable="true" title="북마크 바로 끌어다 놓으세요">↗ EARTHUS → SISTECH 동기화</a>`; $('#settings').appendChild(row); })();
+
 /* ---------- 초기 복원 ---------- */
 for(const id of [...STATE.on]) if(L[id] && L[id].type!=='action') { try{ L[id].on(); }catch(e){} }
 renderCats(); renderSub(); updateSrc();
+setTimeout(applyEarthusHash, 1500);
 console.log('SISTECH EARTH ext v2 loaded', Object.keys(L).length, 'layers');
 })();
 
