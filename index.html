@@ -2146,6 +2146,25 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   };
 })();
 
+/* ---------- 18. 위성 메뉴: 한국 위성 묶음을 위로 · 상단 아이콘(검색·설정·계정·편집)을 지구/지역/현장 알약과 같은 스타일로 ---------- */
+(function(){
+  const sat = MENUS.earth.find(c=>c.id==='sat');
+  if(sat){ const top = ['ksat','kslist','gk2a','sats','pass']; const head = top.map(id=>sat.items.find(i=>i.id===id)).filter(Boolean); sat.items = head.concat(sat.items.filter(i=>!top.includes(i.id))); }
+  const css = document.createElement('style'); css.id = 'iconsPillCss';
+  css.textContent = `
+    #topbar .icons{ background: rgba(3,18,42,.7); border: 1px solid rgba(127,178,230,.22); border-radius: 999px; padding: 3px 6px; gap: 2px; height: auto; align-items: center; backdrop-filter: blur(8px); }
+    #topbar .icons > button{ width: 32px; height: 28px; padding: 0; border-radius: 999px; display: flex; align-items: center; justify-content: center; color: #DCE8F5; background: transparent; transition: background .15s, color .15s; }
+    #topbar .icons > button svg{ width: 17px; height: 17px; stroke: currentColor; stroke-width: 2; }
+    #topbar .icons > button:hover{ background: rgba(164,200,28,.18); color: #BFE33A; }
+    #topbar .icons > button.on, #topbar .icons > button[aria-pressed="true"]{ background: rgba(164,200,28,.18); color: #BFE33A; }
+  `;
+  document.head.appendChild(css);
+  // 설정·검색 창이 열려 있으면 해당 아이콘을 '켜짐' 색으로
+  const syncIcons = ()=>{ const s = $('#btnSettings'), q = $('#btnSearch'); if(s) s.classList.toggle('on', $('#settings').classList.contains('open')); if(q) q.classList.toggle('on', $('#search').classList.contains('open')); };
+  const mo = new MutationObserver(syncIcons); for(const id of ['#settings','#search']){ const el = $(id); if(el) mo.observe(el, { attributes:true, attributeFilter:['class'] }); }
+  syncIcons();
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
