@@ -1924,6 +1924,9 @@ setMode = function(m){
   try{ if(layersImg.nightAuto) layersImg.nightAuto.show = false; const sw = $('#swNightAuto'); if(sw) sw.classList.remove('on'); }catch(e){}
 })();
 
+/* ---------- 14. 설정 창: 바깥(다른 버튼·지도)을 누르면 자동으로 닫힘 ---------- */
+document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.classList.contains('open')) return; if(st.contains(e.target) || e.target.closest('#btnSettings')) return; st.classList.remove('open'); }, true);
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
