@@ -251,6 +251,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--lime);outline-o
    엔진: CesiumJS (ion 미사용) · 영상: Esri World Imagery
    공개 데이터: USGS 지진, NASA GIBS, Open-Meteo, Nominatim
    ========================================================= */
+window.__initialHash = location.hash;
 const $ = s => document.querySelector(s);
 const toast = (m, ms=2600) => { const t=$('#toast'); t.textContent=m; t.classList.add('open'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('open'), ms); };
 const fmtKm = m => m>=1e6 ? (m/1e6).toFixed(1)+'천 km' : m>=1000 ? Math.round(m/1000).toLocaleString()+' km' : Math.round(m)+' m';
@@ -1399,7 +1400,7 @@ window.sistechApply = async function(s){
 };
 
 // EARTHUS형 해시(#v=1&at=…&live=…&pressed=…&cloud=…)가 들어오면 자동 적용 (북마클릿 · 링크 붙여넣기)
-function applyEarthusHash(){ const h = location.hash; if(!/(^|[#&])v=1(&|$)/.test(h) && !/[#&]pressed=/.test(h)) return false; const p = new URLSearchParams(h.replace(/^#/,'')); const pressed = (p.get('pressed')||'').split('|').map(s=>decodeURIComponent(s)).filter(Boolean); MIRROR.lastAt=''; window.sistechApply({ hash:h, pressed, cloudMode: p.get('cloudmode')||null }).then(r=>{ toast(`EARTHUS 동기화 · 적용 ${r.applied.length}개${r.notes.length?' · 미지원 '+r.notes.join(', '):''}`, 4000); }); return true; }
+function applyEarthusHash(ev){ const h = (ev && ev.type==='hashchange') ? location.hash : (window.__initialHash || location.hash); if(!/(^|[#&])v=1(&|$)/.test(h) && !/[#&]pressed=/.test(h)) return false; const p = new URLSearchParams(h.replace(/^#/,'')); const pressed = (p.get('pressed')||'').split('|').map(s=>decodeURIComponent(s)).filter(Boolean); MIRROR.lastAt=''; window.sistechApply({ hash:h, pressed, cloudMode: p.get('cloudmode')||null }).then(r=>{ toast(`EARTHUS 동기화 · 적용 ${r.applied.length}개${r.notes.length?' · 미지원 '+r.notes.join(', '):''}`, 4000); }); return true; }
 window.addEventListener('hashchange', applyEarthusHash);
 const BOOKMARKLET = `javascript:(()=>{const p=[...document.querySelectorAll('.mp-item[aria-pressed="true"]')].map(b=>b.innerText.split('\\n')[0].replace(/(자체 분석|제공자 모델|공식 관측|공식 발표|정적 참고).*$/,'').trim());const c=([...document.querySelectorAll('button')].find(b=>/^(없음|관측|천리안|모델|정적)$/.test(b.textContent.trim())&&/\\bon\\b|active|selected/.test(b.className))||{}).textContent;const h=location.hash+'&pressed='+p.map(encodeURIComponent).join('|')+(c?'&cloudmode='+encodeURIComponent(c.trim()):'');window.open('https://signspark.github.io/sistech-earth/'+h,'sistech_earth');})();`;
 window.SISTECH_BOOKMARKLET = BOOKMARKLET;
