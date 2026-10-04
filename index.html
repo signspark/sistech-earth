@@ -1394,7 +1394,7 @@ const NAME_MAP = { '기온':'f_temp', '평년 대비 기온':'card_anom', '오�
 const MIRROR = { applied:new Set(), lastAt:'', log:[] };
 function layerExists(id){ return !!(L[id] || GIBS[id] || ['labels','night','projects','tiles','quake','sats','starlink','ptwx','flight','aq','cloud','viirs','hima_ir','snow','seaice','wv','aod','lst','ndvi'].includes(id)); }
 window.sistechApply = async function(s){
-  const want = new Set(); const notes=[];
+  const want = new Set(['quake']); const notes=[]; // EARTHUS는 지진을 기본 표시
   if(s.hash){ const p = new URLSearchParams(s.hash.replace(/^#/,'')); if(p.get('base')==='night') want.add('night'); const live = p.get('live'); if(live) for(const k of live.split(',')){ const id = LIVE_MAP[k]; if(id) want.add(id); else notes.push('live:'+k); } const cl = p.get('cloud'); if(cl && cl!=='none' && cl!=='off'){ want.add(LIVE_MAP['cloud-'+cl] || (cl==='gfs'?'cloud':'hima_ir')); } }
   for(const n of (s.pressed||[])){ const key = Object.keys(NAME_MAP).find(k => n===k || n.startsWith(k)); if(key) want.add(NAME_MAP[key]); else notes.push('button:'+n); }
   if(s.cloudMode && s.cloudMode!=='없음'){ const m = { '관측':'hima_ir', '천리안':'hima_ir', '모델':'cloud', '정적':'viirs' }[s.cloudMode]; if(m) want.add(m); }
