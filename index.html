@@ -1902,6 +1902,22 @@ setMode = function(m){
   return _setMode3(m);
 };
 
+/* ---------- 12. SITE › 3D 모델: 화질·투명도 현재값을 메뉴에 표시 ---------- */
+(function(){
+  const model = MENUS.site.find(c=>c.id==='model'); if(!model) return;
+  const qi = model.items.find(i=>i.id==='quality'), oi = model.items.find(i=>i.id==='opacity');
+  const QLBL = { '저':'저 (빠름)', '중':'중 (보통)', '고':'고 (정밀)' };
+  function refresh(){
+    if(qi){ qi.name = `화질: ${QLBL[STATE.quality]||STATE.quality}`; qi.q = '누를 때마다 저 → 중 → 고'; qi.src = `현재 SSE ${STATE.sse} · 저 32 · 중 16 · 고 6`; }
+    if(oi){ oi.name = `투명도: ${Math.round(STATE.tsAlpha*100)}%`; oi.q = '누를 때마다 100 → 70 → 40%'; }
+    if(STATE.mode==='site') renderSub();
+    const hq = document.getElementById('hudQ'); if(hq) hq.textContent = `화질 ${STATE.quality}`;
+  }
+  const _cq = cycleQuality; cycleQuality = function(){ _cq(); refresh(); };
+  const _co = cycleOpacity; cycleOpacity = function(){ _co(); refresh(); };
+  refresh();
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
