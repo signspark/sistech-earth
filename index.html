@@ -2240,6 +2240,17 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   autoLoadTileset();
 })();
 
+/* ---------- 21. 지역 메뉴 정리: 낚시터·활공장·패러글라이딩·철새·조류·바다거북·바닷새 제거 · 지역 메뉴 전체를 SITE로 이동 ---------- */
+(function(){
+  const DEL = ['poi_fishing','poi_paragliding','card_paraglide','gbif_migbird','gbif_birds','gbif_turtle','gbif_seabird'];
+  for(const id of DEL) if(STATE.on.has(id)) { try{ toggleLayer(id, false); }catch(e){ STATE.on.delete(id); } }
+  const i = MENUS.earth.findIndex(c=>c.id==='region'); if(i<0) return;
+  const reg = MENUS.earth.splice(i, 1)[0]; reg.items = reg.items.filter(it=>!DEL.includes(it.id));
+  const mi = MENUS.site.findIndex(c=>c.id==='model'); MENUS.site.splice(mi>=0? mi+1 : 0, 0, reg);
+  if(STATE.mode==='earth' && STATE.cat==='region') STATE.cat = null;
+  renderCats(); renderSub();
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
