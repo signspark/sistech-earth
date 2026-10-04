@@ -2371,6 +2371,372 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   syncFilter(); autoLoadTileset();
 })();
 
+/* ---------- 26. SITE › 내비: 차량·도보·UAM 경로 내비게이션 시뮬레이션 ---------- */
+(function(){
+  const C = Cesium;
+  const MODELS = {
+    car:  { uri:'https://raw.githubusercontent.com/mrdoob/three.js/r160/examples/models/gltf/ferrari.glb', scale:1, minPx:64, off:-90, side:3.2 },
+    walk: { uri:'https://raw.githubusercontent.com/CesiumGS/cesium/1.120/Apps/SampleData/models/CesiumMan/Cesium_Man.glb', scale:1, minPx:90, off:-90, side:1.5 },
+    uam:  { uri:'https://raw.githubusercontent.com/CesiumGS/cesium/1.120/Apps/SampleData/models/CesiumDrone/CesiumDrone.glb', scale:3, minPx:110, off:90, side:0 }
+  };
+  const MODE = {
+    car:  { name:'차량', layer:'navCar',  camH:100, pitch:-50, mul:2,  color:'#3D8BFF', speedTxt:'도로 실제 속도 (OSRM)' },
+    walk: { name:'도보', layer:'navWalk', camH:50,  pitch:-50, mul:10, color:'#BFE33A', speedTxt:'보행 4.5 km/h' },
+    uam:  { name:'UAM',  layer:'navUam',  camH:400, pitch:-40, mul:3,  color:'#3FC7C0', speedTxt:'순항 150 km/h · 고도 300 m' }
+  };
+  const UAM_CRUISE_AGL = 300, UAM_V = 150/3.6, WALK_V = 4.5/3.6;
+  const NV = { open:false, mode:'car', start:null, end:null, route:null, playing:false, t:0, mul:5, cam:'chase', camH:100,
+               ents:[], veh:null, cur:null, hdg:0, camHdg:null, hs:null, last:0, prevTarget:null, routing:0, busy:false };
+  const ICON = {
+    car:'<svg viewBox="0 0 24 24"><path d="M5 16h14v-4l-2-5H7l-2 5zM5 16v2M19 16v2M3 12h18"/><circle cx="8" cy="14" r=".6"/><circle cx="16" cy="14" r=".6"/></svg>',
+    walk:'<svg viewBox="0 0 24 24"><circle cx="13" cy="4.5" r="1.8"/><path d="M10 21l2-6 3 3v3M9 11l3-3 3 3 3 1M12 8l-1 5"/></svg>',
+    uam:'<svg viewBox="0 0 24 24"><rect x="9" y="10" width="6" height="4" rx="2"/><path d="M9 12H5M15 12h4M5 9v6M19 9v6M3 9h4M17 9h4"/></svg>',
+    nav:'<svg viewBox="0 0 24 24"><path d="M12 2 4 21l8-4 8 4z"/></svg>'
+  };
+
+  /* ---- 메뉴: SITE › 내비 ---- */
+  const site = MENUS.site; const expIdx = site.findIndex(c=>c.id==='export');
+  site.splice(expIdx<0?site.length:expIdx, 0, { id:'nav', name:'내비', icon:ICON.nav, items:[
+    { id:'navCar',  q:'차로 가면 어떤 길로 가나', name:'차량 내비 시뮬레이션', src:'도로 경로 (OSRM) · 3D 승용차 · 차량 100 m 위 추적 시점', type:'layer' },
+    { id:'navWalk', q:'걸어서 가면 어떤 길로 가나', name:'도보 내비 시뮬레이션', src:'보행 경로 (OSM) · 걷는 사람 · 50 m 위 시점', type:'layer' },
+    { id:'navUam',  q:'하늘길(UAM)로 가면', name:'UAM 비행 시뮬레이션', src:'직선 항로 · 수직 이착륙 · 순항 300 m · 기체 400 m 위 시점', type:'layer' }
+  ]});
+
+  /* ---- 창 ---- */
+  const css = document.createElement('style');
+  css.textContent = `
+#navPanel{position:fixed;right:14px;top:72px;width:360px;max-height:calc(100vh - 150px);z-index:21;display:none;flex-direction:column;overflow:hidden}
+#navPanel.open{display:flex}
+#navPanel .hd{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+#navPanel .hd h2{margin:0;font-size:15px;font-weight:700;flex:1}
+#navPanel .hd h2 small{display:block;font-weight:400;color:var(--text-dim);font-size:12px}
+#navPanel .hd button{color:var(--text-dim);font-size:18px;background:none;border:0;cursor:pointer}
+#navPanel .bd{padding:12px 14px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+#navPanel .seg{display:flex;gap:6px;background:rgba(0,0,0,.25);padding:4px;border-radius:10px}
+#navPanel .seg button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;height:36px;border-radius:8px;border:0;background:none;color:var(--text-dim);font:600 13px var(--font);cursor:pointer}
+#navPanel .seg button svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+#navPanel .seg button.on{background:var(--lime);color:#06224A}
+#navPanel .pt{display:flex;align-items:center;gap:8px}
+#navPanel .pt i{width:12px;height:12px;border-radius:50%;flex:none;border:2px solid #fff}
+#navPanel .pt i.s{background:#2ECC71}#navPanel .pt i.e{background:#FF5D5D}
+#navPanel .pt input{flex:1;min-width:0;height:34px;border-radius:8px;border:1px solid var(--line);background:rgba(0,0,0,.25);color:var(--text);padding:0 10px;font:13px var(--font)}
+#navPanel .pt input:focus{outline:none;border-color:var(--lime)}
+#navPanel .pt button,#navPanel .row button{height:34px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--text);font:600 12px var(--font);cursor:pointer;white-space:nowrap}
+#navPanel .pt button:hover,#navPanel .row button:hover{border-color:var(--lime);color:var(--lime-bright)}
+#navPanel .res{display:none;flex-direction:column;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:-4px 0 0 20px}
+#navPanel .res.open{display:flex}
+#navPanel .res button{text-align:left;padding:8px 10px;background:rgba(0,0,0,.25);border:0;border-bottom:1px solid var(--line);color:var(--text);font:13px var(--font);cursor:pointer}
+#navPanel .res button small{display:block;color:var(--text-dim);font-size:11px;margin-top:2px}
+#navPanel .res button:hover{background:rgba(164,200,28,.15)}
+#navPanel .hint{font-size:12px;color:var(--text-dim);line-height:1.5}
+#navPanel .hint b{color:var(--lime-bright);font-weight:600}
+#navPanel .row{display:flex;gap:6px;align-items:center}
+#navPanel .row label{font-size:12px;color:var(--text-dim);white-space:nowrap}
+#navPanel .row select{height:32px;border-radius:8px;border:1px solid var(--line);background:#06224A;color:var(--text);font:12px var(--font);padding:0 6px;flex:1;min-width:0}
+#navPanel .sum{display:none;border-top:1px solid var(--line);padding-top:10px;gap:8px;flex-direction:column}
+#navPanel .sum.open{display:flex}
+#navPanel .stat{display:flex;gap:14px;font-size:12px;color:var(--text-dim)}
+#navPanel .stat b{display:block;color:var(--text);font-size:16px;font-weight:700}
+#navPanel .turn{display:flex;gap:12px;align-items:center;background:rgba(0,0,0,.3);border-radius:10px;padding:10px 12px}
+#navPanel .turn svg{width:38px;height:38px;flex:none;fill:none;stroke:var(--lime-bright);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+#navPanel .turn .tx{flex:1;min-width:0}
+#navPanel .turn .tx b{display:block;font-size:17px;color:#fff}
+#navPanel .turn .tx small{display:block;font-size:12px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#navPanel .play{display:flex;gap:6px}
+#navPanel .play button{height:38px;border-radius:9px;border:0;font:700 13px var(--font);cursor:pointer}
+#navPanel .play .go{flex:1;background:var(--lime);color:#06224A}
+#navPanel .play .stop{width:70px;background:rgba(255,255,255,.08);color:var(--text);border:1px solid var(--line)}
+#navPanel input[type=range]{width:100%;accent-color:var(--lime)}
+#navPanel .busy{font-size:12px;color:var(--amber)}
+`;
+  document.head.appendChild(css);
+  const P = document.createElement('div'); P.id='navPanel'; P.className='panel';
+  P.innerHTML = `
+<div class="hd"><h2>네비게이션 시뮬레이션<small id="nvSub">지도에서 출발·도착을 찍으세요</small></h2><button id="nvClose" aria-label="닫기">×</button></div>
+<div class="bd">
+  <div class="seg" id="nvSeg">
+    <button data-m="car">${ICON.car}차량</button><button data-m="walk">${ICON.walk}도보</button><button data-m="uam">${ICON.uam}UAM</button>
+  </div>
+  <div class="pt"><i class="s"></i><input id="nvStart" placeholder="출발: 지도 첫 번째 클릭 · 건물명 입력"><button id="nvHere" title="현재 위치를 출발지로">현위치</button></div>
+  <div class="res" id="nvResS"></div>
+  <div class="pt"><i class="e"></i><input id="nvEnd" placeholder="도착: 두 번째 클릭 · 건물명 입력 후 Enter"><button id="nvFind">검색</button></div>
+  <div class="res" id="nvResE"></div>
+  <div class="hint" id="nvHint">지도 <b>첫 번째 왼쪽 클릭 = 출발</b>, <b>두 번째 클릭 = 도착</b> · 이후 클릭은 도착지를 바꿉니다</div>
+  <div class="row"><button id="nvSwap">출발↔도착</button><button id="nvReset">다시 지정</button><span class="busy" id="nvBusy"></span></div>
+  <div class="sum" id="nvSum">
+    <div class="stat"><div>거리<b id="nvDist">-</b></div><div>예상 시간<b id="nvDur">-</b></div><div>도착 예정<b id="nvEta">-</b></div><div>속도<b id="nvSpd">-</b></div></div>
+    <div class="turn"><span id="nvArrow"></span><div class="tx"><b id="nvTurn">-</b><small id="nvRoad"></small></div></div>
+    <input type="range" id="nvProg" min="0" max="1000" value="0">
+    <div class="play"><button class="go" id="nvGo">▶ 시뮬레이션 시작</button><button class="stop" id="nvStop">■ 처음</button></div>
+    <div class="row"><label>배속</label><select id="nvMul"><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option><option value="5">5×</option><option value="10">10×</option><option value="30">30×</option><option value="60">60×</option></select>
+      <label>시점</label><select id="nvCam"><option value="chase">진행방향 추적</option><option value="top">정북 위에서</option><option value="free">따라가기(자유 회전)</option></select></div>
+    <div class="row"><label>시점 높이</label><input type="range" id="nvH" min="20" max="1000" step="10"><label id="nvHv" style="min-width:52px;text-align:right">100 m</label></div>
+  </div>
+</div>`;
+  document.body.appendChild(P);
+  const q = s => P.querySelector(s);
+
+  /* ---- 유틸 ---- */
+  const R = 6371008.8, rad = d=>d*Math.PI/180, deg = r=>r*180/Math.PI;
+  function hav(a, b){ const dLat=rad(b[1]-a[1]), dLon=rad(b[0]-a[0]); const h=Math.sin(dLat/2)**2+Math.cos(rad(a[1]))*Math.cos(rad(b[1]))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(h)); }
+  function bearing(a, b){ const y=Math.sin(rad(b[0]-a[0]))*Math.cos(rad(b[1])); const x=Math.cos(rad(a[1]))*Math.sin(rad(b[1]))-Math.sin(rad(a[1]))*Math.cos(rad(b[1]))*Math.cos(rad(b[0]-a[0])); return (deg(Math.atan2(y,x))+360)%360; }
+  const fmtD = m => m>=1000 ? (m/1000).toFixed(m>=10000?0:1)+' km' : Math.round(m/10)*10+' m';
+  const fmtT = s => { s=Math.max(0,Math.round(s)); if(s<60) return s+'초'; const m=Math.round(s/60); return m<60? m+'분' : Math.floor(m/60)+'시간 '+(m%60)+'분'; };
+  const angDiff = (a,b) => ((b-a+540)%360)-180;
+  const tag = s => s.replace(/[<>&]/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+
+  function groundAt(lon, lat){ const ct = C.Cartographic.fromDegrees(lon, lat); let h; const g = globe.getHeight(ct); try{ if(scene.sampleHeightSupported) h = scene.sampleHeight(ct, NV.ents.concat(NV.veh?[NV.veh]:[], pinS?[pinS]:[], pinE?[pinE]:[])); }catch(e){}
+    const ok = v => v!==undefined && v!==null && isFinite(v) && v>-500 && v<9000;
+    if(!ok(h) || (ok(g) && Math.abs(h-g)>400)) h = ok(g) ? g : undefined; return h; }
+
+  /* ---- 표식 ---- */
+  function pinImg(color, text){ const c=document.createElement('canvas'); c.width=72; c.height=92; const g=c.getContext('2d');
+    g.fillStyle=color; g.strokeStyle='#fff'; g.lineWidth=4; g.beginPath(); g.moveTo(36,88); g.bezierCurveTo(30,70,6,54,6,34); g.arc(36,34,30,Math.PI,0); g.bezierCurveTo(66,54,42,70,36,88); g.closePath(); g.fill(); g.stroke();
+    g.fillStyle='#fff'; g.font='bold 20px "Noto Sans KR",sans-serif'; g.textAlign='center'; g.textBaseline='middle'; g.fillText(text,36,35); return c.toDataURL(); }
+  const PIN_S = pinImg('#2ECC71','출발'), PIN_E = pinImg('#FF5D5D','도착');
+  let pinS=null, pinE=null;
+  function setPin(which){ const pt = NV[which]; const old = which==='start'?pinS:pinE; if(old) viewer.entities.remove(old);
+    let e=null; if(pt){ e = viewer.entities.add({ position: C.Cartesian3.fromDegrees(pt.lon, pt.lat, pt.h!=null?pt.h:0), billboard:{ image: which==='start'?PIN_S:PIN_E, width:36, height:46, verticalOrigin: C.VerticalOrigin.BOTTOM, heightReference: pt.h!=null? C.HeightReference.NONE : C.HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY } }); }
+    if(which==='start') pinS=e; else pinE=e; }
+
+  /* ---- 지점 입력 ---- */
+  function setPoint(which, pt){ NV[which] = pt; setPin(which); q(which==='start'?'#nvStart':'#nvEnd').value = pt ? pt.name : ''; stopSim(true); clearRoute(); if(NV.start && NV.end) computeRoute(); updHint(); }
+  function updHint(){ const h = q('#nvHint'); if(!NV.start) h.innerHTML = '지도 <b>첫 번째 왼쪽 클릭 = 출발</b> (또는 현위치·건물명) · <b>두 번째 클릭 = 도착</b>'; else if(!NV.end) h.innerHTML = '이제 지도를 <b>한 번 더 클릭</b>하거나 도착 건물명을 입력하세요'; else h.innerHTML = '지도를 다시 클릭하면 <b>도착지</b>가 바뀝니다 · 출발을 바꾸려면 [다시 지정]';
+    q('#nvSub').textContent = NV.start && NV.end ? MODE[NV.mode].name+' · '+MODE[NV.mode].speedTxt : '지도에서 출발·도착을 찍으세요'; }
+  const llName = (lat,lon) => `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+  async function nameOf(pt, which){ try{ const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${pt.lat}&lon=${pt.lon}&zoom=18&accept-language=ko`); const j = await r.json(); const a = j.address||{}; const nm = j.name || [a.road, a.house_number].filter(Boolean).join(' ') || a.neighbourhood || a.suburb; if(nm && NV[which]===pt){ pt.name = nm; q(which==='start'?'#nvStart':'#nvEnd').value = nm; } }catch(e){} }
+
+  function pickCart(pos){ let c; const pk = scene.pick(pos); if(C.defined(pk) && scene.pickPositionSupported){ c = scene.pickPosition(pos); }
+    if(!c){ const ray = camera.getPickRay(pos); c = ray && globe.pick(ray, scene); } if(!c) c = camera.pickEllipsoid(pos, globe.ellipsoid); return c; }
+  const _navClick = handler.getInputAction(C.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction(e => {
+    const vs = window.sistechViewshed;
+    if(!NV.open || STATE.mode!=='site' || STATE.measure || (vs && vs.active)) return _navClick(e);
+    const c = pickCart(e.position); if(!c) return;
+    const ct = C.Cartographic.fromCartesian(c); const pt = { lon: deg(ct.longitude), lat: deg(ct.latitude), h: (ct.height>-100 && ct.height<9000)? ct.height : null };
+    pt.name = llName(pt.lat, pt.lon);
+    const which = NV.start ? 'end' : 'start'; setPoint(which, pt); nameOf(pt, which);
+  }, C.ScreenSpaceEventType.LEFT_CLICK);
+
+  q('#nvHere').onclick = () => {
+    const useCenter = (why) => { const c = pickCart(new C.Cartesian2(scene.canvas.clientWidth/2, scene.canvas.clientHeight/2)); if(!c) return; const ct = C.Cartographic.fromCartesian(c); const pt = { lon:deg(ct.longitude), lat:deg(ct.latitude), h:ct.height, name:'화면 중심' }; setPoint('start', pt); nameOf(pt,'start'); toast(why+' · 화면 중심을 출발지로 잡았습니다', 3500); };
+    if(!navigator.geolocation) return useCenter('위치 정보를 쓸 수 없어');
+    q('#nvBusy').textContent = '현위치 확인 중…';
+    navigator.geolocation.getCurrentPosition(p => { q('#nvBusy').textContent=''; const pt = { lon:p.coords.longitude, lat:p.coords.latitude, h:null, name:'현위치' }; setPoint('start', pt); nameOf(pt,'start'); },
+      () => { q('#nvBusy').textContent=''; useCenter('현위치를 가져오지 못해'); }, { enableHighAccuracy:true, timeout:8000, maximumAge:60000 });
+  };
+
+  /* ---- 건물명 검색 ---- */
+  async function search(which){
+    const inp = q(which==='start'?'#nvStart':'#nvEnd'), box = q(which==='start'?'#nvResS':'#nvResE');
+    const text = inp.value.trim(); if(!text) return;
+    box.innerHTML = '<button disabled>검색 중…</button>'; box.classList.add('open');
+    const cc = camera.positionCartographic, lon = deg(cc.longitude), lat = deg(cc.latitude);
+    let list = [];
+    try{ const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(text)}&accept-language=ko&countrycodes=kr&limit=6&viewbox=${lon-0.6},${lat+0.45},${lon+0.6},${lat-0.45}`); const j = await r.json();
+      list = j.map(x=>({ lon:+x.lon, lat:+x.lat, name: x.name || x.display_name.split(',')[0], sub: x.display_name.split(',').slice(1,4).join(',').trim() })); }catch(e){}
+    if(!list.length){ try{ const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&lat=${lat}&lon=${lon}&limit=6`); const j = await r.json();
+      list = (j.features||[]).filter(f=>f.properties.countrycode==='KR'||!f.properties.countrycode).map(f=>({ lon:f.geometry.coordinates[0], lat:f.geometry.coordinates[1], name:f.properties.name||text, sub:[f.properties.city, f.properties.district, f.properties.street].filter(Boolean).join(' ') })); }catch(e){} }
+    list.forEach(x=>x.d = hav([lon,lat],[x.lon,x.lat])); list.sort((a,b)=>a.d-b.d); list = list.filter((x,i)=>!list.slice(0,i).some(y=>y.name===x.name && hav([x.lon,x.lat],[y.lon,y.lat])<250));
+    if(!list.length){ box.innerHTML = '<button disabled>결과 없음 · 다른 이름이나 주소로 검색하거나 지도를 클릭하세요</button>'; return; }
+    box.innerHTML = list.map((x,i)=>`<button data-i="${i}">${tag(x.name)}<small>${tag(x.sub||'')} · ${fmtD(x.d)}</small></button>`).join('');
+    box.querySelectorAll('button[data-i]').forEach(b=>b.onclick=()=>{ const x = list[+b.dataset.i]; box.classList.remove('open'); setPoint(which, { lon:x.lon, lat:x.lat, h:null, name:x.name }); });
+  }
+  q('#nvFind').onclick = () => search('end');
+  q('#nvEnd').addEventListener('keydown', e=>{ if(e.key==='Enter') search('end'); });
+  q('#nvStart').addEventListener('keydown', e=>{ if(e.key==='Enter') search('start'); });
+  q('#nvSwap').onclick = () => { const s = NV.start, e = NV.end; NV.start = e; NV.end = s; setPin('start'); setPin('end'); q('#nvStart').value = e?e.name:''; q('#nvEnd').value = s?s.name:''; stopSim(true); clearRoute(); if(NV.start&&NV.end) computeRoute(); updHint(); };
+  q('#nvReset').onclick = () => { stopSim(true); clearRoute(); NV.start = NV.end = null; setPin('start'); setPin('end'); q('#nvStart').value = q('#nvEnd').value = ''; q('#nvResS').classList.remove('open'); q('#nvResE').classList.remove('open'); updHint(); };
+
+  /* ---- 경로 ---- */
+  function clearRoute(){ for(const e of NV.ents) viewer.entities.remove(e); NV.ents = []; if(NV.veh){ viewer.entities.remove(NV.veh); NV.veh = null; } NV.route = null; q('#nvSum').classList.remove('open'); }
+  const MOD = { 'left':'좌회전', 'right':'우회전', 'slight left':'왼쪽 방향', 'slight right':'오른쪽 방향', 'sharp left':'급좌회전', 'sharp right':'급우회전', 'straight':'직진', 'uturn':'유턴' };
+  function stepText(s){ const m = s.maneuver||{}, md = MOD[m.modifier]||'';
+    switch(m.type){ case 'depart': return '출발'; case 'arrive': return '목적지 도착';
+      case 'roundabout': case 'rotary': return '회전교차로 '+(m.exit? m.exit+'번째 출구':'진입');
+      case 'on ramp': return (md?md+' ':'')+'램프 진입'; case 'off ramp': return (md?md+' ':'')+'램프로 나감';
+      case 'fork': return (m.modifier||'').includes('left') ? '왼쪽 길로' : (m.modifier||'').includes('right') ? '오른쪽 길로' : '직진';
+      case 'merge': return '합류'; case 'end of road': return '길 끝에서 '+(md||'회전');
+      case 'continue': case 'new name': return md && md!=='직진' ? md : '직진';
+      default: return md || '직진'; } }
+  function arrowSvg(mod, type){ let d = 'M12 21V5M6 11l6-6 6 6';
+    if(type==='arrive') d = 'M12 3a6 6 0 0 1 6 6c0 5-6 12-6 12S6 14 6 9a6 6 0 0 1 6-6zM12 7.5v3';
+    else if(/sharp left|^left/.test(mod)) d = 'M17 21v-8a4 4 0 0 0-4-4H5M9 5 5 9l4 4';
+    else if(/sharp right|^right/.test(mod)) d = 'M7 21v-8a4 4 0 0 1 4-4h8M15 5l4 4-4 4';
+    else if(/slight left/.test(mod)) d = 'M14 21v-7L7 7M7 13V7h6';
+    else if(/slight right/.test(mod)) d = 'M10 21v-7l7-7M17 13V7h-6';
+    else if(/uturn/.test(mod)) d = 'M8 21V9a4 4 0 0 1 8 0v4M12 10l4 4 4-4';
+    return `<svg viewBox="0 0 24 24"><path d="${d}"/></svg>`; }
+
+  async function osrm(profile, a, b){ const coords = `${a.lon},${a.lat};${b.lon},${b.lat}`, opt = '?overview=full&geometries=geojson&steps=true&annotations=duration,distance';
+    const urls = profile==='car' ? [`https://router.project-osrm.org/route/v1/driving/${coords}${opt}`, `https://routing.openstreetmap.de/routed-car/route/v1/driving/${coords}${opt}`] : [`https://routing.openstreetmap.de/routed-foot/route/v1/foot/${coords}${opt}`];
+    for(const u of urls){ try{ const r = await fetch(u); const j = await r.json(); if(j.code==='Ok' && j.routes && j.routes[0]) return j.routes[0]; }catch(e){} }
+    throw new Error('경로 서버 응답 없음'); }
+
+  async function computeRoute(){
+    const id = ++NV.routing; const mode = NV.mode, A = NV.start, B = NV.end;
+    q('#nvBusy').textContent = '경로 계산 중…';
+    try{
+      let S = [], steps = [], total = 0, dur = 0;
+      if(mode==='uam'){
+        let hA = A.h!=null ? A.h : groundAt(A.lon,A.lat), hB = B.h!=null ? B.h : groundAt(B.lon,B.lat);
+        const D = hav([A.lon,A.lat],[B.lon,B.lat]);
+        let terrMax = Math.max(isFinite(hA)?hA:-1e9, isFinite(hB)?hB:-1e9);
+        try{ const n = 40, pts = []; for(let i=0;i<=n;i++){ const f=i/n; pts.push(C.Cartographic.fromDegrees(A.lon+(B.lon-A.lon)*f, A.lat+(B.lat-A.lat)*f)); } const smp = await C.sampleTerrainMostDetailed(viewer.terrainProvider, pts); for(const c of smp) if(isFinite(c.height) && c.height>terrMax) terrMax = c.height;
+          if(isFinite(smp[0].height) && !(Math.abs(hA - smp[0].height) < 400)) hA = smp[0].height; if(isFinite(smp[n].height) && !(Math.abs(hB - smp[n].height) < 400)) hB = smp[n].height; }catch(e){}
+        if(!isFinite(hA)) hA = 0; if(!isFinite(hB)) hB = 0; terrMax = Math.max(terrMax, hA, hB);
+        const cruise = Math.max(Math.max(hA,hB) + UAM_CRUISE_AGL, terrMax + 150);
+        const sm = x => x<=0?0:x>=1?1:x*x*(3-2*x);
+        const Lc = Math.min(D*0.4, Math.max(400, (cruise-hA-60)/0.09)), Ld = Math.min(D*0.4, Math.max(400, (cruise-hB-60)/0.09));
+        const alt = s => Math.min(hA+60 + (cruise-hA-60)*sm(s/Lc), hB+60 + (cruise-hB-60)*sm((D-s)/Ld));
+        const acc = 1.2, vAt = s => Math.max(4, Math.min(UAM_V, Math.sqrt(2*acc*s)+4, Math.sqrt(2*acc*Math.max(0,D-s))+4));
+        let t = 0; for(let k=0;k<=10;k++){ S.push({ lon:A.lon, lat:A.lat, h: hA+1+59*k/10, t, s:0 }); t += 2; }
+        const N = Math.max(50, Math.min(1500, Math.round(D/15)));
+        for(let i=1;i<=N;i++){ const s0=(i-1)/N*D, s1=i/N*D; t += (s1-s0)/vAt((s0+s1)/2); const f=i/N; S.push({ lon:A.lon+(B.lon-A.lon)*f, lat:A.lat+(B.lat-A.lat)*f, h: alt(s1), t, s:s1 }); }
+        for(let k=1;k<=10;k++){ t += 2; S.push({ lon:B.lon, lat:B.lat, h: hB+60-59*k/10, t, s:D }); }
+        total = D; dur = t; NV.uamCruise = cruise;
+        steps = [ { at:0, text:'수직 이륙', mod:'straight', name:'고도 60 m까지 상승' }, { at:Math.min(Lc, D/2), text:'순항', mod:'straight', name:`고도 약 ${Math.round(cruise-Math.max(hA,hB))} m · 150 km/h` }, { at:Math.max(D-Ld, D/2), text:'강하 시작', mod:'straight', name:'착륙장 접근' }, { at:D, text:'수직 착륙', mod:'', type:'arrive', name: B.name } ];
+      } else {
+        const rt = await osrm(mode, A, B); if(id!==NV.routing) return;
+        const co = rt.geometry.coordinates; const ann = rt.legs[0].annotation || {};
+        let s = 0, t = 0; S.push({ lon:co[0][0], lat:co[0][1], h:null, t:0, s:0 });
+        for(let i=1;i<co.length;i++){ const d = hav(co[i-1], co[i]); s += d; let dt;
+          if(mode==='walk') dt = d / WALK_V; else { dt = ann.duration && ann.duration[i-1]!=null ? ann.duration[i-1] : d/ (30/3.6); dt = Math.max(dt, d/(110/3.6)); }
+          t += dt; S.push({ lon:co[i][0], lat:co[i][1], h:null, t, s }); }
+        total = s; dur = t;
+        let acc = 0; const scale = rt.distance>0 ? s/rt.distance : 1;
+        for(const st of rt.legs[0].steps){ steps.push({ at: acc*scale, text: stepText(st), mod: (st.maneuver||{}).modifier||'', type:(st.maneuver||{}).type, name: st.name || (st.ref||'') }); acc += st.distance; }
+      }
+      if(id!==NV.routing) return;
+      // 도로 이름: 기동 이후 도로명
+      NV.route = { S, steps, total, dur, mode };
+      drawRoute(); makeVehicle(); NV.t = 0; placeAt(0, true); updPanel();
+      q('#nvSum').classList.add('open'); q('#nvBusy').textContent = '';
+      const pts = S.filter((x,i)=>i%Math.max(1,Math.floor(S.length/200))===0).map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat, x.h!=null?x.h:(A.h||0)));
+      const bs = C.BoundingSphere.fromPoints(pts); bs.radius = Math.max(bs.radius, 150);
+      camera.flyToBoundingSphere(bs, { offset: new C.HeadingPitchRange(0, C.Math.toRadians(-62), bs.radius*2.6), duration: 1.4 });
+    }catch(e){ if(id===NV.routing){ q('#nvBusy').textContent = '경로 실패: '+e.message; toast('경로를 찾지 못했습니다 · '+e.message, 4000); } }
+    updHint();
+  }
+
+  function drawRoute(){ const r = NV.route, m = MODE[r.mode];
+    if(r.mode==='uam'){
+      const pos = r.S.filter((x,i)=>i%3===0 || i===r.S.length-1).map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat, x.h));
+      NV.ents.push(viewer.entities.add({ polyline:{ positions: pos, width: 10, material: new C.PolylineGlowMaterialProperty({ glowPower:.25, color: C.Color.fromCssColorString(m.color) }), arcType: C.ArcType.NONE } }));
+      NV.ents.push(viewer.entities.add({ polyline:{ positions: r.S.filter((x,i)=>i%3===0).map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat)), width: 3, clampToGround:true, classificationType: C.ClassificationType.BOTH, material: new C.PolylineDashMaterialProperty({ color: C.Color.fromCssColorString(m.color).withAlpha(.7), dashLength: 18 }) } }));
+    } else {
+      const pos = r.S.map(x=>C.Cartesian3.fromDegrees(x.lon, x.lat));
+      NV.ents.push(viewer.entities.add({ polyline:{ positions: pos, width: r.mode==='car'? 12 : 8, clampToGround:true, classificationType: C.ClassificationType.BOTH, material: C.Color.fromCssColorString('#06224A').withAlpha(.6) } }));
+      NV.ents.push(viewer.entities.add({ polyline:{ positions: pos, width: r.mode==='car'? 8 : 5, clampToGround:true, classificationType: C.ClassificationType.BOTH,
+        material: r.mode==='walk' ? new C.PolylineDashMaterialProperty({ color: C.Color.fromCssColorString(m.color), dashLength: 14 }) : C.Color.fromCssColorString(m.color).withAlpha(.95) } }));
+    }
+  }
+  function makeVehicle(){ const md = MODELS[NV.route.mode];
+    NV.veh = viewer.entities.add({ position: new C.CallbackProperty(()=>NV.cur, false), orientation: new C.CallbackProperty(()=> NV.cur ? C.Transforms.headingPitchRollQuaternion(NV.cur, new C.HeadingPitchRoll(C.Math.toRadians(NV.hdg + md.off), 0, 0)) : undefined, false),
+      model:{ uri: md.uri, scale: md.scale, minimumPixelSize: md.minPx, maximumScale: 40, runAnimations: true } });
+  }
+
+  /* ---- 위치 계산 ---- */
+  function sampleAt(t){ const S = NV.route.S; if(t<=0) return { i:0, f:0 }; if(t>=S[S.length-1].t) return { i:S.length-2, f:1 };
+    let lo=0, hi=S.length-1; while(hi-lo>1){ const mid=(lo+hi)>>1; if(S[mid].t<=t) lo=mid; else hi=mid; } const a=S[lo], b=S[lo+1]; return { i:lo, f: b.t>a.t ? (t-a.t)/(b.t-a.t) : 0 }; }
+  function placeAt(t, snap, dtReal){ const r = NV.route; if(!r) return; const { i, f } = sampleAt(t); const a = r.S[i], b = r.S[i+1] || a;
+    let lon = a.lon+(b.lon-a.lon)*f, lat = a.lat+(b.lat-a.lat)*f; let h;
+    const segD = hav([a.lon,a.lat],[b.lon,b.lat]);
+    if(segD > 0.5){ const br = bearing([a.lon,a.lat],[b.lon,b.lat]); NV.hdg = snap ? br : NV.hdg + angDiff(NV.hdg, br) * Math.min(1, (dtReal||0.016)*6); }
+    const side = MODELS[r.mode].side || 0; if(side){ const br2 = rad(NV.hdg + 90); lat += deg(side*Math.cos(br2)/R); lon += deg(side*Math.sin(br2)/(R*Math.cos(rad(lat)))); }
+    if(a.h!=null){ h = a.h+(b.h-a.h)*f; }
+    else { let g = groundAt(lon, lat); if(g===undefined || g===null || isNaN(g)) g = NV.hs!=null ? NV.hs : 0;
+      if(snap || NV.hs==null) NV.hs = g; else { const moved = NV.lastS!=null ? Math.abs((a.s+(b.s-a.s)*f) - NV.lastS) : 0; const lim = Math.max(0.4, moved*0.15); NV.hs += Math.max(-lim, Math.min(lim, g - NV.hs)); }
+      h = NV.hs + (r.mode==='car'? 0.05 : 0.02); }
+    NV.lastS = a.s+(b.s-a.s)*f; NV.curS = NV.lastS; NV.curSpd = (b.t>a.t) ? hav([a.lon,a.lat],[b.lon,b.lat])/(b.t-a.t) : 0;
+    if(r.mode==='uam' && b.t>a.t){ NV.curSpd = Math.hypot(segD, (b.h||0)-(a.h||0))/(b.t-a.t); }
+    NV.cur = C.Cartesian3.fromDegrees(lon, lat, h); NV.curLL = { lon, lat, h };
+  }
+  function camPose(){ const m = MODE[NV.route.mode]; const H = NV.camH; const pitch = NV.cam==='top' ? -89.9 : m.pitch; const range = H / Math.sin(C.Math.toRadians(-pitch));
+    if(NV.camHdg==null) NV.camHdg = NV.hdg; return { hd: NV.cam==='top' ? 0 : NV.camHdg, pitch, range }; }
+  function updCamera(dt){ if(!NV.cur || !NV.route) return;
+    if(NV.cam==='free'){ if(NV.prevTarget && camera.transform.equals(C.Matrix4.IDENTITY)){ const d = C.Cartesian3.subtract(NV.cur, NV.prevTarget, new C.Cartesian3()); camera.position = C.Cartesian3.add(camera.position, d, new C.Cartesian3()); } NV.prevTarget = C.Cartesian3.clone(NV.cur); return; }
+    NV.camHdg = NV.camHdg==null ? NV.hdg : NV.camHdg + angDiff(NV.camHdg, NV.hdg) * Math.min(1, dt*1.6);
+    const p = camPose(); camera.lookAt(NV.cur, new C.HeadingPitchRange(C.Math.toRadians(p.hd), C.Math.toRadians(p.pitch), p.range)); camera.lookAtTransform(C.Matrix4.IDENTITY); }
+  function releaseCam(){ if(!camera.transform.equals(C.Matrix4.IDENTITY)) camera.lookAtTransform(C.Matrix4.IDENTITY); }
+
+  /* ---- 화면 정보 ---- */
+  function updPanel(){ const r = NV.route; if(!r) return;
+    const remS = Math.max(0, r.total - (NV.curS||0)), remT = Math.max(0, r.dur - NV.t);
+    q('#nvDist').textContent = NV.t>0 ? fmtD(remS) : fmtD(r.total); q('#nvDur').textContent = fmtT(NV.t>0 ? remT : r.dur);
+    const eta = new Date(Date.now() + remT*1000); q('#nvEta').textContent = eta.toTimeString().slice(0,5);
+    q('#nvSpd').textContent = NV.playing || NV.t>0 ? Math.round((NV.curSpd||0)*3.6)+' km/h' : MODE[r.mode].name;
+    let nx = r.steps.find(s => s.at > (NV.curS||0) + 1); if(!nx) nx = r.steps[r.steps.length-1];
+    const dist = Math.max(0, nx.at - (NV.curS||0));
+    const arrive = nx.type==='arrive' || nx===r.steps[r.steps.length-1];
+    q('#nvTurn').textContent = (dist < 15 && NV.t>0) ? nx.text : `${fmtD(dist)} 앞 ${nx.text}`;
+    const nIdx = r.steps.indexOf(nx); const road = nx.name || (r.steps[nIdx+1]||{}).name || '';
+    q('#nvRoad').textContent = arrive && r.mode!=='uam' ? (NV.end? NV.end.name : '') : road;
+    q('#nvArrow').innerHTML = arrowSvg(nx.mod||'', arrive?'arrive':nx.type);
+    if(!NV.dragProg) q('#nvProg').value = Math.round(1000 * NV.t / r.dur);
+    q('#nvGo').textContent = NV.playing ? '⏸ 일시정지' : (NV.t>0 && NV.t<r.dur ? '▶ 계속' : '▶ 시뮬레이션 시작');
+  }
+
+  /* ---- 재생 ---- */
+  let prevMul = null;
+  function startSim(){ const r = NV.route; if(!r) return; if(NV.t >= r.dur) NV.t = 0;
+    placeAt(NV.t, true); NV.camHdg = NV.hdg; NV.prevTarget = null; releaseCam();
+    if(r.mode==='walk'){ prevMul = viewer.clock.multiplier; viewer.clock.multiplier = NV.mul; }
+    const begin = () => { NV.playing = true; NV.last = performance.now(); updPanel(); };
+    if(NV.cam==='free'){ begin(); return; }
+    const p = camPose(); NV.busy = true;
+    camera.flyToBoundingSphere(new C.BoundingSphere(NV.cur, 0), { offset: new C.HeadingPitchRange(C.Math.toRadians(p.hd), C.Math.toRadians(p.pitch), p.range), duration: 1.6, complete: ()=>{ NV.busy=false; begin(); }, cancel: ()=>{ NV.busy=false; begin(); } });
+  }
+  function stopSim(keepCam){ NV.playing = false; NV.busy = false; if(prevMul!=null){ viewer.clock.multiplier = prevMul; prevMul = null; } releaseCam(); if(NV.route) updPanel(); }
+  scene.preRender.addEventListener(() => {
+    if(!NV.route || !NV.playing) return; const now = performance.now(); const dt = Math.min(0.25, (now - NV.last)/1000); NV.last = now;
+    NV.t += dt * NV.mul; placeAt(NV.t, false, dt); updCamera(dt);
+    if(NV.t >= NV.route.dur){ NV.t = NV.route.dur; placeAt(NV.t, true); stopSim(); toast(`${MODE[NV.route.mode].name} 시뮬레이션 · 목적지 도착 (${fmtD(NV.route.total)}, 실제 ${fmtT(NV.route.dur)})`, 4500); }
+    if(!NV._pu || now - NV._pu > 250){ NV._pu = now; updPanel(); }
+  });
+  q('#nvGo').onclick = () => { if(!NV.route) return; if(NV.playing){ stopSim(); } else startSim(); };
+  q('#nvStop').onclick = () => { if(!NV.route) return; stopSim(); NV.t = 0; placeAt(0, true); updPanel(); };
+  q('#nvMul').onchange = e => { NV.mul = +e.target.value; if(NV.playing && NV.route.mode==='walk') viewer.clock.multiplier = NV.mul; };
+  q('#nvCam').onchange = e => { NV.cam = e.target.value; NV.prevTarget = null; if(NV.cam==='free') releaseCam(); };
+  q('#nvH').oninput = e => { NV.camH = +e.target.value; q('#nvHv').textContent = NV.camH+' m'; };
+  const prog = q('#nvProg');
+  prog.addEventListener('pointerdown', ()=>NV.dragProg=true); prog.addEventListener('pointerup', ()=>NV.dragProg=false);
+  prog.oninput = () => { if(!NV.route) return; NV.t = NV.route.dur * prog.value/1000; placeAt(NV.t, true); NV.camHdg = NV.hdg; if(NV.playing) updCamera(1); updPanel(); };
+
+  /* ---- 모드 ---- */
+  function setNavMode(m, fromLayer){ NV.mode = m; NV.mul = MODE[m].mul; NV.camH = MODE[m].camH;
+    q('#nvMul').value = String(NV.mul); q('#nvH').value = NV.camH; q('#nvHv').textContent = NV.camH+' m';
+    P.querySelectorAll('#nvSeg button').forEach(b=>b.classList.toggle('on', b.dataset.m===m));
+    for(const k in MODE){ if(k===m) STATE.on.add(MODE[k].layer); else STATE.on.delete(MODE[k].layer); }
+    stopSim(); clearRoute(); if(NV.start && NV.end) computeRoute(); updHint();
+    if(!fromLayer){ renderCats(); renderSub(); }
+  }
+  P.querySelectorAll('#nvSeg button').forEach(b=>b.onclick=()=>setNavMode(b.dataset.m));
+  function openNav(m){ NV.open = true; P.classList.add('open'); $('#card').classList.remove('open'); if(window.closeSettings) try{closeSettings();}catch(e){}
+    setNavMode(m, true); }
+  function closeNav(){ NV.open = false; P.classList.remove('open'); stopSim(); clearRoute(); NV.start = NV.end = null; setPin('start'); setPin('end'); q('#nvStart').value = q('#nvEnd').value = '';
+    for(const k in MODE) STATE.on.delete(MODE[k].layer); }
+  q('#nvClose').onclick = () => { closeNav(); renderCats(); renderSub(); };
+
+  // 레이어 연결 (toggleLayer 래핑)
+  const _toggleNav = toggleLayer;
+  toggleLayer = async function(id, force){
+    const m = Object.keys(MODE).find(k=>MODE[k].layer===id); if(!m) return _toggleNav(id, force);
+    const want = force!==undefined ? force : !STATE.on.has(id);
+    if(want){ if(!NV.open) openNav(m); else setNavMode(m, true); } else if(NV.mode===m) closeNav();
+    renderCats(); renderSub(); if(typeof updateSrc==='function') updateSrc();
+  };
+  // 켜진 자료만 숨김
+  const _rsNav = renderSub; renderSub = function(){ const r = _rsNav.apply(this, arguments); const f = document.querySelector('#sub .filter'); if(f && STATE.mode==='site' && STATE.cat==='nav') f.style.display='none'; return r; };
+  // EARTH로 가면 닫기
+  const _smNav = setMode; setMode = function(m){ if(m==='earth' && NV.open) closeNav(); return _smNav(m); };
+  // Esc: 재생 중지
+  window.addEventListener('keydown', e=>{ if(e.key==='Escape' && NV.playing) stopSim(); });
+
+  window.sistechNav = NV;
+  NV.api = { openNav, closeNav, setPoint, computeRoute, startSim, stopSim, placeAt, setNavMode };
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
