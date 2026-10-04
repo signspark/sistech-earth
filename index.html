@@ -199,12 +199,12 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--lime);outline-o
 <div id="search" class="panel">
   <input id="q" type="search" placeholder="나라 · 도시 · 주소 · 프로젝트 이름 (Enter)" autocomplete="off">
   <ul id="qres"></ul>
-  <div class="hint">OpenStreetMap Nominatim 검색 · 프로젝트 이름(인천, 부산, 분당, 고양, 다르항)도 바로 이동</div>
+  <div class="hint">OpenStreetMap Nominatim 검색 · 프로젝트 이름(인천, 부산, 분당, 고양)도 바로 이동</div>
 </div>
 
 <div id="settings" class="panel">
   <h3>설정</h3>
-  <div class="row"><span>언어</span><div class="seg"><button class="on">한국어</button><button disabled title="준비 중">English</button><button disabled title="준비 중">Монгол</button></div></div>
+  <div class="row"><span>언어</span><div class="seg"><button class="on">한국어</button><button disabled title="준비 중">English</button></div></div>
   <div class="row"><span>태양 조명 <small style="color:var(--text-dim)" id="sunInfo"></small></span><button class="switch on" id="swLight" aria-label="태양 조명"></button></div>
   <div class="row"><span>지명 표시</span><button class="switch on" id="swLabels" aria-label="지명"></button></div>
   <div class="row"><span>자동 회전</span><button class="switch" id="swSpin" aria-label="자동 회전"></button></div>
@@ -266,7 +266,6 @@ const PROJECTS = [
   { id:'busan1', name:'부산-1', desc:'부산 마린시티·해운대 3D 모델', lat:35.1565, lon:129.1455, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'부산 해운대구', tsId:'busan_01' },
   { id:'bundang1', name:'분당-1', desc:'분당 신도시 3D 모델', lat:37.3826, lon:127.1189, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'성남시 분당구', tsId:'bundang_01' },
   { id:'goyang1', name:'고양-1', desc:'고양시 3D 모델', lat:37.6584, lon:126.8320, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'고양시', tsId:'goyang_01' },
-  { id:'darkhan', name:'다르항-올', desc:'몽골 다르항-올 도시 3D 모델 (MOU 2026-10-02)', lat:49.4867, lon:105.9228, status:'기획', shot:'예정', gsd:'—', rmse:'—', area:'Darkhan-Uul, Mongolia', plan:true },
 ];
 
 /* ---------- Cesium 초기화 ---------- */
@@ -474,7 +473,7 @@ function renderSub(){
   const only = $('#onlyOn').checked;
   let html = '';
   if(cat.projects){
-    html += `<div class="note">SISTECH 3D 모델 프로젝트 · 클릭하면 현장으로 이동</div>` + PROJECTS.map(p=>`<button class="proj" data-p="${p.id}"><span class="pin ${p.plan?'plan':''}"></span><span><b>${p.name}</b><span>${p.desc}</span></span></button>`).join('') + `<div class="note" style="border-top:1px solid var(--line);margin-top:4px">● 연두: 서비스 중 · ● 주황: 기획 단계</div>`;
+    html += `<div class="note">SISTECH 3D 모델 프로젝트 · 클릭하면 현장으로 이동</div>` + PROJECTS.map(p=>`<button class="proj" data-p="${p.id}"><span class="pin ${p.plan?'plan':''}"></span><span><b>${p.name}</b></span></button>`).join('');
   }
   const items = cat.items.filter(i=>!only || STATE.on.has(i.id));
   html += items.map(i=>{
@@ -1178,7 +1177,7 @@ $('#segEx').insertAdjacentHTML('beforeend', '<button data-v="50">50×</button>')
 
 /* ---------- 한국어 지명 (국가·주요 도시 내장 + Natural Earth 국경선) ---------- */
 const KO_COUNTRIES = [['대한민국',36.5,127.8],['조선민주주의인민공화국',40.0,127.0],['일본',36.2,138.3],['중화인민공화국',35.0,104.0],['몽골',46.9,103.8],['러시아',61.5,105.3],['대만',23.7,121.0],['필리핀',12.9,122.0],['베트남',15.5,107.0],['태국',15.9,101.0],['라오스',19.9,102.5],['캄보디아',12.6,105.0],['미얀마',19.0,96.0],['말레이시아',3.5,102.0],['싱가포르',1.35,103.8],['인도네시아',-2.5,118.0],['인도',21.0,78.0],['네팔',28.4,84.1],['방글라데시',23.7,90.4],['스리랑카',7.9,80.8],['파키스탄',30.4,69.3],['아프가니스탄',33.9,67.7],['이란',32.4,53.7],['이라크',33.2,43.7],['사우디아라비아',24.0,45.0],['아랑에미리트',23.4,53.8],['틀르키예',38.9,35.2],['이스라엘',31.0,34.9],['카자흐스탄',48.0,67.0],['우즈베키스탄',41.4,64.6],['이집트',26.8,30.8],['리비아',26.3,17.2],['알제리',28.0,1.7],['모로코',31.8,-7.1],['나이지리아',9.1,8.7],['에티오피아',9.1,40.5],['케냐',0.0,37.9],['탄자니아',-6.4,34.9],['콩고민주공화국',-4.0,21.8],['남아프리카공화국',-30.6,22.9],['마다가스카르',-18.8,46.9],['수단',12.9,30.2],['말리',17.6,-4.0],['니제르',17.6,8.1],['차드',15.5,18.7],['앙골라',-11.2,17.9],['모잠비크',-18.7,35.5],['영국',54.0,-2.5],['아일랜드',53.4,-8.2],['프랑스',46.6,2.2],['독일',51.2,10.4],['스페인',40.4,-3.7],['포르투갈',39.4,-8.2],['이탈리아',42.5,12.5],['스위스',46.8,8.2],['오스트리아',47.5,14.5],['네덜란드',52.1,5.3],['벨기에',50.5,4.5],['폴란드',51.9,19.1],['체코',49.8,15.5],['헝가리',47.2,19.5],['루마니아',45.9,25.0],['우크라이나',48.4,31.2],['그리스',39.1,21.8],['스웨덴',62.0,15.0],['노르웨이',64.0,10.0],['핀란드',64.0,26.0],['덴마크',56.0,9.5],['아이슬란드',64.9,-19.0],['미국',39.8,-98.6],['캐나다',60.0,-105.0],['멕시코',23.6,-102.6],['과테말라',15.8,-90.2],['쿠바',21.5,-79.5],['콜롬비아',4.6,-74.3],['베네수엘라',6.4,-66.6],['페루',-9.2,-75.0],['브라질',-10.0,-53.0],['볼리비아',-16.3,-63.6],['칠레',-33.0,-71.0],['아르헨티나',-36.0,-64.0],['우루과이',-32.5,-55.8],['파라과이',-23.4,-58.4],['에콰도르',-1.8,-78.2],['오스트레일리아',-25.3,133.8],['뉴질랜드',-41.5,172.5],['파푸아뉴기니',-6.3,143.9],['그린란드',72.0,-40.0]];
-const KO_CITIES = [['서울',37.57,126.98,1],['부산',35.18,129.08,1],['인천',37.46,126.71,1],['대구',35.87,128.60,1],['대전',36.35,127.38,1],['광주',35.16,126.85,1],['울산',35.54,129.31,1],['세종',36.48,127.29,1],['수원',37.26,127.03,1],['고양',37.66,126.83,1],['성남',37.42,127.13,1],['창원',35.23,128.68,1],['청주',36.64,127.49,1],['전주',35.82,127.15,1],['천안',36.82,127.11,1],['제주',33.50,126.53,1],['강릉',37.75,128.88,1],['포항',36.02,129.36,1],['여수',34.76,127.66,1],['목포',34.81,126.39,1],['춘천',37.88,127.73,1],['원주',37.34,127.92,1],['평양',39.02,125.75,1],['도쿄',35.68,139.69,0],['오사카',34.69,135.50,0],['베이징',39.90,116.40,0],['상하이',31.23,121.47,0],['홍콩',22.32,114.17,0],['타이베이',25.03,121.57,0],['울란바토르',47.92,106.92,0],['다르항',49.49,105.92,0],['방콕',13.76,100.50,0],['하노이',21.03,105.85,0],['호치민',10.82,106.63,0],['마닐라',14.60,120.98,0],['싱가포르',1.29,103.85,0],['자카르타',-6.21,106.85,0],['뉴델리',28.61,77.21,0],['뭄바이',19.08,72.88,0],['두바이',25.20,55.27,0],['테헤란',35.69,51.39,0],['이스탕불',41.01,28.98,0],['모스크바',55.76,37.62,0],['카이로',30.04,31.24,0],['나이로비',-1.29,36.82,0],['라고스',6.52,3.38,0],['요하네스버그',-26.20,28.05,0],['런던',51.51,-0.13,0],['파리',48.86,2.35,0],['베를린',52.52,13.41,0],['마드리드',40.42,-3.70,0],['로마',41.90,12.50,0],['암스테르담',52.37,4.90,0],['스톡홈름',59.33,18.07,0],['바르샤바',52.23,21.01,0],['키이우',50.45,30.52,0],['뉴욕',40.71,-74.01,0],['워싱턴',38.91,-77.04,0],['시카고',41.88,-87.63,0],['로스앨젤레스',34.05,-118.24,0],['샌프란시스코',37.77,-122.42,0],['시애틀',47.61,-122.33,0],['토론토',43.65,-79.38,0],['밴쿠버',49.28,-123.12,0],['멕시코시티',19.43,-99.13,0],['보고타',4.71,-74.07,0],['리마',-12.05,-77.04,0],['상파울루',-23.55,-46.63,0],['리우데자네이루',-22.91,-43.17,0],['부에노스아이레스',-34.60,-58.38,0],['산티아고',-33.45,-70.67,0],['시드니',-33.87,151.21,0],['멜버른',-37.81,144.96,0],['오클랜드',-36.85,174.76,0],['호놀룰루',21.31,-157.86,0],['앵커리지',61.22,-149.90,0]];
+const KO_CITIES = [['서울',37.57,126.98,1],['부산',35.18,129.08,1],['인천',37.46,126.71,1],['대구',35.87,128.60,1],['대전',36.35,127.38,1],['광주',35.16,126.85,1],['울산',35.54,129.31,1],['세종',36.48,127.29,1],['수원',37.26,127.03,1],['고양',37.66,126.83,1],['성남',37.42,127.13,1],['창원',35.23,128.68,1],['청주',36.64,127.49,1],['전주',35.82,127.15,1],['천안',36.82,127.11,1],['제주',33.50,126.53,1],['강릉',37.75,128.88,1],['포항',36.02,129.36,1],['여수',34.76,127.66,1],['목포',34.81,126.39,1],['춘천',37.88,127.73,1],['원주',37.34,127.92,1],['평양',39.02,125.75,1],['도쿄',35.68,139.69,0],['오사카',34.69,135.50,0],['베이징',39.90,116.40,0],['상하이',31.23,121.47,0],['홍콩',22.32,114.17,0],['타이베이',25.03,121.57,0],['방콕',13.76,100.50,0],['하노이',21.03,105.85,0],['호치민',10.82,106.63,0],['마닐라',14.60,120.98,0],['싱가포르',1.29,103.85,0],['자카르타',-6.21,106.85,0],['뉴델리',28.61,77.21,0],['뭄바이',19.08,72.88,0],['두바이',25.20,55.27,0],['테헤란',35.69,51.39,0],['이스탕불',41.01,28.98,0],['모스크바',55.76,37.62,0],['카이로',30.04,31.24,0],['나이로비',-1.29,36.82,0],['라고스',6.52,3.38,0],['요하네스버그',-26.20,28.05,0],['런던',51.51,-0.13,0],['파리',48.86,2.35,0],['베를린',52.52,13.41,0],['마드리드',40.42,-3.70,0],['로마',41.90,12.50,0],['암스테르담',52.37,4.90,0],['스톡홈름',59.33,18.07,0],['바르샤바',52.23,21.01,0],['키이우',50.45,30.52,0],['뉴욕',40.71,-74.01,0],['워싱턴',38.91,-77.04,0],['시카고',41.88,-87.63,0],['로스앨젤레스',34.05,-118.24,0],['샌프란시스코',37.77,-122.42,0],['시애틀',47.61,-122.33,0],['토론토',43.65,-79.38,0],['밴쿠버',49.28,-123.12,0],['멕시코시티',19.43,-99.13,0],['보고타',4.71,-74.07,0],['리마',-12.05,-77.04,0],['상파울루',-23.55,-46.63,0],['리우데자네이루',-22.91,-43.17,0],['부에노스아이레스',-34.60,-58.38,0],['산티아고',-33.45,-70.67,0],['시드니',-33.87,151.21,0],['멜버른',-37.81,144.96,0],['오클랜드',-36.85,174.76,0],['호놀룰루',21.31,-157.86,0],['앵커리지',61.22,-149.90,0]];
 let koDS = null, neDS = null;
 async function loadKoLabels(){
   if(koDS){ koDS.show = true; if(neDS) neDS.show = true; return; }
@@ -2112,7 +2111,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   function arm(){ VS.armed = true; VS.dragging = false; clearResult(); VS.ground = null; VS.O = null; setHud('3D 모델 위 <b>관측 지점을 누른 채</b> 보고 싶은 방향으로 끌어서 놓으세요'); renderCard(); }
   function ensureHandler(){ if(VS.handler) return; const h = new Cesium.ScreenSpaceEventHandler(scene.canvas); VS.handler = h;
     h.setInputAction(e=>{ if(!VS.active || !VS.armed || VS.busy) return; const g = pickGround(e.position); if(!g) return; VS.ground = g; VS.dragging = true; scene.screenSpaceCameraController.enableInputs = false; previewWedge(); setHud('방향으로 끌어서 놓으세요 · 끈 거리 = 반경'); }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
-    h.setInputAction(e=>{ if(!VS.dragging) return; const g = pickGround(e.endPosition); if(!g) return; const enu = enuOf(VS.ground); const d = Cesium.Cartesian3.subtract(g, VS.ground, new Cesium.Cartesian3()); const ea = Cesium.Cartesian3.dot(d, enu.east), no = Cesium.Cartesian3.dot(d, enu.north); const rg = Math.hypot(ea, no); if(rg > 3){ VS.heading = ((Math.atan2(ea, no)/D2R) + 360) % 360; VS.radius = Math.max(30, Math.min(1000, Math.round(rg/10)*10)); } previewWedge(); setHud('방위 '+Math.round(VS.heading)+'° · 반경 '+VS.radius+' m · 놓으면 계산'); }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+    h.setInputAction(e=>{ if(!VS.dragging) return; const g = pickGround(e.endPosition); if(!g) return; const enu = enuOf(VS.ground); const d = Cesium.Cartesian3.subtract(g, VS.ground, new Cesium.Cartesian3()); const ea = Cesium.Cartesian3.dot(d, enu.east), no = Cesium.Cartesian3.dot(d, enu.north); const rg = Math.hypot(ea, no); if(rg > 3){ VS.heading = ((Math.atan2(ea, no)/D2R) + 360) % 360; VS.radius = Math.max(30, Math.min(2000, Math.round(rg/10)*10)); } previewWedge(); setHud('방위 '+Math.round(VS.heading)+'° · 반경 '+VS.radius+' m · 놓으면 계산'); }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
     h.setInputAction(e=>{ if(!VS.dragging) return; VS.dragging = false; VS.armed = false; VS.justDone = true; scene.screenSpaceCameraController.enableInputs = true; setTimeout(compute, 30); }, Cesium.ScreenSpaceEventType.LEFT_UP);
   }
   // 앱의 기본 클릭(지점 카드)·측정과 충돌 방지: 가시권 지정 중에는 기본 클릭을 무시
@@ -2190,48 +2189,54 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   mark();
 })();
 
-/* ---------- 20. SITE › 3D 모델: 준비된 모델(인천·부산·분당·고양…)을 골라 켜고 이동 ---------- */
+/* ---------- 20. SITE › 3D 모델: 모델별 켜기·이동 + 메모리 관리 (보는 곳만 활성화 · 멀어지면 해제 · 캐시 256 MB) ---------- */
 (function(){
+  const LOAD_KM = 20, UNLOAD_KM = 40, MAX_ACTIVE = 2, CACHE = 256*1024*1024;
   const OFF = new Set(JSON.parse(localStorage.getItem('ts.off')||'[]')); const save = ()=>localStorage.setItem('ts.off', JSON.stringify([...OFF]));
-  const distKm = p => { const c = camera.positionCartographic; return new Cesium.EllipsoidGeodesic(new Cesium.Cartographic(c.longitude,c.latitude), Cesium.Cartographic.fromDegrees(p.lon,p.lat)).surfaceDistance/1000; };
+  // 전체 켜기/끄기 메뉴 제거 → 3D Tiles는 항상 켜진 상태로 두고 모델별 스위치로만 제어
+  for(const mode of ['earth','site']) for(const c of MENUS[mode]) c.items = c.items.filter(i=>i.id!=='tiles');
+  STATE.on.add('tiles');
+  if(STATE.quality!=='중'){ STATE.quality='중'; STATE.sse=16; }
+  function viewCenter(){ const cv = scene.canvas; const c = camera.pickEllipsoid(new Cesium.Cartesian2(cv.clientWidth/2, cv.clientHeight/2), globe.ellipsoid); return c ? Cesium.Cartographic.fromCartesian(c) : camera.positionCartographic; }
+  const distKm = (p, ctr) => { ctr = ctr || viewCenter(); return new Cesium.EllipsoidGeodesic(new Cesium.Cartographic(ctr.longitude, ctr.latitude), Cesium.Cartographic.fromDegrees(p.lon,p.lat)).surfaceDistance/1000; };
+  function unload(p){ if(!p.ts) return; try{ scene.primitives.remove(p.ts); }catch(e){} p.ts = null; }
   autoLoadTileset = function(){
-    if(!STATE.on.has('tiles')) { refresh(); return; }
-    const h = camera.positionCartographic.height;
-    if(h > 120000){ for(const p of PROJECTS) if(p.ts) p.ts.show = false; refresh(); return; }
-    for(const p of PROJECTS){ if(!p.tsId) continue; if(OFF.has(p.id)){ if(p.ts) p.ts.show = false; continue; }
-      if(distKm(p) < 60){ if(!p.ts) ensureTileset(p); else p.ts.show = true; } else if(p.ts) p.ts.show = false; }
+    STATE.on.add('tiles');
+    const ctr = viewCenter(); const h = camera.positionCartographic.height;
+    const models = PROJECTS.filter(p=>p.tsId).map(p=>({ p, d: distKm(p, ctr) })).sort((a,b)=>a.d-b.d);
+    let active = 0;
+    for(const {p, d} of models){
+      if(OFF.has(p.id) || d > UNLOAD_KM){ unload(p); continue; }           // 꺼짐·멀어짐 → 메모리 해제
+      const want = h <= 120000 && d <= LOAD_KM && active < MAX_ACTIVE;       // 화면 중심 20 km 안, 가까운 순 2곳까지
+      if(want){ active++; if(!p.ts) ensureTileset(p); else p.ts.show = true; } else if(p.ts) p.ts.show = false;
+    }
     refresh();
   };
-  const _ens = ensureTileset; ensureTileset = async function(p){ refresh(); const ts = await _ens(p); if(ts && OFF.has(p.id)) ts.show = false; refresh(); return ts; };
-  function statusOf(p){ if(OFF.has(p.id)) return ['꺼짐','#8FA7C4']; if(!STATE.on.has('tiles')) return ['3D Tiles 꺼짐','#8FA7C4']; if(p.tsLoading) return ['불러오는 중…','#F5D76E']; if(p.ts && p.ts.show) return ['화면에 표시 중','#BFE33A']; if(p.ts) return ['로드됨 · 멀어서 숨김','#7FB7F5']; return ['대기 · 60 km 안에서 자동 로드','#8FA7C4']; }
-  function rowHtml(p){ const on = !OFF.has(p.id); const [st, col] = statusOf(p); const d = distKm(p);
+  const _ens = ensureTileset; ensureTileset = async function(p){ refresh(); const ts = await _ens(p); if(ts){ ts.cacheBytes = CACHE; ts.maximumCacheOverflowBytes = CACHE; if(OFF.has(p.id)) ts.show = false; } refresh(); return ts; };
+  const mb = p => p.ts ? p.ts.totalMemoryUsageInBytes/1048576 : 0;
+  function statusOf(p){ if(OFF.has(p.id)) return ['꺼짐 · 메모리 해제','#8FA7C4']; if(p.tsLoading) return ['불러오는 중…','#F5D76E']; if(p.ts && p.ts.show) return ['화면에 표시 중 · '+mb(p).toFixed(0)+' MB','#BFE33A']; if(p.ts) return ['대기 · '+mb(p).toFixed(0)+' MB (40 km 밖이면 해제)','#7FB7F5']; return ['해제됨 · 20 km 안에서 자동 로드','#8FA7C4']; }
+  function rowHtml(p, ctr){ const on = !OFF.has(p.id); const [st, col] = statusOf(p); const d = distKm(p, ctr);
     return '<div class="tsRow" data-p="'+p.id+'" style="display:flex;align-items:center;gap:8px;padding:8px 2px;border-top:1px solid var(--line)">'
       + '<div style="flex:1;min-width:0"><div style="display:flex;align-items:baseline;gap:6px"><b style="font-size:13.5px">'+p.name+'</b><small style="color:var(--text-dim)">'+(d<1? (d*1000).toFixed(0)+' m' : d<100? d.toFixed(1)+' km' : Math.round(d).toLocaleString()+' km')+'</small></div>'
-      + '<div style="font-size:11.5px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+p.desc+(p.gsd?' · GSD '+p.gsd:'')+'</div>'
       + '<div style="font-size:11.5px;color:'+col+'">● '+st+'</div></div>'
       + '<button class="cta ghost tsGo" style="margin:0;padding:5px 10px;flex:0 0 auto;width:auto;font-size:12.5px" title="'+p.name+'(으)로 이동">이동</button>'
       + '<button class="switch '+(on?'on':'')+' tsSw" aria-label="'+p.name+' 켜기/끄기" title="켜기/끄기" style="flex:0 0 38px;border:0;cursor:pointer"></button></div>'; }
-  function planned(){ return PROJECTS.filter(p=>!p.tsId).map(p=>'<div style="display:flex;align-items:center;gap:8px;padding:8px 2px;border-top:1px solid var(--line);opacity:.6"><div style="flex:1"><b style="font-size:13.5px">'+p.name+'</b><div style="font-size:11.5px;color:var(--text-dim)">'+p.desc+'</div><div style="font-size:11.5px;color:#F2A65A">● 기획 단계 · 3D 모델 준비 중</div></div><button class="cta ghost tsGoPlan" data-p="'+p.id+'" style="margin:0;padding:5px 10px;flex:0 0 auto;width:auto;font-size:12.5px">이동</button><span style="flex:0 0 38px"></span></div>').join(''); }
   function inject(){
     const list = $('#subList'); if(!list || STATE.mode!=='site' || STATE.cat!=='model') return; let box = document.getElementById('tsModels');
-    const models = PROJECTS.filter(p=>p.tsId); const nOn = models.filter(p=>!OFF.has(p.id)).length;
-    const html = '<div style="display:flex;align-items:center;justify-content:space-between;margin:2px 2px 4px"><b style="font-size:13px;white-space:nowrap">SISTECH 3D 모델 '+models.length+'곳</b><span style="font-size:11.5px;white-space:nowrap"><a href="#" id="tsAllOn" style="color:#BFE33A">모두 켜기</a> · <a href="#" id="tsAllOff" style="color:var(--text-dim)">모두 끄기</a></span></div>'
-      + models.map(rowHtml).join('') + planned()
-      + '<div class="note" style="padding:6px 2px 10px;border-top:1px solid var(--line)">켜진 모델은 현장 60 km 안에 들어오면 자동으로 불러옵니다 · "이동"을 누르면 그 현장으로 날아가 바로 불러옵니다 ('+nOn+'곳 켜짐)</div>';
-    if(!box){ box = document.createElement('div'); box.id = 'tsModels'; box.style.cssText = 'padding:4px 6px 0'; list.insertBefore(box, list.firstChild); }
+    const ctr = viewCenter(); const models = PROJECTS.filter(p=>p.tsId); const tot = models.reduce((s,p)=>s+mb(p),0);
+    const html = '<div style="display:flex;align-items:center;justify-content:space-between;margin:2px 2px 4px"><b style="font-size:13px;white-space:nowrap">SISTECH 3D 모델 '+models.length+'곳</b><span style="font-size:11.5px;color:'+(tot>600?'#F2A65A':'var(--text-dim)')+';white-space:nowrap">메모리 합계 '+tot.toFixed(0)+' MB</span></div>'
+      + models.map(p=>rowHtml(p, ctr)).join('');
+    if(!box){ box = document.createElement('div'); box.id = 'tsModels'; box.style.cssText = 'padding:4px 6px 8px'; list.insertBefore(box, list.firstChild); }
     box.innerHTML = html;
     box.querySelectorAll('.tsRow').forEach(r=>{ const p = PROJECTS.find(x=>x.id===r.dataset.p);
-      r.querySelector('.tsSw').onclick = ()=>{ if(OFF.has(p.id)){ OFF.delete(p.id); save(); if(!STATE.on.has('tiles')) toggleLayer('tiles', true); autoLoadTileset(); toast(p.name+' 3D 모델 켬'+(distKm(p)>=60?' · 현장에서 멀어서 아직 보이지 않습니다 → "이동"을 누르세요':''), 3500); } else { OFF.add(p.id); save(); if(p.ts) p.ts.show = false; toast(p.name+' 3D 모델 끔', 2000); } refresh(); };
-      r.querySelector('.tsGo').onclick = ()=>{ if(OFF.has(p.id)){ OFF.delete(p.id); save(); } if(!STATE.on.has('tiles')) toggleLayer('tiles', true); ensureTileset(p).then(ts=>{ if(ts) ts.show = true; }); flyToProject(p.id); toast(p.name+'(으)로 이동 · 3D 모델 불러오는 중', 2500); refresh(); };
+      r.querySelector('.tsSw').onclick = ()=>{ if(OFF.has(p.id)){ OFF.delete(p.id); save(); autoLoadTileset(); toast(p.name+' 3D 모델 켬'+(distKm(p)>LOAD_KM?' · 현장 20 km 안에서 보입니다 → "이동"을 누르세요':''), 3500); } else { OFF.add(p.id); save(); unload(p); toast(p.name+' 3D 모델 끔 · 메모리 해제', 2000); } refresh(); };
+      r.querySelector('.tsGo').onclick = ()=>{ if(OFF.has(p.id)){ OFF.delete(p.id); save(); } for(const q of PROJECTS) if(q!==p && q.ts && distKm(q, Cesium.Cartographic.fromDegrees(p.lon,p.lat)) > UNLOAD_KM) unload(q); ensureTileset(p).then(ts=>{ if(ts) ts.show = true; }); flyToProject(p.id); toast(p.name+'(으)로 이동 · 3D 모델 불러오는 중', 2500); refresh(); };
     });
-    box.querySelectorAll('.tsGoPlan').forEach(b=>b.onclick=()=>{ flyToProject(b.dataset.p); });
-    const a1 = $('#tsAllOn'), a0 = $('#tsAllOff'); if(a1) a1.onclick = e=>{ e.preventDefault(); OFF.clear(); save(); if(!STATE.on.has('tiles')) toggleLayer('tiles', true); autoLoadTileset(); };
-    if(a0) a0.onclick = e=>{ e.preventDefault(); for(const p of PROJECTS) if(p.tsId){ OFF.add(p.id); if(p.ts) p.ts.show=false; } save(); refresh(); };
   }
   let rT = null; function refresh(){ clearTimeout(rT); rT = setTimeout(inject, 50); }
   const _rs = renderSub; renderSub = function(){ _rs(); inject(); };
-  camera.moveEnd.addEventListener(refresh);
-  const ti = MENUS.site.find(c=>c.id==='model')?.items.find(i=>i.id==='tiles'); if(ti) ti.src = '전체 켜기/끄기 · 위 목록에서 모델별로 켜고 이동';
+  camera.moveEnd.addEventListener(()=>autoLoadTileset());
+  setInterval(()=>{ const b = document.getElementById('tsModels'); if(b && b.offsetParent) inject(); }, 2000);
   autoLoadTileset();
 })();
 
