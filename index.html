@@ -1395,9 +1395,9 @@ const MIRROR = { applied:new Set(), lastAt:'', log:[] };
 function layerExists(id){ return !!(L[id] || GIBS[id] || ['labels','night','projects','tiles','quake','sats','starlink','ptwx','flight','aq','cloud','viirs','hima_ir','snow','seaice','wv','aod','lst','ndvi'].includes(id)); }
 window.sistechApply = async function(s){
   const want = new Set(); const notes=[];
-  if(s.hash){ const p = new URLSearchParams(s.hash.replace(/^#/,'')); if(p.get('base')==='night') want.add('night'); const live = p.get('live'); if(live) for(const k of live.split(',')){ const id = LIVE_MAP[k]; if(id) want.add(id); else notes.push('live:'+k); } const cl = p.get('cloud'); if(cl && cl!=='none'){ want.add(LIVE_MAP['cloud-'+cl] || (cl==='gfs'?'cloud':'hima_ir')); } }
+  if(s.hash){ const p = new URLSearchParams(s.hash.replace(/^#/,'')); if(p.get('base')==='night') want.add('night'); const live = p.get('live'); if(live) for(const k of live.split(',')){ const id = LIVE_MAP[k]; if(id) want.add(id); else notes.push('live:'+k); } const cl = p.get('cloud'); if(cl && cl!=='none' && cl!=='off'){ want.add(LIVE_MAP['cloud-'+cl] || (cl==='gfs'?'cloud':'hima_ir')); } }
   for(const n of (s.pressed||[])){ const key = Object.keys(NAME_MAP).find(k => n===k || n.startsWith(k)); if(key) want.add(NAME_MAP[key]); else notes.push('button:'+n); }
-  if(s.cloudMode){ const m = { '관측':'hima_ir', '천리안':'hima_ir', '모델':'cloud', '정적':'viirs' }[s.cloudMode]; if(m) want.add(m); }
+  if(s.cloudMode && s.cloudMode!=='없음'){ const m = { '관측':'hima_ir', '천리안':'hima_ir', '모델':'cloud', '정적':'viirs' }[s.cloudMode]; if(m) want.add(m); }
   // 끄기: 이전에 미러링이 켠는데 이제 원하지 않는 것
   for(const id of [...MIRROR.applied]) if(!want.has(id)){ MIRROR.applied.delete(id); if(STATE.on.has(id)) await toggleLayer(id, false); }
   for(const id of want){ if(!layerExists(id)) { notes.push('nolayer:'+id); continue; } const item = [...MENUS.earth.flatMap(c=>c.items)].find(i=>i.id===id); if(item && (item.type==='soon'||item.type==='site')){ notes.push('soon:'+id); continue; } if(item && item.type==='action'){ if(!MIRROR.applied.has(id)){ MIRROR.applied.add(id); item.run(); } continue; } if(!STATE.on.has(id)){ await toggleLayer(id, true); } MIRROR.applied.add(id); }
