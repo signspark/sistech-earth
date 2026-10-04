@@ -1442,7 +1442,7 @@ for(const id of [...STATE.on]) if(L[id] && L[id].type!=='action') { try{ L[id].o
 renderCats(); renderSub(); updateSrc();
 setTimeout(applyEarthusHash, 1500);
 if(!STATE.on.has('kolabels')) toggleLayer('kolabels', true);
-if(STATE.on.has('labels') && !location.hash.includes('labels')) toggleLayer('labels', false); // 한국어 지명 기본 → Esri 영문 지명은 기본 끔(지구 › 지명·경계에서 켤 수 있음)
+if(STATE.on.has('labels') && !(window.__initialHash||'').includes('labels')) toggleLayer('labels', false); // 한국어 지명 기본 → Esri 영문 지명은 기본 끔(지구 › 지명·경계에서 켤 수 있음)
 console.log('SISTECH EARTH ext v2 loaded', Object.keys(L).length, 'layers');
 })();
 
