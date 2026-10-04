@@ -2015,6 +2015,105 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   window.sistechShadow = SH;
 })();
 
+/* ---------- 16. SITE › 분석 › 가시권 (관측점 드래그 지정 → 깊이 버퍼 기반 가시/비가시 격자 · 관측점 시점 보기) ---------- */
+(function(){
+  const an = MENUS.site.find(c=>c.id==='analysis'); const it = an && an.items.find(i=>i.id==='view'); if(!it) return;
+  Object.assign(it, { type:'layer', name:'가시권 분석', q:'여기서 어디까지 보이나', src:'3D 모델 위 관측점을 누른 채 방향으로 끌기 → 보이는 곳(초록)·안 보이는 곳(빨강) · 관측점 시점 보기' });
+  const VS = { active:false, armed:false, dragging:false, O:null, ground:null, heading:45, pitch:-10, hfov:90, vfov:60, radius:200, eye:1.6, prims:[], ds:null, saved:null, fp:false, hud:null, handler:null, busy:false, stats:null };
+  const D2R = Math.PI/180;
+  function ds(){ if(!VS.ds){ VS.ds = new Cesium.CustomDataSource('viewshed'); viewer.dataSources.add(VS.ds); } return VS.ds; }
+  function enuOf(O){ const m = Cesium.Transforms.eastNorthUpToFixedFrame(O); const col = i => { const c = Cesium.Matrix4.getColumn(m, i, new Cesium.Cartesian4()); return new Cesium.Cartesian3(c.x,c.y,c.z); }; return { m, east: col(0), north: col(1), up: col(2) }; }
+  function localPoint(enu, e, n, u){ return Cesium.Matrix4.multiplyByPoint(enu.m, new Cesium.Cartesian3(e, n, u), new Cesium.Cartesian3()); }
+  function setHud(t){ if(!VS.hud){ VS.hud = document.createElement('div'); VS.hud.id='vsHud'; VS.hud.style.cssText='position:fixed;left:50%;transform:translateX(-50%);top:64px;z-index:25;background:rgba(3,18,42,.88);border:1px solid var(--line);border-radius:999px;padding:7px 16px;font-size:13px;color:var(--text);pointer-events:none;max-width:70vw;text-align:center'; document.body.appendChild(VS.hud); } VS.hud.style.display = t?'block':'none'; if(t) VS.hud.innerHTML = t; }
+  function clearResult(){ for(const p of VS.prims){ try{ scene.primitives.remove(p); }catch(e){} } VS.prims=[]; if(VS.ds) VS.ds.entities.removeAll(); VS.stats=null; }
+  function pickGround(pos){ if(scene.pickPositionSupported){ const picked = scene.pick(pos); if(Cesium.defined(picked)){ const c = scene.pickPosition(pos); if(c) return c; } } const c2 = camera.pickEllipsoid(pos, globe.ellipsoid); return c2 || null; }
+  /* 미리보기 부채꼴 (드래그 중) */
+  function previewWedge(){ const D = ds(); D.entities.removeAll(); if(!VS.ground) return; const enu = enuOf(VS.ground); const pts=[]; const a0 = VS.heading - VS.hfov/2, a1 = VS.heading + VS.hfov/2; const n = Math.max(8, Math.round(VS.hfov/5));
+    pts.push(VS.ground); for(let i=0;i<=n;i++){ const a = (a0 + (a1-a0)*i/n)*D2R; pts.push(localPoint(enu, VS.radius*Math.sin(a), VS.radius*Math.cos(a), 0)); } pts.push(VS.ground);
+    D.entities.add({ polyline:{ positions: pts, width: 3, material: Cesium.Color.fromCssColorString('#F5D76E'), clampToGround: true } });
+    const h = VS.heading*D2R; D.entities.add({ polyline:{ positions:[VS.ground, localPoint(enu, VS.radius*Math.sin(h), VS.radius*Math.cos(h), 0)], width: 2, material: new Cesium.PolylineDashMaterialProperty({ color: Cesium.Color.fromCssColorString('#F5D76E') }), clampToGround: true } });
+    D.entities.add({ position: localPoint(enu, 0, 0, VS.eye), point:{ pixelSize: 10, color: Cesium.Color.fromCssColorString('#F5D76E'), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY }, label:{ text:'관측점 · 눈높이 '+VS.eye+' m', font:'600 12px Inter, "Noto Sans KR", sans-serif', fillColor: Cesium.Color.WHITE, outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0,-14), verticalOrigin: Cesium.VerticalOrigin.BOTTOM, disableDepthTestDistance: Number.POSITIVE_INFINITY } });
+  }
+  /* 계산: 관측점 시점으로 렌더 → 깊이 버퍼 전체 읽기 → 보이는 표면점 → 극좌표 격자 */
+  function compute(){
+    if(!VS.ground || VS.busy) return; VS.busy = true; setHud('가시권 계산 중…');
+    const enu = enuOf(VS.ground); const O = localPoint(enu, 0, 0, VS.eye); VS.O = O;
+    const saved = { pos: camera.position.clone(), dir: camera.direction.clone(), up: camera.up.clone(), fov: camera.frustum.fov, dtt: globe.depthTestAgainstTerrain };
+    const ctx = scene.context, W = ctx.drawingBufferWidth, H = ctx.drawingBufferHeight; const aspect = W/H;
+    const fovH = Math.min(VS.hfov, 100); const nH = Math.ceil(VS.hfov/fovH - 1e-6); const fovHr = fovH*D2R; const fovV = 2*Math.atan(Math.tan(fovHr/2)/aspect)/D2R; const nV = Math.ceil(VS.vfov/fovV - 1e-6);
+    const na = Math.max(6, Math.round(VS.hfov/3)), nr = 25; const da = VS.hfov/na, dr = VS.radius/nr; const cnt = new Uint16Array(na*nr); const maxVis = new Float32Array(na*nr);
+    const azStart = VS.heading - VS.hfov/2; let samples = 0, kept = 0;
+    globe.depthTestAgainstTerrain = true;
+    try{
+      const pd = scene._picking.getPickDepth(scene, 0); let px = null;
+      pd.getDepth = function(context, x, y){ const i = ((y|0)*W + (x|0))*4; return px[i]/255 + px[i+1]/65025 + px[i+2]/16581375 + px[i+3]/4228250625; };
+      const step = Math.max(4, Math.round(Math.sqrt(W*H/60000)));
+      for(let kh=0; kh<nH; kh++){ for(let kv=0; kv<nV; kv++){
+        const hd = azStart + fovH*(kh+0.5); const pt = Math.max(-89, Math.min(89, VS.pitch - VS.vfov/2 + fovV*(kv+0.5)));
+        camera.setView({ destination: O, orientation:{ heading: hd*D2R, pitch: pt*D2R, roll: 0 } }); camera.frustum.fov = fovHr;
+        scene.render(); px = ctx.readPixels({ x:0, y:0, width:W, height:H, framebuffer: pd.framebuffer });
+        const cw = scene.canvas.clientWidth, chh = scene.canvas.clientHeight; const sx = cw/W, sy = chh/H;
+        for(let y=0;y<H;y+=step) for(let x=0;x<W;x+=step){ samples++; const c = scene.pickPosition(new Cesium.Cartesian2(x*sx, y*sy)); if(!c) continue;
+          const d = Cesium.Cartesian3.subtract(c, O, new Cesium.Cartesian3()); const e = Cesium.Cartesian3.dot(d, enu.east), n = Cesium.Cartesian3.dot(d, enu.north), u = Cesium.Cartesian3.dot(d, enu.up); const rg = Math.hypot(e, n); if(rg < 0.5 || rg > VS.radius) continue;
+          const az = Math.atan2(e, n)/D2R; const rel = ((az - azStart) % 360 + 360) % 360; if(rel >= VS.hfov) continue; const el = Math.atan2(u, rg)/D2R; if(el < VS.pitch - VS.vfov/2 || el > VS.pitch + VS.vfov/2) continue;
+          const ai = Math.min(na-1, Math.floor(rel/da)), ri = Math.min(nr-1, Math.floor(rg/dr)); cnt[ri*na+ai]++; kept++; if(rg > maxVis[ri*na+ai]) maxVis[ri*na+ai] = rg; }
+      } }
+      delete pd.getDepth;
+    }catch(e){ console.error(e); toast('가시권 계산 오류: '+e.message, 5000); }
+    camera.setView({ destination: saved.pos, orientation:{ direction: saved.dir, up: saved.up } }); camera.frustum.fov = saved.fov; globe.depthTestAgainstTerrain = saved.dtt;
+    // 격자 생성
+    clearResult(); previewWedge();
+    const vis=[], hid=[], out=[]; let visArea=0, hidArea=0, farthest=0;
+    for(let ri=0; ri<nr; ri++){ for(let ai=0; ai<na; ai++){ const r0 = ri*dr, r1 = r0+dr; const a0 = (azStart + ai*da)*D2R, a1 = (azStart + (ai+1)*da)*D2R; const area = 0.5*(r1*r1 - r0*r0)*(a1-a0);
+      const rc = (r0+r1)/2; const elC = Math.atan2(-VS.eye, rc)/D2R; const inV = elC >= VS.pitch - VS.vfov/2 - 2 && elC <= VS.pitch + VS.vfov/2 + 2;
+      const k = ri*na+ai; const st = cnt[k] > 0 ? 'vis' : (inV ? 'hid' : 'out'); if(st==='vis'){ visArea += area; if(maxVis[k] > farthest) farthest = maxVis[k]; } else if(st==='hid') hidArea += area;
+      const poly = [localPoint(enu, r0*Math.sin(a0), r0*Math.cos(a0), 0), localPoint(enu, r1*Math.sin(a0), r1*Math.cos(a0), 0), localPoint(enu, r1*Math.sin(a1), r1*Math.cos(a1), 0), localPoint(enu, r0*Math.sin(a1), r0*Math.cos(a1), 0)];
+      if(ri===0){ poly[0] = localPoint(enu, 0.3*Math.sin(a0), 0.3*Math.cos(a0), 0); poly[3] = localPoint(enu, 0.3*Math.sin(a1), 0.3*Math.cos(a1), 0); }
+      const col = st==='vis' ? Cesium.Color.fromCssColorString('#3FDD6A').withAlpha(0.5) : st==='hid' ? Cesium.Color.fromCssColorString('#FF4D4D').withAlpha(0.5) : Cesium.Color.fromCssColorString('#9AA7B8').withAlpha(0.18);
+      (st==='vis'?vis: st==='hid'?hid: out).push(new Cesium.GeometryInstance({ geometry: new Cesium.PolygonGeometry({ polygonHierarchy: new Cesium.PolygonHierarchy(poly), vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT }), attributes:{ color: Cesium.ColorGeometryInstanceAttribute.fromColor(col) } })); } }
+    for(const arr of [out, hid, vis]){ if(!arr.length) continue; const gp = new Cesium.GroundPrimitive({ geometryInstances: arr, appearance: new Cesium.PerInstanceColorAppearance({ flat:true }), classificationType: Cesium.ClassificationType.BOTH, asynchronous: true }); scene.primitives.add(gp); VS.prims.push(gp); }
+    const tot = visArea + hidArea; VS.stats = { visArea, hidArea, pct: tot? visArea/tot*100 : 0, farthest, samples, kept, cells: na*nr };
+    VS.busy = false; setHud('가시권 · 보이는 면적 '+Math.round(VS.stats.pct)+'% · 방위 '+Math.round(VS.heading)+'° · 가로 '+VS.hfov+'° / 세로 '+VS.vfov+'° · 반경 '+VS.radius+' m');
+    renderCard();
+  }
+  /* 관측점 시점 보기 */
+  function firstPerson(){ if(!VS.O) return; if(!VS.saved) VS.saved = { pos: camera.position.clone(), dir: camera.direction.clone(), up: camera.up.clone(), fov: camera.frustum.fov };
+    VS.savedCol = scene.screenSpaceCameraController.enableCollisionDetection; scene.screenSpaceCameraController.enableCollisionDetection = false; camera.setView({ destination: VS.O, orientation:{ heading: VS.heading*D2R, pitch: VS.pitch*D2R, roll:0 } }); camera.frustum.fov = Math.min(150, Math.max(10, VS.hfov))*D2R; VS.fp = true; toast('관측점 시점 · 가로 시야각 '+Math.min(150,VS.hfov)+'° · 마우스로 둘러볼 수 있습니다 · "원래 시점으로"로 복귀', 4000); renderCard(); }
+  function restoreView(){ if(VS.savedCol!=null){ scene.screenSpaceCameraController.enableCollisionDetection = VS.savedCol; VS.savedCol = null; } if(VS.saved){ camera.setView({ destination: VS.saved.pos, orientation:{ direction: VS.saved.dir, up: VS.saved.up } }); camera.frustum.fov = VS.saved.fov; } VS.saved = null; VS.fp = false; renderCard(); }
+  /* 카드 */
+  function renderCard(){
+    if(!VS.active) return; STATE.point = null; $('#card').classList.add('open');
+    $('#cardTitle').innerHTML = '가시권 분석<small>'+(VS.ground? '관측점 지정됨 · 깊이 버퍼 기반 (DERIVED)' : '관측점을 지정하세요')+'</small>';
+    const S = VS.stats;
+    const slider = (id, label, min, max, step, val, unit) => '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12.5px"><span style="color:var(--text-dim);width:64px;white-space:nowrap">'+label+'</span><input type="range" id="'+id+'" min="'+min+'" max="'+max+'" step="'+step+'" value="'+val+'" style="flex:1"><b id="'+id+'Lbl" style="min-width:52px;text-align:right">'+val+unit+'</b></div>';
+    $('#cardBody').innerHTML = '<div class="sec">'
+      + (VS.ground ? (S ? '<div class="kv"><div>보이는 면적<b style="color:#3FDD6A">'+Math.round(S.pct)+'%</b></div><div>가려진 면적<b style="color:#FF4D4D">'+Math.round(100-S.pct)+'%</b></div><div>보이는 면적<b>'+(S.visArea>10000? (S.visArea/10000).toFixed(2)+' ha' : Math.round(S.visArea).toLocaleString()+' ㎡')+'</b></div><div>최대 가시거리<b>'+Math.round(S.farthest)+' m</b></div></div><div class="meta"><span class="tag derived">DERIVED</span> 격자 '+S.cells+'칸 · 표면점 '+S.kept.toLocaleString()+'개 (깊이 버퍼) · 초록: 보임 · 빨강: 가려짐 · 회색: 시야각 밖</div>' : '<p class="lead">계산 중…</p>')
+        : '<p class="lead"><b>3D 모델 위 관측 지점을 누른 채</b> 보고 싶은 방향으로 끌어서 놓으세요. 끈 거리가 분석 반경이 됩니다. (클릭만 하면 아래 값으로 계산)</p>')
+      + '</div><div class="sec"><h4 style="margin:0 0 6px;font-size:13px">시야 설정</h4>'
+      + slider('vsH','방향(방위)',0,359,1,Math.round(VS.heading),'°') + slider('vsHf','가로 각도',10,360,5,VS.hfov,'°') + slider('vsVf','세로 각도',10,120,5,VS.vfov,'°') + slider('vsP','상하 각도',-60,30,1,VS.pitch,'°') + slider('vsR','반경',30,1000,10,VS.radius,' m') + slider('vsE','눈높이',0.5,50,0.5,VS.eye,' m')
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="cta" id="vsFp" style="flex:1;margin:0"'+(VS.ground?'':' disabled')+'>'+(VS.fp?'관측점 시점 (보는 중)':'👁 이 지점에서 보기')+'</button><button class="cta ghost" id="vsBack" style="flex:1;margin:0"'+(VS.fp?'':' disabled')+'>원래 시점으로</button></div>'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="cta ghost" id="vsRe" style="flex:1;margin:0">관측점 다시 지정</button><button class="cta ghost" id="vsCalc" style="flex:1;margin:0"'+(VS.ground?'':' disabled')+'>다시 계산</button></div>'
+      + '<div class="meta">관측점 시점에서는 마우스로 둘러볼 수 있습니다. 결과 격자는 3D 모델 표면에 겹쳐 표시됩니다. 분석을 끄려면 분석 › 가시권을 다시 누르세요.</div></div>';
+    const bind = (id, key, fmt) => { const el = $('#'+id); if(!el) return; el.oninput = e=>{ VS[key] = +e.target.value; $('#'+id+'Lbl').textContent = fmt(VS[key]); if(VS.ground && !VS.busy) previewWedge(); }; el.onchange = ()=>{ if(VS.ground) setTimeout(compute, 30); }; };
+    bind('vsH','heading',v=>v+'°'); bind('vsHf','hfov',v=>v+'°'); bind('vsVf','vfov',v=>v+'°'); bind('vsP','pitch',v=>v+'°'); bind('vsR','radius',v=>v+' m'); bind('vsE','eye',v=>v+' m');
+    $('#vsFp').onclick = firstPerson; $('#vsBack').onclick = restoreView; $('#vsRe').onclick = ()=>{ if(VS.fp) restoreView(); arm(); }; $('#vsCalc').onclick = ()=>setTimeout(compute, 30);
+  }
+  /* 드래그 입력 */
+  function arm(){ VS.armed = true; VS.dragging = false; clearResult(); VS.ground = null; VS.O = null; setHud('3D 모델 위 <b>관측 지점을 누른 채</b> 보고 싶은 방향으로 끌어서 놓으세요'); renderCard(); }
+  function ensureHandler(){ if(VS.handler) return; const h = new Cesium.ScreenSpaceEventHandler(scene.canvas); VS.handler = h;
+    h.setInputAction(e=>{ if(!VS.active || !VS.armed || VS.busy) return; const g = pickGround(e.position); if(!g) return; VS.ground = g; VS.dragging = true; scene.screenSpaceCameraController.enableInputs = false; previewWedge(); setHud('방향으로 끌어서 놓으세요 · 끈 거리 = 반경'); }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
+    h.setInputAction(e=>{ if(!VS.dragging) return; const g = pickGround(e.endPosition); if(!g) return; const enu = enuOf(VS.ground); const d = Cesium.Cartesian3.subtract(g, VS.ground, new Cesium.Cartesian3()); const ea = Cesium.Cartesian3.dot(d, enu.east), no = Cesium.Cartesian3.dot(d, enu.north); const rg = Math.hypot(ea, no); if(rg > 3){ VS.heading = ((Math.atan2(ea, no)/D2R) + 360) % 360; VS.radius = Math.max(30, Math.min(1000, Math.round(rg/10)*10)); } previewWedge(); setHud('방위 '+Math.round(VS.heading)+'° · 반경 '+VS.radius+' m · 놓으면 계산'); }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+    h.setInputAction(e=>{ if(!VS.dragging) return; VS.dragging = false; VS.armed = false; VS.justDone = true; scene.screenSpaceCameraController.enableInputs = true; setTimeout(compute, 30); }, Cesium.ScreenSpaceEventType.LEFT_UP);
+  }
+  // 앱의 기본 클릭(지점 카드)·측정과 충돌 방지: 가시권 지정 중에는 기본 클릭을 무시
+  const _clickVS = handler.getInputAction(Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction(e=>{ if(VS.active && (VS.armed || VS.justDone)) { VS.justDone=false; return; } return _clickVS(e); }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  function on(){ VS.active = true; ensureHandler(); if(!STATE.on.has('tiles')) toast('3D 모델이 꺼져 있습니다 · SITE › 3D 모델 › 3D Tiles를 켜고 현장 근처에서 사용하세요', 5000); arm(); }
+  function off(){ VS.active = false; VS.armed = false; VS.dragging = false; scene.screenSpaceCameraController.enableInputs = true; if(VS.fp) restoreView(); clearResult(); setHud(null); if($('#vsH')) $('#card').classList.remove('open'); }
+  L3.view = { on, off, src:()=> VS.active && VS.stats ? '<b>가시권</b> 깊이 버퍼 분석 (DERIVED)' : '' };
+  window.sistechViewshed = VS;
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
