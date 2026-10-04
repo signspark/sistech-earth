@@ -2324,6 +2324,28 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   syncTimebar();
 })();
 
+/* ---------- 24. 상단 나침반: 바늘이 카메라 방위에 따라 회전 · 누르면 화면 중심 기준으로 진북 정렬 ---------- */
+(function(){
+  const icons = document.querySelector('#topbar .icons'); if(!icons) return;
+  const b = document.createElement('button'); b.id = 'btnNorth'; b.setAttribute('aria-label','진북으로 정렬'); b.title = '진북으로 정렬';
+  b.innerHTML = '<svg viewBox="0 0 24 24" style="overflow:visible"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".55"/><g id="northNeedle" style="transform-origin:12px 12px;transition:transform .08s linear"><path d="M12 3.6 15 12h-6z" fill="#FF5D5D" stroke="none"/><path d="M12 20.4 9 12h6z" fill="currentColor" stroke="none" opacity=".9"/><circle cx="12" cy="12" r="1.3" fill="#03122A" stroke="none"/></g><text x="12" y="2.2" text-anchor="middle" font-size="5.2" font-weight="800" fill="#FF5D5D" stroke="none" id="northN" style="transform-origin:12px 12px">N</text></svg>';
+  icons.insertBefore(b, icons.firstChild);
+  const needle = b.querySelector('#northNeedle'), nTxt = b.querySelector('#northN');
+  let last = null;
+  scene.postRender.addEventListener(()=>{ const h = Cesium.Math.toDegrees(camera.heading); const r = Math.round(h*2)/2; if(r===last) return; last = r;
+    needle.style.transform = 'rotate('+(-r)+'deg)'; nTxt.style.transform = 'rotate('+(-r)+'deg)';
+    const off = Math.min(r, 360-r); b.title = off < 0.5 ? '진북 정렬됨 (방위 0°)' : '진북으로 정렬 · 현재 화면 위쪽 방위 '+Math.round(r)+'°'; b.classList.toggle('on', off >= 0.5); });
+  b.onclick = ()=>{
+    const cv = scene.canvas, center = new Cesium.Cartesian2(cv.clientWidth/2, cv.clientHeight/2);
+    let target = null; try{ if(scene.pickPositionSupported){ const pk = scene.pick(center); if(Cesium.defined(pk)) target = scene.pickPosition(center); } }catch(e){}
+    if(!target) target = camera.pickEllipsoid(center, globe.ellipsoid);
+    const pitch = camera.pitch;
+    if(target){ const range = Cesium.Cartesian3.distance(camera.position, target);
+      camera.flyToBoundingSphere(new Cesium.BoundingSphere(target, 0), { offset: new Cesium.HeadingPitchRange(0, pitch, range), duration: 0.8 }); }
+    else camera.flyTo({ destination: camera.position.clone(), orientation:{ heading:0, pitch, roll:0 }, duration: 0.8 });
+  };
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
