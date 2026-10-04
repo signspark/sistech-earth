@@ -2315,6 +2315,15 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   apply();
 })();
 
+/* ---------- 23. 하단 시간 바: SITE › 분석 창을 열었을 때만 표시 ---------- */
+(function(){
+  const bar = $('#timebar'); if(!bar) return;
+  function syncTimebar(){ const show = STATE.mode==='site' && STATE.cat==='analysis'; bar.style.display = show ? '' : 'none';
+    if(!show){ try{ stopPlay(); }catch(e){} if(STATE.tIdx && !STATE.on.has('shadow')) setT(0); } }
+  const _rc = renderCats; renderCats = function(){ const r = _rc.apply(this, arguments); syncTimebar(); return r; };
+  syncTimebar();
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
