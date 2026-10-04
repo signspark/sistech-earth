@@ -2631,7 +2631,11 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
         material: r.mode==='walk' ? new C.PolylineDashMaterialProperty({ color: C.Color.fromCssColorString(m.color), dashLength: 14 }) : C.Color.fromCssColorString(m.color).withAlpha(.95) } }));
     }
   }
-  function makeVehicle(){ const md = MODELS[NV.route.mode];
+  function ringImg(color){ const c=document.createElement('canvas'); c.width=c.height=96; const g=c.getContext('2d'); g.lineWidth=7; g.strokeStyle='rgba(3,18,42,.65)'; g.beginPath(); g.arc(48,52,34,0,Math.PI*2); g.stroke(); g.lineWidth=3.5; g.strokeStyle=color; g.beginPath(); g.arc(48,52,34,0,Math.PI*2); g.stroke();
+    g.fillStyle=color; g.strokeStyle='rgba(3,18,42,.8)'; g.lineWidth=2; g.beginPath(); g.moveTo(48,2); g.lineTo(60,20); g.lineTo(48,15); g.lineTo(36,20); g.closePath(); g.fill(); g.stroke(); return c.toDataURL(); }
+  const RING = {}; 
+  function makeVehicle(){ const md = MODELS[NV.route.mode]; const col = MODE[NV.route.mode].color; RING[col] = RING[col] || ringImg(col);
+    NV.ents.push(viewer.entities.add({ position: new C.CallbackProperty(()=>NV.cur, false), billboard:{ image: RING[col], width: 64, height: 64, disableDepthTestDistance: Number.POSITIVE_INFINITY, rotation: new C.CallbackProperty(()=> -C.Math.toRadians(NV.hdg) + camera.heading, false) } }));
     NV.veh = viewer.entities.add({ position: new C.CallbackProperty(()=>NV.cur, false), orientation: new C.CallbackProperty(()=> NV.cur ? C.Transforms.headingPitchRollQuaternion(NV.cur, new C.HeadingPitchRoll(C.Math.toRadians(NV.hdg + md.off), 0, 0)) : undefined, false),
       model:{ uri: md.uri, scale: md.scale, minimumPixelSize: md.minPx, maximumScale: 40, runAnimations: true } });
   }
