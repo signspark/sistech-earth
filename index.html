@@ -1447,5 +1447,454 @@ console.log('SISTECH EARTH ext v2 loaded', Object.keys(L).length, 'layers');
 })();
 
 </script>
+<script>
+/* =====================================================================
+   SISTECH EARTH 확장 v3 — 한국 위성 (전용 레이어·정보 카드·위치 보강) + 천리안 2A 실제 영상
+   - 한국 위성 카탈로그 36기(TLE 추적 35기) + TLE 비공개/비지구궤도 6기(목록만)
+   - '위성 위치' 레이어에 한국 위성 전부 병합, 정보 카드 확장
+   - 천리안 2A(GK2A) 영상: 국가기상위성센터 공개 PNG → 브라우저에서 재투영(LCC/GEOS → 경위도) → Cesium 오버레이
+   ===================================================================== */
+(function(){
+const deg = Cesium.Math.toDegrees, rad = Cesium.Math.toRadians;
+const kst = (d) => new Date(d).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------- 1. 한국 위성 카탈로그 (2026-10-04 기준, 출처: 우주항공청·항우연·KT SAT·쎄트렉아이·언론 보도·CelesTrak) ---------- */
+const KGROUP = {
+  eo:   { name:'지구관측 (정부)', color:'#BFE33A' },
+  geo:  { name:'정지궤도 기상·해양', color:'#F5D76E' },
+  comm: { name:'통신 (무궁화)', color:'#7FB7F5' },
+  sci:  { name:'과학·기술', color:'#C9A7FF' },
+  priv: { name:'민간·대학·지자체', color:'#3FC7C0' },
+};
+const KSAT = [
+  // --- 지구관측 (정부: 우주항공청·항우연) ---
+  { id:29268, name:'ARIRANG-2 (KOMPSAT-2)', ko:'아리랑 2호', g:'eo', launch:'2006-07-28', rocket:'로콧 (러시아 플레세츠크)', op:'항우연', orbit:'태양동기 685 km', mission:'다목적 실용위성 2호 · 국토 관측', sensor:'광학 1 m 흑백 / 4 m 컬러 (MSC)', status:'임무 종료', imaging:false, url:'https://www.kari.re.kr/kor/sub03_03_01.do' },
+  { id:38338, name:'ARIRANG-3 (KOMPSAT-3)', ko:'아리랑 3호', g:'eo', launch:'2012-05-18', rocket:'H-IIA (일본 다네가시마)', op:'항우연', orbit:'태양동기 685 km', mission:'고해상도 국토·재난 관측 영상 공급', sensor:'광학 0.7 m 흑백 / 2.8 m 컬러 (AEISS)', status:'운영 중', imaging:true, url:'https://www.kari.re.kr/kor/sub03_03_01.do' },
+  { id:39227, name:'ARIRANG-5 (KOMPSAT-5)', ko:'아리랑 5호', g:'eo', launch:'2013-08-22', rocket:'드네프르 (러시아 야스니)', op:'항우연', orbit:'태양동기 550 km', mission:'전천후·주야간 레이더 영상 (해양·재난·GOLDEN)', sensor:'X-band SAR 1 m (COSI)', status:'운영 중', imaging:true, url:'https://www.kari.re.kr/kor/sub03_03_01.do' },
+  { id:40536, name:'KOMPSAT-3A', ko:'아리랑 3A호', g:'eo', launch:'2015-03-26', rocket:'드네프르 (러시아 야스니)', op:'항우연', orbit:'태양동기 528 km (설계) · 현재 약 390 km', mission:'고해상도 광학 + 적외선(열) 관측', sensor:'광학 0.55 m 흑백 / 2.2 m 컬러 · 적외선 5.5 m', status:'운영 중', imaging:true, url:'https://www.kari.re.kr/kor/sub03_03_01.do' },
+  { id:66820, name:'KOMPSAT-7', ko:'아리랑 7호', g:'eo', launch:'2025-12-02', rocket:'베가-C VV28 (프랑스령 기아나 쿠루)', op:'우주항공청·항우연', orbit:'태양동기 약 570 km', mission:'초고해상도 광학·적외선 관측 (재해·국토·환경 감시) · 수명 5년 · 1,840 kg', sensor:'광학 0.3 m 흑백 (AEISS-HR) + 적외선 · 국내 최초 제어모멘트자이로(CMG)', status:'운영 중 (초기 운영)', imaging:true, url:'https://www.kasa.go.kr' },
+  { id:47932, name:'CAS500-1', ko:'차세대중형위성 1호 (국토위성 1호)', g:'eo', launch:'2021-03-22', rocket:'소유즈-2.1a (카자흐스탄 바이코누르)', op:'국토지리정보원·항우연', orbit:'태양동기 500 km', mission:'정밀 지도 제작·국토 변화 모니터링 (국토위성)', sensor:'광학 0.5 m 흑백 / 2 m 컬러', status:'운영 중', imaging:true, url:'https://www.kari.re.kr/kor/sub03_03_01.do' },
+  { id:69013, name:'CAS500-2', ko:'차세대중형위성 2호 (국토위성 2호)', g:'eo', launch:'2026-05-03', rocket:'팰컨 9 (미국 밴덴버그) · 러-우 전쟁으로 소유즈→팰컨9 교체', op:'국토지리정보원·항우연', orbit:'태양동기 498 km', mission:'지상 정밀 관측 · 1호와 동일 사양 · 534 kg', sensor:'광학 0.5 m 흑백 / 2 m 컬러', status:'운영 중 (초기 운영)', imaging:true, url:'https://www.kasa.go.kr' },
+  { id:66655, name:'CAS500-3', ko:'차세대중형위성 3호', g:'eo', launch:'2025-11-27', rocket:'누리호 4차 (나로우주센터)', op:'우주항공청·항우연', orbit:'태양동기 600 km', mission:'누리호 4차 주탑재위성 · 우주과학·핵심기술 검증', sensor:'우주과학·기술검증 탑재체', status:'운영 중', imaging:false, url:'https://www.kasa.go.kr' },
+  { id:69869, name:'CAS500-4', ko:'차세대중형위성 4호 (농림위성)', g:'eo', launch:'2026-07-07', rocket:'팰컨 9 (미국 밴덴버그)', op:'우주항공청·농촌진흥청·산림청', orbit:'태양동기 888 km', mission:'국내 첫 농림 특화 위성 · 작황·산림·산불 관측 · 3일마다 전국 촬영 · 514 kg', sensor:'광학 5 m 컬러 · 관측폭 120 km', status:'운영 중 (초기 운영)', imaging:true, url:'https://www.kasa.go.kr' },
+  { id:59587, name:'NEONSAT-1', ko:'초소형군집위성 1호', g:'eo', launch:'2024-04-24', rocket:'일렉트론 (뉴질랜드 마히아)', op:'우주항공청 · KAIST 인공위성연구소·쎄트렉아이', orbit:'태양동기 500 km', mission:'한반도 고빈도 정밀 감시 군집위성 시제기 (총 11기 계획)', sensor:'광학 약 1 m 흑백', status:'운영 중', imaging:true, url:'https://www.kasa.go.kr' },
+  { id:67614, name:'NEONSAT-1A', ko:'초소형군집위성 검증기 (1A)', g:'eo', launch:'2026-01-30', rocket:'일렉트론 "Bridging The Swarm" (뉴질랜드 마히아)', op:'우주항공청 · KAIST·쎄트렉아이·항우연', orbit:'태양동기 500 km (오후 궤도)', mission:'양산형 군집위성 기술 검증 (추력·고도 유지·간격 배치·영상 품질) · 약 3년', sensor:'광학 약 1 m', status:'운영 중', imaging:true, url:'https://www.kasa.go.kr' },
+  // --- 정지궤도 기상·해양 ---
+  { id:43823, name:'GEO-KOMPSAT-2A', ko:'천리안 2A호', g:'geo', launch:'2018-12-05', rocket:'아리안 5 (프랑스령 기아나 쿠루)', op:'기상청 국가기상위성센터·항우연', orbit:'정지궤도 128.2°E', mission:'기상·우주기상 관측 · 2분(한반도)~10분(전구) 간격', sensor:'AMI 16채널 (가시 0.5 km · 적외 2 km) · KSEM 우주기상', status:'운영 중', imaging:false, url:'https://nmsc.kma.go.kr' },
+  { id:45246, name:'GEO-KOMPSAT-2B', ko:'천리안 2B호', g:'geo', launch:'2020-02-19', rocket:'아리안 5 (프랑스령 기아나 쿠루)', op:'해양수산부·환경부·항우연', orbit:'정지궤도 128.2°E', mission:'해양(적조·유류) · 대기환경(미세먼지·오존) 관측', sensor:'GOCI-II 해양 250 m · GEMS 환경 분광계', status:'운영 중', imaging:false, url:'https://www.kari.re.kr' },
+  // --- 통신 ---
+  { id:29349, name:'KOREASAT 5 (MUGUNGWHA 5)', ko:'무궁화 5호', g:'comm', launch:'2006-08-22', rocket:'제니트-3SL (시런치, 태평양)', op:'KT SAT · 국방부 (민군 겸용)', orbit:'정지궤도 113°E', mission:'국내 최초 민군 겸용 통신위성', sensor:'Ku·C·X 밴드 중계기', status:'운영 중 (5A로 임무 이관)', imaging:false, url:'https://www.ktsat.com' },
+  { id:37265, name:'KOREASAT 6', ko:'무궁화 6호 (올레 1호)', g:'comm', launch:'2010-12-29', rocket:'아리안 5 (프랑스령 기아나 쿠루)', op:'KT SAT', orbit:'정지궤도 116°E', mission:'방송·통신 (스카이라이프 직접위성방송)', sensor:'Ku 밴드 중계기', status:'운영 중 (6A로 교체 진행)', imaging:false, url:'https://www.ktsat.com' },
+  { id:42691, name:'KOREASAT 7', ko:'무궁화 7호', g:'comm', launch:'2017-05-05', rocket:'아리안 5 (프랑스령 기아나 쿠루)', op:'KT SAT', orbit:'정지궤도 116°E', mission:'한국·필리핀·인도차이나·인도네시아 방송통신', sensor:'Ku·Ka 밴드 중계기', status:'운영 중', imaging:false, url:'https://www.ktsat.com' },
+  { id:42984, name:'KOREASAT 5A', ko:'무궁화 5A호', g:'comm', launch:'2017-10-31', rocket:'팰컨 9 (미국 케네디우주센터)', op:'KT SAT', orbit:'정지궤도 113°E', mission:'5호 대체 · 해양 통신(선박)·방송', sensor:'Ku 밴드 중계기', status:'운영 중', imaging:false, url:'https://www.ktsat.com' },
+  { id:45920, name:'KOREASAT 116', ko:'ANASIS-II (등록명 무궁화 116)', g:'comm', launch:'2020-07-21', rocket:'팰컨 9 (미국 케이프커내버럴)', op:'국방부 (군 전용 통신위성)', orbit:'정지궤도 116°E', mission:'국내 최초 군 전용 통신위성 (ITU 등록명 KOREASAT 116)', sensor:'군 통신 중계기 (비공개)', status:'운영 중', imaging:false, url:'https://ko.wikipedia.org/wiki/ANASIS-II' },
+  { id:61910, name:'KOREASAT 6A', ko:'무궁화 6A호', g:'comm', launch:'2024-11-12', rocket:'팰컨 9 (미국 케네디우주센터)', op:'KT SAT', orbit:'정지궤도 116°E', mission:'6호 대체 · 방송·통신 · 15년 수명', sensor:'Ku 밴드 중계기 20기', status:'운영 중', imaging:false, url:'https://www.ktsat.com' },
+  // --- 과학·기술 ---
+  { id:39422, name:'STSAT-3', ko:'과학기술위성 3호', g:'sci', launch:'2013-11-21', rocket:'드네프르 (러시아 야스니)', op:'KAIST 인공위성연구소·항우연', orbit:'태양동기 600 km', mission:'우주 적외선 관측(MIRIS)·지구 적외선 관측', sensor:'적외선 카메라 MIRIS · 소형 영상분광기 COMIS', status:'임무 종료 (추정)', imaging:false, url:'https://satrec.kaist.ac.kr' },
+  { id:43811, name:'NEXTSAT-1', ko:'차세대소형위성 1호', g:'sci', launch:'2018-12-04', rocket:'팰컨 9 SSO-A (미국 밴덴버그)', op:'KAIST 인공위성연구소', orbit:'태양동기 575 km', mission:'우주폭풍·별 탄생 영역 관측 · 핵심기술 검증', sensor:'ISSS 우주폭풍 · NISS 근적외선 분광기', status:'운영 중 (임무 연장)', imaging:false, url:'https://satrec.kaist.ac.kr' },
+  { id:56743, name:'NEXTSAT-2', ko:'차세대소형위성 2호', g:'sci', launch:'2023-05-25', rocket:'누리호 3차 (나로우주센터)', op:'KAIST 인공위성연구소', orbit:'태양동기 550 km (여명-황혼 궤도)', mission:'누리호 3차 주탑재위성 · 소형 영상레이더 기술 검증', sensor:'X-band 소형 SAR 5 m', status:'운영 중', imaging:true, url:'https://satrec.kaist.ac.kr' },
+  { id:56745, name:'SNIPE 2', ko:'도요샛 2호', g:'sci', launch:'2023-05-25', rocket:'누리호 3차 (나로우주센터)', op:'한국천문연구원', orbit:'태양동기 550 km', mission:'세계 최초 편대비행 큐브위성 · 우주날씨(플라즈마) 관측', sensor:'6U 큐브샛 10 kg · 입자검출기·자력계', status:'운영 중', imaging:false, url:'https://www.kasi.re.kr' },
+  { id:56744, name:'SNIPE 4', ko:'도요샛 4호', g:'sci', launch:'2023-05-25', rocket:'누리호 3차 (나로우주센터)', op:'한국천문연구원', orbit:'태양동기 550 km', mission:'도요샛 편대 (1호 교신 두절 · 3호 사출 실패)', sensor:'6U 큐브샛 10 kg', status:'운영 중', imaging:false, url:'https://www.kasi.re.kr' },
+  // --- 민간·대학·지자체 ---
+  { id:63229, name:'SPACEEYE-T1', ko:'스페이스아이-T (SpaceEye-T)', g:'priv', launch:'2025-03-15', rocket:'팰컨 9 트랜스포터-13 (미국 밴덴버그)', op:'쎄트렉아이 (민간)', orbit:'태양동기 약 500 km', mission:'국내 최초 25 cm급 상용 초고해상도 광학위성 · 650 kg · 후속기 2028년', sensor:'광학 0.25 m (차량 종류 식별)', status:'운영 중', imaging:true, url:'http://www.si-imaging.com/kr/page/21' },
+  { id:58323, name:'OBSERVER-1A', ko:'옵저버-1A', g:'priv', launch:'2023-11-12', rocket:'팰컨 9 트랜스포터-9 (미국 밴덴버그)', op:'나라스페이스 (민간)', orbit:'태양동기 약 520 km', mission:'국내 민간 첫 초소형 지구관측 큐브위성', sensor:'16U 큐브샛 · 광학 1.5 m (AI 초해상 0.5 m)', status:'운영 중', imaging:true, url:'https://www.naraspace.com' },
+  { id:66771, name:'GYEONGGISAT-1', ko:'경기샛-1', g:'priv', launch:'2025-11-29', rocket:'팰컨 9 (미국 밴덴버그)', op:'경기도 · 나라스페이스', orbit:'태양동기 약 500 km', mission:'국내 최초 지자체 주도 기후·환경 위성 (재난·도시 변화·작황)', sensor:'광학 큐브샛', status:'운영 중', imaging:true, url:'https://www.naraspace.com' },
+  { id:59117, name:'CONTECSAT-1', ko:'컨텍샛-1', g:'priv', launch:'2024-03-05', rocket:'팰컨 9 트랜스포터-10 (미국 밴덴버그)', op:'컨텍 (민간)', orbit:'태양동기 약 500 km', mission:'민간 지상국 기업의 첫 자체 지구관측 위성', sensor:'광학 카메라 (큐브샛급)', status:'운영 중', imaging:false, url:'https://www.contec.kr' },
+  { id:68989, name:'BUSANSAT', ko:'부산샛', g:'priv', launch:'2026 (상반기)', rocket:'팰컨 9 라이드셰어', op:'부산광역시 · 민간 컨소시엄', orbit:'저궤도', mission:'지자체 최초 해양 관측 위성 · 다누리 편광카메라 기술 적용', sensor:'12U 큐브샛 12 kg · 편광 카메라', status:'운영 중 (초기)', imaging:false, url:'https://www.busan.go.kr' },
+  { id:52900, name:'MIMAN', ko:'미먼 (MIMAN)', g:'priv', launch:'2022-06-21', rocket:'누리호 2차 (나로우주센터)', op:'연세대학교', orbit:'태양동기 700 km', mission:'누리호 2차 큐브위성 · 한반도 미세먼지 관측', sensor:'3U 큐브샛 · 광학 카메라', status:'교신 제한', imaging:false, url:'https://www.kari.re.kr' },
+  { id:52897, name:'STEP CUBE LAB-II', ko:'스텝큐브랩-II', g:'priv', launch:'2022-06-21', rocket:'누리호 2차 (나로우주센터)', op:'조선대학교', orbit:'태양동기 700 km', mission:'백두산 분화 징후·열영상 관측', sensor:'6U 큐브샛 · 열영상·광학 카메라', status:'교신 제한', imaging:false, url:'https://www.kari.re.kr' },
+  { id:43784, name:'SNUGLITE', ko:'스누글라이트 (SNUGLITE)', g:'priv', launch:'2018-12-04', rocket:'팰컨 9 SSO-A (미국 밴덴버그)', op:'서울대학교', orbit:'태양동기 575 km', mission:'GPS 이중주파수 수신기 검증 큐브위성', sensor:'2U 큐브샛', status:'임무 종료 (추정)', imaging:false, url:'https://snu.ac.kr' },
+  { id:43782, name:'SNUSAT-2', ko:'스누샛-2', g:'priv', launch:'2018-12-04', rocket:'팰컨 9 SSO-A (미국 밴덴버그)', op:'서울대학교', orbit:'태양동기 575 km', mission:'큐브위성 경연대회 출신 지구관측 큐브샛', sensor:'3U 큐브샛 · 광학 카메라', status:'임무 종료 (추정)', imaging:false, url:'https://snu.ac.kr' },
+  { id:52899, name:'SNUGLITE-II', ko:'스누글라이트-II', g:'priv', launch:'2022-06-21', rocket:'누리호 2차 (나로우주센터)', op:'서울대학교', orbit:'태양동기 700 km', mission:'GPS 라디오 엄폐(RO) 대기 관측', sensor:'3U 큐브샛', status:'운영 중', imaging:false, url:'https://snu.ac.kr' },
+  { id:66661, name:'SNUGLITE-III', ko:'스누글라이트-III', g:'priv', launch:'2025-11-27', rocket:'누리호 4차 (나로우주센터)', op:'서울대학교', orbit:'태양동기 600 km', mission:'누리호 4차 부탑재 큐브위성', sensor:'큐브샛', status:'운영 중', imaging:false, url:'https://snu.ac.kr' },
+];
+// TLE 비공개 · 비지구궤도 (목록만)
+const KSAT_NOTLE = [
+  { ko:'아리랑 6호', g:'eo', launch:'2027년 2분기 예정 (5차례 연기)', rocket:'베가-C', op:'우주항공청·항우연', orbit:'태양동기 505 km (예정)', mission:'전천후 레이더 관측 · 아리랑 5호 후속', sensor:'C-band SAR 0.5 m', status:'발사 대기' },
+  { ko:'425 정찰위성 1호 (EO/IR)', g:'eo', launch:'2023-12-02', rocket:'팰컨 9 (미국 밴덴버그)', op:'국방부·국방과학연구소', orbit:'저궤도 (약 500 km)', mission:'군 독자 정찰위성 · 전자광학·적외선', sensor:'광학 0.3 m급 (비공개)', status:'운영 중 · 궤도 요소 비공개 (위치 표시 불가)' },
+  { ko:'425 정찰위성 2호 (SAR)', g:'eo', launch:'2024-04-08', rocket:'팰컨 9 (미국 케이프커내버럴)', op:'국방부·국방과학연구소', orbit:'저궤도', mission:'군 정찰 레이더 위성', sensor:'SAR (비공개)', status:'운영 중 · 궤도 요소 비공개' },
+  { ko:'425 정찰위성 3호 (SAR)', g:'eo', launch:'2024-12-21', rocket:'팰컨 9 (미국 밴덴버그)', op:'국방부·국방과학연구소', orbit:'저궤도', mission:'군 정찰 레이더 위성', sensor:'SAR (비공개)', status:'운영 중 · 궤도 요소 비공개' },
+  { ko:'425 정찰위성 4호 (SAR)', g:'eo', launch:'2025-04-22', rocket:'팰컨 9 (미국 밴덴버그)', op:'국방부·국방과학연구소', orbit:'저궤도', mission:'군 정찰 레이더 위성', sensor:'SAR (비공개)', status:'운영 중 · 궤도 요소 비공개' },
+  { ko:'425 정찰위성 5호 (SAR)', g:'eo', launch:'2025년 (확인 필요)', rocket:'팰컨 9', op:'국방부·국방과학연구소', orbit:'저궤도', mission:'425 사업 마지막 위성 · 5기 군집 완성', sensor:'SAR (비공개)', status:'확인 필요 · 궤도 요소 비공개' },
+  { ko:'다누리 (KPLO)', g:'sci', launch:'2022-08-05', rocket:'팰컨 9 (미국 케이프커내버럴)', op:'항우연·우주항공청', orbit:'달 궤도 100 km (지구 궤도 아님)', mission:'한국 최초 달 궤도선 · 달 표면·자원 관측 · 임무 연장 운영', sensor:'고해상도 카메라 LUTI · 편광카메라 PolCam · 자력계 · 섀도캠(NASA)', status:'연장 운영 중' },
+];
+const KSAT_BY_ID = {}; for(const s of KSAT) KSAT_BY_ID[s.id] = s;
+const KS_IMAGING = new Set(KSAT.filter(s=>s.imaging).map(s=>s.id));
+
+/* 내장 TLE 스냅샷 (CelesTrak 2026-10-04 기준 · 네트워크 실패 시 폴백) */
+const KS_TLE_SNAPSHOT = `ARIRANG-2 (KOMPSAT-2)
+1 29268U 06031A   26277.33495550 -.00000174  00000+0 -24174-4 0  9990
+2 29268  97.8343  96.5400 0015853  87.1856  33.6215 14.64711233 77459
+ARIRANG-3 (KOMPSAT-3)
+1 38338U 12025B   26277.31327291  .00000225  00000+0  53908-4 0  9994
+2 38338  98.1317 232.9636 0006377 123.8893 236.2916 14.62282751767292
+ARIRANG-5 (KOMPSAT-5)
+1 39227U 13042A   26277.30655291  .00000410  00000+0  33586-4 0  9991
+2 39227  97.6220 102.4934 0004907 106.4106 253.7659 15.04516891720266
+KOMPSAT-3A
+1 40536U 15014A   26277.25471528  .00019768  00000+0  23729-3 0  9993
+2 40536  97.6945 277.1088 0050640 134.4731 226.0683 15.59333929638789
+KOMPSAT-7
+1 66820U 25279A   26276.13845358  .00000581  00000+0  49882-4 0  9995
+2 66820  97.7456 224.0600 0013492  17.3478 342.8205 15.01309560 45817
+CAS500-1
+1 47932U 21022A   26277.26610412  .00003615  00000+0  17018-3 0  9992
+2 47932  97.3737 170.2095 0003390 261.3673  98.7178 15.20162099307331
+CAS500-2
+1 69013U 26100AK  26277.27107102  .00003564  00000+0  16651-3 0  9991
+2 69013  97.3736 172.8673 0009527   6.1143 354.0207 15.20402745 23385
+CAS500-3
+1 66655U 25274F   26277.26311907  .00000645  00000+0  75441-4 0  9990
+2 66655  97.7445 202.8171 0003043 220.3332 139.7660 14.88355391 46371
+CAS500-4
+1 69869U 26156A   26277.28540882  .00000242  00000+0  19136-3 0  9999
+2 69869  98.9890 176.0319 0011374 322.1216  37.9147 14.00817371 12458
+NEONSAT-1
+1 59587U 24077A   26277.25647100  .00010132  00000+0  24829-3 0  9997
+2 59587  97.3430   1.6645 0007557   9.3391 350.7995 15.40906240136518
+NEONSAT-1A
+1 67614U 26019A   26277.27447302  .00001907  00000+0  12465-3 0  9992
+2 67614  97.4378  33.9510 0013220 171.7853 188.3595 15.08907644 37266
+GEO-KOMPSAT-2A
+1 43823U 18100A   26277.20169877 -.00000358  00000+0  00000+0 0  9999
+2 43823   0.0579  31.6245 0001310 111.1314  71.0335  1.00271327 28722
+GEO-KOMPSAT-2B
+1 45246U 20013B   26277.20169877 -.00000358  00000+0  00000+0 0  9996
+2 45246   0.0431   6.5331 0001874 238.7005 328.5628  1.00271382 24378
+KOREASAT 5 (MUGUNGWHA 5)
+1 29349U 06034A   26276.95877830 -.00000370  00000+0  00000+0 0  9999
+2 29349   2.0583  81.4322 0002218 167.7835 221.6891  1.00271794 42418
+KOREASAT 6
+1 37265U 10070B   26277.30349493 -.00000126  00000+0  00000+0 0  9998
+2 37265   0.0167 156.0646 0002704  65.1962  60.8851  1.00271710 57862
+KOREASAT 7
+1 42691U 17023A   26277.27059909 -.00000376  00000+0  00000+0 0  9995
+2 42691   0.0261  56.6943 0000904 157.2142  12.3965  1.00272355 34469
+KOREASAT 5A
+1 42984U 17067A   26277.15461441  .00000000  00000+0  00000+0 0  9996
+2 42984   0.0133 170.4986 0001498  65.5478 305.6275  1.00269469 32626
+KOREASAT 116
+1 45920U 20048A   26277.27059909  .00000000  00000+0  00000+0 0  9997
+2 45920   0.0152 170.7826 0001260  49.0228   6.8018  1.00267797 22731
+KOREASAT 6A
+1 61910U 24206A   26277.27059909  .00000000  00000+0  00000+0 0  9994
+2 61910   0.0204 173.3545 0000900  33.0229  20.0263  1.00268966  6930
+STSAT-3
+1 39422U 13066G   26277.22844191  .00001075  00000+0  83768-4 0  9999
+2 39422  97.6366 245.4619 0011163  35.6111 324.5857 15.03251104700585
+NEXTSAT-1
+1 43811U 18099BF  26277.08546855  .00001018  00000+0  68114-4 0  9992
+2 43811  97.3964 315.9558 0011085 329.2012  30.8565 15.09058121428303
+NEXTSAT-2
+1 56743U 23072A   26277.30125473  .00003965  00000+0  14282-3 0  9990
+2 56743  97.5181 115.3773 0005464  11.0650 349.0709 15.29159062186262
+SNIPE 2
+1 56745U 23072C   26277.26333810  .00024238  00000+0  40010-3 0  9997
+2 56745  97.5095 130.9016 0003411 347.7650  12.3519 15.52261276187133
+SNIPE 4
+1 56744U 23072B   26277.32689291  .00016844  00000+0  34299-3 0  9996
+2 56744  97.5130 127.0659 0003329 298.3631  61.7282 15.46328652186959
+SPACEEYE-T1
+1 63229U 25052V   26277.26889041  .00002724  00000+0  11783-3 0  9995
+2 63229  97.3780 168.0228 0006203 117.0100 243.1771 15.23280052 86441
+OBSERVER-1A
+1 58323U 23174BV  26277.27952510  .00007856  00000+0  19418-3 0  9994
+2 58323  97.3882   2.1004 0009020 119.9818 240.2325 15.40713137161991
+GYEONGGISAT-1
+1 66771U 25276DK  26276.48083589  .00003509  00000+0  15803-3 0  9993
+2 66771  97.4136 348.8151 0001497 156.7771 203.3533 15.21716553 46908
+CONTECSAT-1
+1 59117U 24043V   26277.33846417  .00003557  00000+0  10377-3 0  9996
+2 59117  97.5806  61.5925 0006296 163.7308 196.4138 15.36030331144016
+BUSANSAT
+1 68989U 26100K   26277.28779342  .00000867  00000+0  92858-4 0  9991
+2 68989  97.7243 172.4885 0007164 124.6575 235.5320 14.91186006 22951
+MIMAN
+1 52900U 22065G   26276.32837590  .00000275  00000+0  64379-4 0  9997
+2 52900  98.2426  58.3745 0008536  54.2824 305.9170 14.61938151226248
+STEP CUBE LAB-II
+1 52897U 22065D   26277.26373447  .00000348  00000+0  76632-4 0  9998
+2 52897  98.2395  60.9421 0009554  49.0560 311.1468 14.63438690227456
+SNUGLITE
+1 43784U 18099AC  26276.90176937  .00007702  00000+0  27477-3 0  9993
+2 43784  97.3741 330.1963 0001188 241.8724 118.2396 15.29161911429922
+SNUGLITE-II
+1 52899U 22065F   26277.14844676  .00000527  00000+0  10858-3 0  9990
+2 52899  98.2363  61.9001 0008272  48.8607 311.3308 14.64509715226949
+SNUGLITE-III
+1 66661U 25274M   26277.27266043  .00001108  00000+0  10830-3 0  9993
+2 66661  97.7506 205.2914 0015079  22.3205 337.8668 14.94291858 46529
+SNUSAT-2
+1 43782U 18099AA  26277.10000783  .00005226  00000+0  22346-3 0  9998
+2 43782  97.3938 328.8471 0008245 273.0785  86.9508 15.23240619429609`;
+
+/* ---------- 2. 궤도 요소 로드 ---------- */
+let KS = null, ksLoading = null;
+async function loadKoreanSats(){
+  if(KS) return KS;
+  if(ksLoading) return ksLoading;
+  ksLoading = (async()=>{
+    await loadLib();
+    const want = new Set(KSAT.map(s=>s.id)); const byId = {};
+    try{
+      const c = new AbortController(); const t = setTimeout(()=>c.abort(), 20000);
+      const r = await fetch('https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=TLE', { signal:c.signal }); clearTimeout(t);
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      for(const o of parseTle(await r.text())) if(want.has(o.NORAD_CAT_ID)) byId[o.NORAD_CAT_ID] = o;
+      if(Object.keys(byId).length < 10) throw new Error('목록 부족');
+    }catch(e){
+      console.warn('CelesTrak 실패 → 내장 스냅샷 사용', e.message);
+      for(const o of parseTle(KS_TLE_SNAPSHOT)) if(want.has(o.NORAD_CAT_ID)) byId[o.NORAD_CAT_ID] = o;
+      toast('CelesTrak 연결 실패 · 내장 궤도 요소(2026-10-04) 사용 · 위치 오차 커질 수 있음', 5000);
+    }
+    const out = [];
+    for(const k of KSAT){ const o = byId[k.id]; if(!o) continue; try{ out.push({ name:o.OBJECT_NAME, ko:k.ko, id:k.id, epoch:o.EPOCH, inc:o.INCLINATION, period:o.MEAN_MOTION?1440/o.MEAN_MOTION:null, rec:satrecFromOmm(o), k }); }catch(e){} }
+    KS = out; return out;
+  })();
+  return ksLoading;
+}
+function mergeIntoSATS(list){ for(const s of list){ if(!SATS.find(x=>x.id===s.id)) SATS.push(s); } }
+function entityFor(ds, s, big){
+  const col = KGROUP[s.k.g].color;
+  return ds.entities.add({ id:(big?'ksat:':'sat:')+s.id, position: new Cesium.CallbackProperty(()=>{ const p = satPos(s, simTime()); return p ? Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.h) : undefined; }, false),
+    point:{ pixelSize: big?10:9, color: Cesium.Color.fromCssColorString(col), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth: 2 },
+    label:{ text: s.ko.replace(/ \(.*$/,''), font:(big?'700 13px':'600 12px')+' Inter, "Noto Sans KR", sans-serif', fillColor: Cesium.Color.fromCssColorString(col), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0,-12), verticalOrigin: Cesium.VerticalOrigin.BOTTOM, scaleByDistance: new Cesium.NearFarScalar(1e6, 1.0, 4e7, 0.65) },
+    properties:{ kind:'sat', sid:s.id } });
+}
+
+/* ---------- 3. '위성 위치' 레이어 보강: 원래 loadSats 뒤에 한국 위성 전부 병합 ---------- */
+const _loadSats = loadSats;
+loadSats = async function(){
+  const had = !!satDS;
+  await _loadSats();
+  if(!satDS) return;
+  if(had){ satDS.show = true; return; }
+  try{
+    const ks = await loadKoreanSats();
+    // 원래 코드가 넣은 한국 위성(아리랑·차세대중형·천리안·무궁화)은 제거하고 카탈로그 기준으로 다시 추가
+    for(const s of [...SATS]){ if(KSAT_BY_ID[s.id]){ if(s.ent) satDS.entities.remove(s.ent); SATS.splice(SATS.indexOf(s),1); } }
+    for(const s of ks){ s.ent = entityFor(satDS, s, false); SATS.push(s); }
+    if(STATE.on.has('ksat')) for(const s of ks) s.ent.show = false; // 전용 레이어가 켜져 있으면 중복 숨김
+    toast(`위성 ${SATS.length}기 표시 · 한국 위성 ${ks.length}기 포함 (연두: 지구관측 · 노랑: 정지궤도 · 파랑: 통신 · 보라: 과학 · 청록: 민간) · 클릭하면 정보 카드`, 6000);
+  }catch(e){ toast('한국 위성 추가 실패: '+e.message, 4000); }
+};
+
+/* ---------- 4. 한국 위성 전용 레이어 ---------- */
+let ksDS = null;
+async function showKsat(){
+  if(ksDS){ ksDS.show = true; hideDup(true); return; }
+  toast('한국 위성 궤도 요소 불러오는 중… (CelesTrak)');
+  const ks = await loadKoreanSats();
+  ksDS = new Cesium.CustomDataSource('ksat'); viewer.dataSources.add(ksDS);
+  for(const s of ks){ s.kent = entityFor(ksDS, s, true); }
+  mergeIntoSATS(ks); hideDup(true);
+  toast(`한국 위성 ${ks.length}기 · 연두: 지구관측 · 노랑: 정지궤도 · 파랑: 통신 · 보라: 과학 · 청록: 민간·대학 · 점을 클릭하면 정보 카드`, 6000);
+  updateSrc();
+}
+function hideKsat(){ if(ksDS) ksDS.show = false; hideDup(false); }
+function hideDup(hide){ if(!satDS) return; for(const s of SATS) if(KSAT_BY_ID[s.id] && s.ent) s.ent.show = !hide; }
+
+/* ---------- 5. 정보 카드 (showSatCard 확장) ---------- */
+const _showSatCard = showSatCard;
+showSatCard = function(s){
+  const k = KSAT_BY_ID[s.id]; if(!k) return _showSatCard(s);
+  STATE.point = null; $('#card').classList.add('open');
+  const p = satPos(s, simTime()) || {};
+  const geo = /정지궤도/.test(k.orbit);
+  const col = KGROUP[k.g].color;
+  $('#cardTitle').innerHTML = `${esc(k.ko)}<small>${esc(s.name)} · NORAD ${s.id} · <span style="color:${col}">${KGROUP[k.g].name}</span></small>`;
+  const n = nearestProject();
+  const where = p.lat!=null ? `${p.lat>0?'N':'S'}${Math.abs(p.lat).toFixed(1)}° ${p.lon>0?'E':'W'}${Math.abs(p.lon).toFixed(1)}°` : '—';
+  $('#cardBody').innerHTML = `<div class="sec">
+    <p class="lead">${STATE.tIdx===0?'지금':'시간 바 시각 기준'} <b>${esc(k.ko)}</b>는 고도 <b>${p.h?Math.round(p.h/1000).toLocaleString():'—'} km</b>${geo?'(정지궤도)':''}, 속도 <b>${(p.speed||0).toFixed(2)} km/s</b>로 ${where} 상공에 있습니다.</p>
+    <div class="kv"><div>고도<b>${p.h?Math.round(p.h/1000).toLocaleString():'—'} km</b></div><div>경사각<b>${(+s.inc).toFixed(1)}°</b></div><div>주기<b>${s.period? (s.period>1000? (s.period/60).toFixed(1)+' 시간' : s.period.toFixed(0)+' 분'):'—'}</b></div><div>상태<b>${esc(k.status)}</b></div></div>
+    <div class="meta"><span class="tag derived">DERIVED</span> CelesTrak GP(TLE) epoch ${s.epoch.slice(0,16).replace('T',' ')} UTC · SGP4 전파 · 오차 수 km</div>
+    <button class="cta ghost" id="btnTrack">궤도 선 보기 (±45분)</button>
+    ${k.imaging&&n?`<button class="cta" id="btnPass1">${esc(n.p.name)} 통과 예보 (24h)</button>`:''}
+  </div>
+  <div class="sec"><h4 style="margin:0 0 6px;font-size:13px">위성 정보</h4>
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px;line-height:1.45">
+      <tr><td style="color:var(--text-dim);width:72px;padding:3px 0;vertical-align:top">발사</td><td>${esc(k.launch)} · ${esc(k.rocket)}</td></tr>
+      <tr><td style="color:var(--text-dim);padding:3px 0;vertical-align:top">운영</td><td>${esc(k.op)}</td></tr>
+      <tr><td style="color:var(--text-dim);padding:3px 0;vertical-align:top">궤도</td><td>${esc(k.orbit)}</td></tr>
+      <tr><td style="color:var(--text-dim);padding:3px 0;vertical-align:top">임무</td><td>${esc(k.mission)}</td></tr>
+      <tr><td style="color:var(--text-dim);padding:3px 0;vertical-align:top">센서</td><td>${esc(k.sensor)}</td></tr>
+    </table>
+    <div class="meta"><span class="tag obs">REF</span> 우주항공청·항우연·KT SAT·개발기관 공개 자료 및 언론 보도 (2026-10 정리) · 수치는 공칭값</div>
+    <a class="cta ghost" href="${esc(k.url)}" target="_blank" rel="noopener">기관 자료 ↗</a>
+    <button class="cta ghost" id="btnKsList">한국 위성 전체 목록</button>
+  </div>`;
+  $('#btnTrack').onclick = ()=>drawTrack(s);
+  const b = $('#btnPass1'); if(b) b.onclick = ()=>runPassForecast(n.p, [s]);
+  $('#btnKsList').onclick = ()=>showKsatList();
+};
+// 궤도 선: ksDS/satDS 어느 쪽이든 사용 가능하도록
+const _drawTrack = drawTrack;
+drawTrack = function(s){ if(!satDS){ satDS = new Cesium.CustomDataSource('sats'); viewer.dataSources.add(satDS); } return _drawTrack(s); };
+// 통과 예보: 한국 위성 중 촬영 위성 포함
+const _runPass = runPassForecast;
+runPassForecast = async function(p, sats){
+  if(!sats){ if(!satDS) await loadSats(); if(!KS) { try{ mergeIntoSATS(await loadKoreanSats()); }catch(e){} }
+    sats = SATS.filter(s=> KS_IMAGING.has(s.id) || (!KSAT_BY_ID[s.id] && SAT_IMAGING.test(s.name))); }
+  return _runPass(p, sats);
+};
+
+/* ---------- 6. 한국 위성 목록 카드 ---------- */
+async function showKsatList(){
+  STATE.point = null; $('#card').classList.add('open');
+  $('#cardTitle').innerHTML = `한국 위성 목록<small>궤도 추적 ${KSAT.length}기 + 목록만 ${KSAT_NOTLE.length}기 · 2026-10 기준</small>`;
+  const t = simTime();
+  const row = (s, k, live) => { const p = live ? satPos(live, t) : null; const col = KGROUP[k.g].color;
+    return `<div data-id="${s?s.id:''}" style="border-top:1px solid var(--line);padding:6px 0;${live?'cursor:pointer':''}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${col};margin-right:6px;vertical-align:middle"></span><b style="font-weight:600">${esc(k.ko)}</b></span><span style="white-space:nowrap;color:${p?'var(--text)':'var(--text-dim)'}">${p? Math.round(p.h/1000).toLocaleString()+' km' : '—'}</span></div><div style="color:var(--text-dim);font-size:11.5px;padding-left:14px;line-height:1.4">${esc(k.launch.slice(0,10))} · ${esc(k.sensor)} · ${esc(k.status)}</div></div>`; };
+  let html = '';
+  for(const g in KGROUP){
+    const items = KSAT.filter(s=>s.g===g); const nt = KSAT_NOTLE.filter(s=>s.g===g);
+    if(!items.length && !nt.length) continue;
+    html += `<div class="sec"><h4 style="margin:0 0 4px;font-size:13px;color:${KGROUP[g].color}">${KGROUP[g].name} <small style="color:var(--text-dim);font-weight:400">${items.length+nt.length}기</small></h4><div style="font-size:12.5px">`;
+    for(const k of items){ const live = KS && KS.find(x=>x.id===k.id); html += row(k, k, live); }
+    for(const k of nt){ html += row(null, k, null); }
+    html += `</div></div>`;
+  }
+  html += `<div class="sec"><div class="meta"><span class="tag derived">DERIVED</span> 고도는 시간 바 시각 기준 SGP4 계산 · 행을 클릭하면 위성으로 이동 · "—"는 궤도 요소 비공개(군 정찰위성)·발사 전·달 궤도</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="cta" id="btnKsOn">${STATE.on.has('ksat')?'한국 위성 레이어 켜짐':'한국 위성 레이어 켜기'}</button><button class="cta ghost" id="btnKsPass">현장 통과 예보 (촬영 위성)</button></div></div>`;
+  $('#cardBody').innerHTML = html;
+  $('#cardBody').querySelectorAll('div[data-id]').forEach(tr=>{ const id = +tr.dataset.id; if(!id) return; tr.onclick = async ()=>{ if(!STATE.on.has('ksat')) await toggleLayer('ksat', true); const s = KS.find(x=>x.id===id); if(!s) return; const p = satPos(s, simTime()); if(p){ camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, Math.max(p.h*2.2, 3e6)), orientation:{ heading:0, pitch:-Cesium.Math.PI_OVER_TWO, roll:0 }, duration:1.5 }); } showSatCard(s); }; });
+  $('#btnKsOn').onclick = ()=>{ if(!STATE.on.has('ksat')) toggleLayer('ksat', true); };
+  $('#btnKsPass').onclick = ()=>runPassForecast();
+  if(!KS){ try{ await loadKoreanSats(); showKsatList(); }catch(e){} }
+}
+
+/* ---------- 7. 천리안 2A (GK2A) 실제 영상 — 국가기상위성센터 공개 PNG 재투영 ---------- */
+const GK = {
+  products: { 'rgb-daynight':'주야 합성 (RGB Day/Night)', 'rgb-true':'천연색 (주간 · 전구만)', 'ir105':'적외 10.5 µm (흑백)', 'enhc-color-ir105':'적외 강조 컬러', 'rgb-natural':'자연색 합성', 'wv069':'수증기 6.9 µm' },
+  areas: { KO:'한반도 2 km', FD:'전구 Full Disk 10 km' },
+  prod: localStorage.getItem('gk2a.prod') || 'rgb-daynight', area: localStorage.getItem('gk2a.area') || 'KO',
+  layers: [], time: null, loading: false, proxy: u => 'https://wsrv.nl/?url=' + encodeURIComponent(u) + '&output=png',
+  // KO 2 km Lambert Conformal Conic (표준위도 30/60N · 중심 126E/38N · 구체 R 6371.00877 km · 900×900 · 중심 픽셀 450,450)
+  lcc: { sp1:30, sp2:60, lon0:126, lat0:38, R:6371.00877, px:2.0, w:900, h:900, cx:450, cy:450, dx:0, dy:0, scale:1 },
+  subLon: 128.2,
+};
+function gkUrl(prod, area, ts){ const res = (area==='FD' && prod==='rgb-true') ? '010' : '020'; const proj = area==='FD' ? 'ge' : 'lc'; return `https://nmsc.kma.go.kr/IMG/GK2A/AMI/PRIMARY/L1B/COMPLETE/${area}/${ts.slice(0,6)}/${ts.slice(6,8)}/${ts.slice(8,10)}/gk2a_ami_le1b_${prod}_${area.toLowerCase()}${res}${proj}_${ts}.srv.png`; }
+function tsOf(d){ return d.toISOString().replace(/[-:T]/g,'').slice(0,12); }
+function loadImg(url){ return new Promise((res,rej)=>{ const im = new Image(); im.crossOrigin='anonymous'; im.onload=()=>res(im); im.onerror=()=>rej(new Error('이미지 없음')); im.src=url; }); }
+async function fetchLatestGk(prod, area, base){
+  // base 시각부터 10분 단위로 과거로 최대 9회 탐색 (영상은 보통 15~30분 지연)
+  const t0 = new Date(Math.floor((base.getTime() - 15*60e3)/600e3)*600e3);
+  for(let i=0;i<9;i++){ const d = new Date(t0.getTime() - i*600e3); const ts = tsOf(d); try{ const im = await loadImg(GK.proxy(gkUrl(prod, area, ts))); if(im.width>200) return { im, ts, d }; }catch(e){} }
+  throw new Error('최근 2시간 내 영상을 찾지 못함 (국가기상위성센터 공개 영상 지연 또는 프록시 문제)');
+}
+function srcCanvas(im){ const c = document.createElement('canvas'); c.width=im.width; c.height=im.height; const g=c.getContext('2d',{willReadFrequently:true}); g.drawImage(im,0,0); return g.getImageData(0,0,c.width,c.height); }
+// LCC 정방향 (구체)
+function lccForward(latDeg, lonDeg, P){ const φ1=rad(P.sp1), φ2=rad(P.sp2), φ0=rad(P.lat0), λ0=rad(P.lon0); const n = Math.log(Math.cos(φ1)/Math.cos(φ2)) / Math.log(Math.tan(Math.PI/4+φ2/2)/Math.tan(Math.PI/4+φ1/2)); const F = Math.cos(φ1)*Math.pow(Math.tan(Math.PI/4+φ1/2),n)/n; const ρ = P.R*F/Math.pow(Math.tan(Math.PI/4+rad(latDeg)/2),n); const ρ0 = P.R*F/Math.pow(Math.tan(Math.PI/4+φ0/2),n); let dλ = rad(lonDeg)-λ0; const θ = n*dλ; return { x: ρ*Math.sin(θ), y: ρ0 - ρ*Math.cos(θ) }; }
+function reprojectKO(src, header){
+  const P = GK.lcc; const W=1400, H=1200; const west=112, east=140, south=26, north=48; // 출력 경위도 범위
+  const out = new ImageData(W,H); const o=out.data, s=src.data, sw=src.width;
+  const φ1=rad(P.sp1), φ2=rad(P.sp2), φ0=rad(P.lat0), λ0=rad(P.lon0); const n = Math.log(Math.cos(φ1)/Math.cos(φ2)) / Math.log(Math.tan(Math.PI/4+φ2/2)/Math.tan(Math.PI/4+φ1/2)); const F = Math.cos(φ1)*Math.pow(Math.tan(Math.PI/4+φ1/2),n)/n; const ρ0 = P.R*F/Math.pow(Math.tan(Math.PI/4+φ0/2),n);
+  for(let j=0;j<H;j++){ const lat = north - (j+0.5)*(north-south)/H; const ρ = P.R*F/Math.pow(Math.tan(Math.PI/4+rad(lat)/2),n);
+    for(let i=0;i<W;i++){ const lon = west + (i+0.5)*(east-west)/W; const θ = n*(rad(lon)-λ0); const x = ρ*Math.sin(θ), y = ρ0 - ρ*Math.cos(θ);
+      const px = Math.round(P.cx + P.dx + x/(P.px*P.scale)), py = Math.round(P.cy + P.dy - y/(P.px*P.scale)) + header;
+      if(px<0||py<header||px>=P.w||py>=header+P.h) continue; const si=(py*sw+px)*4, oi=(j*W+i)*4; o[oi]=s[si]; o[oi+1]=s[si+1]; o[oi+2]=s[si+2]; o[oi+3]=255; } }
+  return { img: out, rect: Cesium.Rectangle.fromDegrees(west, south, east, north) };
+}
+// GEOS 정방향 (CGMS 표준식 · 타원체) → 디스크 중심/반경은 이미지에서 자동 검출
+function detectDisk(src, header){ const s=src.data, w=src.width, h=src.height; const isDark = (x,y)=>{ const i=(y*w+x)*4; return !(s[i]>235&&s[i+1]>235&&s[i+2]>235) && s[i+3]>0; };
+  const cy0 = Math.floor((header+h)/2); let x0=-1,x1=-1; for(let x=0;x<w;x++){ if(isDark(x,cy0)){ x0=x; break; } } for(let x=w-1;x>=0;x--){ if(isDark(x,cy0)){ x1=x; break; } }
+  const cx = (x0+x1)/2; let y0=-1,y1=-1; for(let y=header;y<h;y++){ if(isDark(Math.round(cx),y)){ y0=y; break; } } for(let y=h-1;y>=header;y--){ if(isDark(Math.round(cx),y)){ y1=y; break; } }
+  return { cx, cy:(y0+y1)/2, r: ((x1-x0)+(y1-y0))/4 }; }
+function reprojectFD(src, header){
+  const D = detectDisk(src, header); const k = D.r / Math.asin(6378.137/42164.0); // px per rad
+  const λ0 = rad(GK.subLon); const W=1500, H=1300; const south=-81, north=81; const west=GK.subLon-81, east=GK.subLon+81; // 47.2E ~ 209.2E
+  const out = new ImageData(W,H); const o=out.data, s=src.data, sw=src.width;
+  for(let j=0;j<H;j++){ const lat = rad(north - (j+0.5)*(north-south)/H); const cLat = Math.atan(0.993243*Math.tan(lat)); const rl = 6356.5838/Math.sqrt(1-0.00675701*Math.cos(cLat)*Math.cos(cLat)); const r3 = rl*Math.sin(cLat); const cc = rl*Math.cos(cLat);
+    for(let i=0;i<W;i++){ const lon = rad(west + (i+0.5)*(east-west)/W); const dl = lon-λ0; const r1 = 42164 - cc*Math.cos(dl); const r2 = -cc*Math.sin(dl);
+      const rn = Math.sqrt(r1*r1+r2*r2+r3*r3);
+      // 가시 판정: 위성 방향과 지점 법선의 내적 (구체 근사) → 지구 뒤쪽·림 바깥 제외
+      const nx = Math.cos(lat)*Math.cos(dl); if(6.6181*nx - 1 <= 0.02) continue;
+      const x = Math.atan(-r2/r1), y = Math.asin(-r3/rn); const px = Math.round(D.cx + x*k), py = Math.round(D.cy - y*k);
+      if(px<0||py<header||px>=sw||py>=src.height) continue; const ddx=px-D.cx, ddy=py-D.cy; if(ddx*ddx+ddy*ddy > D.r*D.r*0.998) continue; const si=(py*sw+px)*4, oi=(j*W+i)*4; o[oi]=s[si]; o[oi+1]=s[si+1]; o[oi+2]=s[si+2]; o[oi+3]=255; } }
+  return { img: out, west, east, south, north };
+}
+function toDataUrl(imgData, x0, x1){ const c = document.createElement('canvas'); const w = (x1!=null? x1-x0 : imgData.width); c.width=w; c.height=imgData.height; const g=c.getContext('2d'); if(x1!=null){ const sub = g.createImageData(w, imgData.height); const W=imgData.width; for(let j=0;j<imgData.height;j++){ sub.data.set(imgData.data.subarray((j*W+x0)*4, (j*W+x1)*4), j*w*4); } g.putImageData(sub,0,0); } else g.putImageData(imgData,0,0); return c.toDataURL('image/png'); }
+function clearGk(){ for(const l of GK.layers) viewer.imageryLayers.remove(l, true); GK.layers = []; }
+async function showGk2a(force){
+  if(GK.loading) return; GK.loading = true;
+  const prod = GK.prod, area = GK.area; const base = (STATE.tIdx===0) ? new Date() : simTime();
+  toast(`천리안 2A ${GK.products[prod]} · ${GK.areas[area]} 불러오는 중… (국가기상위성센터)`);
+  try{
+    const { im, ts, d } = await fetchLatestGk(prod, area, base);
+    const src = srcCanvas(im); const header = im.height - (area==='FD' ? im.width : 900); // 상단 제목 띠 높이 (KO 900×922 → 22)
+    const hdr = Math.max(0, Math.min(header, 60));
+    clearGk();
+    if(area==='KO'){
+      const r = reprojectKO(src, hdr);
+      const prov = new Cesium.SingleTileImageryProvider({ url: toDataUrl(r.img), rectangle: r.rect, tileWidth: r.img.width, tileHeight: r.img.height, credit: '기상청 국가기상위성센터 GK2A' });
+      const l = viewer.imageryLayers.addImageryProvider(prov); l.alpha = 0.92; GK.layers.push(l);
+    } else {
+      const r = reprojectFD(src, hdr); const W = r.img.width; const split = Math.round((180 - r.west)/(r.east-r.west)*W); // 180° 경계에서 분할
+      const partA = toDataUrl(r.img, 0, split), partB = toDataUrl(r.img, split, W);
+      const pa = new Cesium.SingleTileImageryProvider({ url: partA, rectangle: Cesium.Rectangle.fromDegrees(r.west, r.south, 180, r.north), tileWidth: split, tileHeight: r.img.height, credit:'기상청 국가기상위성센터 GK2A' });
+      const pb = new Cesium.SingleTileImageryProvider({ url: partB, rectangle: Cesium.Rectangle.fromDegrees(-180, r.south, r.east-360, r.north), tileWidth: W-split, tileHeight: r.img.height, credit:'' });
+      for(const p of [pa,pb]){ const l = viewer.imageryLayers.addImageryProvider(p); l.alpha = 0.92; GK.layers.push(l); }
+    }
+    if(layersImg.labels) viewer.imageryLayers.raiseToTop(layersImg.labels);
+    GK.time = d; GK.ts = ts;
+    toast(`천리안 2A ${GK.products[prod]} · ${GK.areas[area]} · ${kst(d)} KST (${ts.slice(8,10)}:${ts.slice(10,12)} UTC) · 브라우저 재투영`, 6000);
+    updateSrc();
+  }catch(e){ toast('천리안 2A 영상 실패: '+e.message, 6000); if(!force){ STATE.on.delete('gk2a'); renderSub(); } }
+  GK.loading = false;
+}
+function hideGk2a(){ for(const l of GK.layers) l.show = false; }
+function gkSrc(){ return GK.time ? `<b>기상청 NMSC</b> 천리안 2A ${GK.products[GK.prod]} ${kst(GK.time)} (OBS)` : ''; }
+// 시간 바 연동(디바운스): 과거 48시간 이내면 그 시각 영상으로 교체
+let gkTimer = null; const _setT3 = setT; setT = function(v){ _setT3(v); if(!STATE.on.has('gk2a')) return; clearTimeout(gkTimer); gkTimer = setTimeout(()=>{ const t = simTime(); if(Date.now()-t.getTime() < 48*3600e3 && t.getTime() <= Date.now()+600e3) showGk2a(true); }, 800); };
+
+/* ---------- 8. 메뉴·레이어 등록 ---------- */
+const E = MENUS.earth; const satCat = E.find(c=>c.id==='sat');
+const gkItem = satCat.items.find(i=>i.id==='gk2a');
+Object.assign(gkItem, { q:'천리안 2A가 지금 본 한반도와 지구는', name:'천리안 2A 실제 영상 (GK2A)', src:'기상청 국가기상위성센터 공개 영상 · 10분 · 키 불필요 · 설정에서 채널/영역', type:'layer' });
+const fogItem = satCat.items.find(i=>i.id==='fog'); if(fogItem){ fogItem.q='밤에 낮은 구름·안개는 어디에'; fogItem.src='천리안 2A 주야 합성 영상으로 확인 (위 항목)'; }
+const satsItem = satCat.items.find(i=>i.id==='sats'); if(satsItem){ satsItem.name='위성 위치 (한국 35기·지구관측·ISS)'; satsItem.src='CelesTrak TLE · SGP4 · 시간 바 연동 · 클릭하면 정보 카드'; }
+const passItem = satCat.items.find(i=>i.id==='pass'); if(passItem){ passItem.src='아리랑 3·3A·5·7 · 차세대중형 1·2·4 · 초소형군집 · SpaceEye-T · Sentinel-2 · Landsat · WorldView'; }
+const idx = satCat.items.findIndex(i=>i.id==='sats');
+satCat.items.splice(idx, 0,
+  { id:'ksat', q:'우리나라 위성은 지금 어디에 있나', name:'한국 위성 (전용 레이어)', src:'아리랑·차세대중형·천리안·무궁화·초소형군집·도요샛·SpaceEye-T 등 35기 · CelesTrak · 클릭하면 정보 카드', type:'layer' },
+  { id:'kslist', q:'우리나라 위성에는 무엇이 있나', name:'한국 위성 목록·정보', src:'41기 (궤도 추적 35기 + 군 정찰·아리랑 6호·다누리) · 발사일·기관·센서·상태', type:'action', run:()=>showKsatList() });
+
+const L3 = {
+  ksat: { on:()=>showKsat(), off:()=>hideKsat(), src:()=> ksDS&&ksDS.show ? '<b>CelesTrak</b> 한국 위성 '+(KS?KS.length:'')+'기 (DERIVED)' : '' },
+  gk2a: { on:()=>showGk2a(), off:()=>hideGk2a(), src:gkSrc },
+};
+const _toggle3 = toggleLayer;
+toggleLayer = async function(id, force){
+  if(!L3[id]) return _toggle3(id, force);
+  const want = force!==undefined ? force : !STATE.on.has(id);
+  if(want) STATE.on.add(id); else STATE.on.delete(id);
+  try{ if(want) await L3[id].on(); else L3[id].off(); }catch(e){ toast('레이어 오류: '+e.message, 4000); STATE.on.delete(id); }
+  renderCats(); renderSub(); updateSrc();
+};
+const _updateSrc3 = updateSrc;
+updateSrc = function(){ _updateSrc3(); const extra=[]; for(const id of STATE.on){ const s = L3[id]?.src; if(!s) continue; const v = typeof s==='function'? s():s; if(v) extra.push(v); } if(extra.length){ const el = $('#hudSrc'); el.innerHTML = el.innerHTML.replace('지형 없음', extra.join(' · ')+' · 지형 없음').replace('<b>Esri World Elevation</b> 지형', extra.join(' · ')+' · <b>Esri World Elevation</b> 지형'); } };
+
+/* ---------- 9. 설정: 천리안 2A 채널·영역 ---------- */
+(function(){
+  const row = document.createElement('div'); row.className='row'; row.style.display='block';
+  const opt = (o, cur) => Object.entries(o).map(([k,v])=>`<option value="${k}"${k===cur?' selected':''}>${v}</option>`).join('');
+  row.innerHTML = `<div style="margin-bottom:6px">천리안 2A 영상</div><div style="display:flex;gap:6px;flex-wrap:wrap"><select id="gkProd" style="flex:1;min-width:150px;background:var(--panel-2,#0b1a30);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px">${opt(GK.products, GK.prod)}</select><select id="gkArea" style="flex:1;min-width:120px;background:var(--panel-2,#0b1a30);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px">${opt(GK.areas, GK.area)}</select></div><div class="note" style="padding:6px 0 0">국가기상위성센터 공개 PNG(10분 간격)를 브라우저에서 경위도로 재투영해 지구 위에 겹칩니다. 한반도(LCC)·전구(GEOS) 모두 지원 · 위성 › 천리안 2A 항목을 켜세요. 시간 바를 과거(48시간 내)로 옮기면 그 시각 영상으로 바뀝니다.</div>`;
+  $('#settings').appendChild(row);
+  $('#gkProd').onchange = e=>{ GK.prod = e.target.value; localStorage.setItem('gk2a.prod', GK.prod); if(STATE.on.has('gk2a')) showGk2a(true); };
+  $('#gkArea').onchange = e=>{ GK.area = e.target.value; localStorage.setItem('gk2a.area', GK.area); if(STATE.on.has('gk2a')) showGk2a(true); };
+})();
+
+/* ---------- 10. EARTHUS 미러링 호환: '천리안' 구름 모드 → gk2a ---------- */
+window.sistechKorea = { KSAT, KSAT_NOTLE, loadKoreanSats, showKsatList, showGk2a, GK };
+
+/* ---------- 초기 복원 ---------- */
+for(const id of ['ksat','gk2a']) if(STATE.on.has(id)) { try{ L3[id].on(); }catch(e){} }
+renderCats(); renderSub(); updateSrc();
+console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
+})();
+
+</script>
 </body>
 </html>
