@@ -2124,6 +2124,28 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   window.sistechViewshed = VS;
 })();
 
+/* ---------- 17. 메뉴 정리: 바다 깊이·해구 → 바다 · EARTH 누르면 SITE 창 모두 닫기 ---------- */
+(function(){
+  const g = MENUS.earth.find(c=>c.id==='globe'), sea = MENUS.earth.find(c=>c.id==='sea');
+  if(g && sea){ const mv = g.items.filter(i=>i.id==='ocean'||i.id==='trenches'); g.items = g.items.filter(i=>i.id!=='ocean'&&i.id!=='trenches'); sea.items.splice(0, 0, ...mv); }
+  // SITE 이동 비행이 끝난 뒤 뜨는 프로젝트 카드가 EARTH에서 다시 열리지 않게
+  const _spc = showProjectCard; showProjectCard = function(p, i){ if(STATE.mode!=='site' && STATE.stage!=='site' && window.__blockProjCard) return; return _spc(p, i); };
+  const _setMode4 = setMode;
+  setMode = function(m){
+    if(m==='earth'){
+      window.__blockProjCard = true; setTimeout(()=>{ window.__blockProjCard = false; }, 4000);
+      try{ camera.cancelFlight(); }catch(e){}
+      for(const id of ['shadow','view']) if(STATE.on.has(id)) toggleLayer(id, false);
+      for(const id of ['shHud','vsHud']){ const el = document.getElementById(id); if(el) el.style.display='none'; }
+      if(STATE.mode==='earth'){ closeAllPanels(); }
+    }
+    if(m==='site') window.__blockProjCard = false;
+    const r = _setMode4(m);
+    if(m==='earth'){ closeAllPanels(); renderCats(); renderSub(); }
+    return r;
+  };
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
