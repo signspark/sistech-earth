@@ -943,5 +943,422 @@ function savePng(){ scene.render(); const a=document.createElement('a'); a.downl
   setTimeout(()=>toast('SISTECH EARTH 데모 · 지도를 클릭하면 지점 카드, 왼쪽 메뉴에서 레이어를 켜세요'), 1200);
 })();
 </script>
+<script>
+/* =====================================================================
+   SISTECH EARTH 확장 v2 — EARTHUS 전 기능(우주탐험 제외) 탑재
+   레이어 유형: imagery(타일) · field(Open-Meteo 격자 열지도) · radar(RainViewer)
+               · vector(점/선) · card(지점 카드 섹션) · action(동작)
+   ===================================================================== */
+(function(){
+const deg = Cesium.Math.toDegrees, rad = Cesium.Math.toRadians;
+const tf = (u, o={}, ms=15000) => { const c = new AbortController(); const t = setTimeout(()=>c.abort(), ms); return fetch(u, {...o, signal:c.signal}).finally(()=>clearTimeout(t)); };
+const fmtN = n => n==null||isNaN(n) ? '—' : Math.round(n).toLocaleString();
+const kst = (d) => new Date(d).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+
+/* ---------- 범례 DOM ---------- */
+const legendEl = document.createElement('div'); legendEl.id = 'legend'; legendEl.className = 'panel';
+legendEl.style.cssText = 'position:fixed;right:14px;bottom:16px;z-index:20;padding:8px 12px;display:none;min-width:220px;font-size:12px';
+legendEl.innerHTML = '<div id="lgTitle" style="font-weight:700;margin-bottom:4px"></div><div id="lgBar" style="height:10px;border-radius:5px;margin:4px 0"></div><div id="lgTicks" style="display:flex;justify-content:space-between;color:var(--text-dim);font-size:11px"></div><div id="lgMeta" style="color:var(--text-dim);font-size:11px;margin-top:4px;line-height:1.4"></div>';
+document.body.appendChild(legendEl);
+function showLegend(title, stops, unit, meta){ if(!stops){ legendEl.style.display='none'; return; } legendEl.style.display='block'; $('#lgTitle').textContent = title; const mn=stops[0][0], mx=stops[stops.length-1][0]; $('#lgBar').style.background = `linear-gradient(90deg, ${stops.map(s=>`${s[1]} ${((s[0]-mn)/(mx-mn)*100).toFixed(0)}%`).join(',')})`; $('#lgTicks').innerHTML = stops.filter((_,i)=>i%Math.ceil(stops.length/5)===0||i===stops.length-1).map(s=>`<span>${s[0]}${unit}</span>`).join(''); $('#lgMeta').innerHTML = meta||''; }
+
+/* ---------- 색상 보간 ---------- */
+function hex2rgb(h){ if(h.startsWith('rgba')){ const m=h.match(/[\d.]+/g); return [+m[0],+m[1],+m[2],+m[3]*255]; } const n=parseInt(h.slice(1),16); return [(n>>16)&255,(n>>8)&255,n&255,255]; }
+function colorAt(stops, v){ if(v==null||isNaN(v)) return [0,0,0,0]; if(v<=stops[0][0]) return hex2rgb(stops[0][1]); for(let i=1;i<stops.length;i++){ if(v<=stops[i][0]){ const a=hex2rgb(stops[i-1][1]), b=hex2rgb(stops[i][1]); const t=(v-stops[i-1][0])/(stops[i][0]-stops[i-1][0]); return a.map((x,k)=>x+(b[k]-x)*t); } } return hex2rgb(stops[stops.length-1][1]); }
+
+/* ---------- 격자 필드 정의 ---------- */
+const C_TEMP=[[-20,'#3b4cc0'],[-5,'#7fb7f5'],[5,'#3fc7c0'],[15,'#a4c81c'],[25,'#f5d76e'],[32,'#f2a65a'],[40,'#ff5d5d']];
+const C_PCT=[[0,'#f2a65a'],[40,'#f5d76e'],[70,'#a4c81c'],[100,'#3b4cc0']];
+const C_RAIN=[[0,'rgba(0,0,0,0)'],[0.3,'#7fb7f5'],[2,'#3fc7c0'],[5,'#a4c81c'],[10,'#f5d76e'],[25,'#ff5d5d']];
+const C_WIND=[[0,'rgba(0,0,0,0)'],[3,'#3fc7c0'],[8,'#a4c81c'],[14,'#f5d76e'],[20,'#f2a65a'],[30,'#ff5d5d']];
+const C_PRES=[[980,'#3b4cc0'],[1000,'#7fb7f5'],[1013,'#dce8f5'],[1025,'#f2a65a'],[1040,'#ff5d5d']];
+const C_AQ=[[0,'#3fc7c0'],[20,'#a4c81c'],[40,'#f5d76e'],[60,'#f2a65a'],[80,'#ff5d5d'],[100,'#8b0000']];
+const FIELDS = {
+  temp:   { api:'forecast', vars:['temperature_2m'], label:'기온 (지상 2 m)', unit:'°C', stops:C_TEMP, src:'Open-Meteo (GFS·ECMWF·ICON 혼합) · MODEL' },
+  tanom:  { api:'forecast', vars:['temperature_2m'], label:'기온 (평년차는 지점 카드)', unit:'°C', stops:C_TEMP, src:'평년차: 지점 카드에서 과거 5년 대비(DERIVED)' },
+  rh:     { api:'forecast', vars:['relative_humidity_2m'], label:'습도', unit:'%', stops:C_PCT, src:'Open-Meteo · MODEL' },
+  rain:   { api:'forecast', vars:['precipitation'], label:'강수 강도', unit:'mm/h', stops:C_RAIN, src:'Open-Meteo · MODEL (레이더는 RainViewer)' },
+  wind:   { api:'forecast', vars:['wind_speed_10m','wind_direction_10m'], label:'바람 10 m', unit:'m/s', stops:C_WIND, arrows:true, src:'Open-Meteo · MODEL · 화살표 = 부는 방향' },
+  pres:   { api:'forecast', vars:['pressure_msl'], label:'해면기압 · H/L 중심', unit:'hPa', stops:C_PRES, hl:true, src:'Open-Meteo · MODEL · H/L = 격자 국지 극값' },
+  vis:    { api:'forecast', vars:['visibility'], label:'시정', unit:'m', stops:[[0,'#ff5d5d'],[1000,'#f2a65a'],[4000,'#f5d76e'],[10000,'#a4c81c'],[24000,'#3fc7c0']], src:'Open-Meteo · MODEL' },
+  soil:   { api:'forecast', vars:['soil_moisture_0_to_1cm'], label:'토양 수분 (0~1 cm)', unit:'m³/m³', stops:[[0,'#f2a65a'],[0.1,'#f5d76e'],[0.2,'#a4c81c'],[0.35,'#3fc7c0'],[0.5,'#3b4cc0']], src:'Open-Meteo · MODEL' },
+  uv:     { api:'forecast', vars:['uv_index'], label:'자외선 지수', unit:'', stops:[[0,'#3fc7c0'],[3,'#a4c81c'],[6,'#f5d76e'],[8,'#f2a65a'],[11,'#ff5d5d']], src:'Open-Meteo · MODEL' },
+  tmax:   { api:'forecast', daily:'temperature_2m_max', label:'내일 최고기온', unit:'°C', stops:C_TEMP, src:'Open-Meteo 일별 예보(내일) · MODEL' },
+  tmin:   { api:'forecast', daily:'temperature_2m_min', label:'내일 최저기온', unit:'°C', stops:C_TEMP, src:'Open-Meteo 일별 예보(내일) · MODEL' },
+  windfc: { api:'forecast', daily:'wind_speed_10m_max', label:'내일 최대 풍속', unit:'m/s', stops:C_WIND, src:'Open-Meteo 일별 예보(내일) · MODEL' },
+  heatdome:{ api:'forecast', vars:['temperature_2m','pressure_msl'], label:'열돔 지수 (기온≥32 & 고기압)', unit:'', stops:[[0,'rgba(0,0,0,0)'],[1,'#f5d76e'],[3,'#f2a65a'],[6,'#ff5d5d'],[10,'#8b0000']], derive:(v)=> (v[0]>=32 && v[1]>=1014) ? Math.min(10,(v[0]-30)+(v[1]-1014)/3) : 0, src:'DERIVED · 기온 32°C 이상 + 해면기압 1014 hPa 이상 격자' },
+  wave:   { api:'marine', vars:['wave_height'], label:'유의 파고', unit:'m', stops:[[0,'#3fc7c0'],[0.5,'#a4c81c'],[1.5,'#f5d76e'],[2.5,'#f2a65a'],[4,'#ff5d5d'],[7,'#8b0000']], src:'Open-Meteo Marine · MODEL' },
+  swell:  { api:'marine', vars:['swell_wave_height'], label:'너울 높이', unit:'m', stops:[[0,'#3fc7c0'],[0.5,'#a4c81c'],[1.5,'#f5d76e'],[2.5,'#f2a65a'],[4,'#ff5d5d']], src:'Open-Meteo Marine · MODEL' },
+  sst:    { api:'marine', vars:['sea_surface_temperature'], label:'해수면 온도', unit:'°C', stops:[[-2,'#3b4cc0'],[8,'#7fb7f5'],[16,'#3fc7c0'],[22,'#a4c81c'],[27,'#f5d76e'],[31,'#ff5d5d']], src:'Open-Meteo Marine · MODEL' },
+  current:{ api:'marine', vars:['ocean_current_velocity','ocean_current_direction'], label:'표층 해류', unit:'m/s', stops:[[0,'rgba(0,0,0,0)'],[0.2,'#3fc7c0'],[0.5,'#a4c81c'],[1,'#f5d76e'],[1.5,'#ff5d5d']], arrows:true, toDir:true, src:'Open-Meteo Marine · MODEL · 화살표 = 흐르는 방향' },
+  pm25:   { api:'aq', vars:['pm2_5'], label:'초미세먼지 PM2.5', unit:'µg/m³', stops:[[0,'#3fc7c0'],[15,'#a4c81c'],[35,'#f5d76e'],[75,'#f2a65a'],[150,'#ff5d5d']], src:'CAMS (Open-Meteo) · MODEL' },
+  pm10:   { api:'aq', vars:['pm10'], label:'미세먼지 PM10', unit:'µg/m³', stops:[[0,'#3fc7c0'],[30,'#a4c81c'],[80,'#f5d76e'],[150,'#f2a65a'],[300,'#ff5d5d']], src:'CAMS · MODEL' },
+  aqi:    { api:'aq', vars:['european_aqi'], label:'대기질 지수 (EAQI)', unit:'', stops:C_AQ, src:'CAMS · 유럽 AQI · MODEL' },
+  o3:     { api:'aq', vars:['ozone'], label:'오존', unit:'µg/m³', stops:[[0,'#3fc7c0'],[60,'#a4c81c'],[100,'#f5d76e'],[140,'#f2a65a'],[180,'#ff5d5d'],[240,'#8b0000']], src:'CAMS · MODEL' },
+  dust:   { api:'aq', vars:['dust'], label:'먼지(황사) 농도', unit:'µg/m³', stops:[[0,'rgba(0,0,0,0)'],[10,'#f5d76e'],[50,'#f2a65a'],[150,'#ff5d5d'],[400,'#8b0000']], src:'CAMS · MODEL' },
+};
+const API = { forecast:'https://api.open-meteo.com/v1/forecast', marine:'https://marine-api.open-meteo.com/v1/marine', aq:'https://air-quality-api.open-meteo.com/v1/air-quality' };
+
+/* ---------- 격자 필드 엔진 ---------- */
+const FS = { id:null, grid:null, layer:null, arrowDS:null, hlDS:null, busy:false, token:0 };
+function viewExtent(){
+  const r = camera.computeViewRectangle(globe.ellipsoid);
+  if(!r) return { w:-180, s:-70, e:180, n:75, global:true };
+  let w=deg(r.west), s=deg(r.south), e=deg(r.east), n=deg(r.north); if(e<w) e+=360;
+  if(Math.max(e-w, n-s) > 140) return { w:-180, s:-70, e:180, n:75, global:true };
+  const pw=(e-w)*0.08, ph=(n-s)*0.08; w-=pw; e+=pw; s=Math.max(-85,s-ph); n=Math.min(85,n+ph);
+  return { w, s, e, n };
+}
+function extentKey(x){ return [x.w,x.s,x.e,x.n].map(v=>v.toFixed(1)).join(','); }
+async function sampleField(id){
+  const F = FIELDS[id]; const ext = viewExtent(); const NX = ext.global?30:24, NY = ext.global?14:16;
+  const lats=[], lons=[]; for(let j=0;j<NY;j++) for(let i=0;i<NX;i++){ lats.push((ext.n - (j+0.5)*(ext.n-ext.s)/NY).toFixed(3)); let lo = ext.w + (i+0.5)*(ext.e-ext.w)/NX; if(lo>180) lo-=360; lons.push(lo.toFixed(3)); }
+  let url = `${API[F.api]}?latitude=${lats.join(',')}&longitude=${lons.join(',')}&timezone=Asia%2FSeoul`;
+  if(F.daily) url += `&daily=${F.daily}&forecast_days=2`; else url += `&hourly=${F.vars.join(',')}&forecast_days=3${F.api==='forecast'?'&past_days=1':''}`;
+  if(F.api==='forecast') url += '&wind_speed_unit=ms';
+  const tok = ++FS.token; FS.busy = true; toast(`${F.label} 격자 ${NX}×${NY} 샘플링 중…`);
+  try{
+    const r = await tf(url, {}, 25000); const j = await r.json(); if(tok!==FS.token) return;
+    const arr = Array.isArray(j)? j : [j]; if(arr[0]?.error) throw new Error(arr[0].reason||'api error');
+    FS.grid = { id, ext, NX, NY, pts: arr, times: F.daily ? arr[0].daily.time : arr[0].hourly.time, key: extentKey(ext) };
+    renderField(); showLegend(F.label, F.stops, F.unit, `${F.src} · 격자 ${NX}×${NY} · ${ext.global?'전지구':'현재 화면'}${F.daily?' · 내일':' · 시간 바 연동'}`);
+  }catch(e){ toast(`${F.label} 샘플링 실패: ${e.message}`, 4000); }
+  FS.busy = false;
+}
+function fieldValue(F, p, ti){ if(F.daily) return p.daily?.[F.daily]?.[1] ?? null; const vals = F.vars.map(v => p.hourly?.[v]?.[ti]); if(vals.some(v=>v==null)) return null; return F.derive ? F.derive(vals) : vals[0]; }
+function fieldIdx(){ const g = FS.grid; if(!g || FIELDS[g.id].daily) return 1; const h = hourIndex({ time: g.times }); return h; }
+async function renderField(){
+  const g = FS.grid; if(!g) return; const F = FIELDS[g.id]; const ti = fieldIdx();
+  const W = g.NX*16, H = g.NY*16; const cv = document.createElement('canvas'); cv.width=W; cv.height=H; const ctx = cv.getContext('2d'); const img = ctx.createImageData(W,H); const d = img.data;
+  const val = (i,j) => { if(i<0||j<0||i>=g.NX||j>=g.NY) return null; return fieldValue(F, g.pts[j*g.NX+i], ti); };
+  for(let py=0;py<H;py++){ const gy = (py+0.5)/16-0.5; const j0=Math.floor(gy), fy=gy-j0;
+    for(let px=0;px<W;px++){ const gx=(px+0.5)/16-0.5; const i0=Math.floor(gx), fx=gx-i0;
+      const a=val(i0,j0), b=val(i0+1,j0), c=val(i0,j0+1), e=val(i0+1,j0+1);
+      let v; const ok=[a,b,c,e].filter(x=>x!=null);
+      if(ok.length===4) v = a*(1-fx)*(1-fy)+b*fx*(1-fy)+c*(1-fx)*fy+e*fx*fy; else if(ok.length>=2) v = ok.reduce((s,x)=>s+x,0)/ok.length; else v = null;
+      const col = colorAt(F.stops, v); const o=(py*W+px)*4; d[o]=col[0]; d[o+1]=col[1]; d[o+2]=col[2]; d[o+3]=Math.round(col[3]*0.62);
+    } }
+  ctx.putImageData(img,0,0);
+  try{ const prov = await Cesium.SingleTileImageryProvider.fromUrl(cv.toDataURL('image/png'), { rectangle: Cesium.Rectangle.fromDegrees(g.ext.w, g.ext.s, g.ext.e>180?180:g.ext.e, g.ext.n) });
+    const old = FS.layer; FS.layer = viewer.imageryLayers.addImageryProvider(prov); if(old) viewer.imageryLayers.remove(old, true); viewer.imageryLayers.raiseToTop(layersImg.labels);
+  }catch(e){ toast('필드 렌더 실패: '+e.message); }
+  // 화살표 / H·L
+  if(FS.arrowDS){ FS.arrowDS.entities.removeAll(); } else { FS.arrowDS = new Cesium.CustomDataSource('fieldArrows'); viewer.dataSources.add(FS.arrowDS); }
+  if(F.arrows){ const step = g.ext.global?2:1; const cw=(g.ext.e-g.ext.w)/g.NX, ch=(g.ext.n-g.ext.s)/g.NY;
+    for(let j=0;j<g.NY;j+=step) for(let i=0;i<g.NX;i+=step){ const p=g.pts[j*g.NX+i]; const sp=p.hourly?.[F.vars[0]]?.[ti], dir=p.hourly?.[F.vars[1]]?.[ti]; if(sp==null||dir==null||sp<0.2) continue;
+      const to = F.toDir ? dir : (dir+180)%360; const len = Math.min(cw,ch)*0.75*Math.min(1, 0.35+sp/15); const lat=+p.latitude, lon=+p.longitude; const lat2 = lat + Math.cos(rad(to))*len, lon2 = lon + Math.sin(rad(to))*len/Math.max(0.2,Math.cos(rad(lat)));
+      const col = colorAt(F.stops, sp); FS.arrowDS.entities.add({ polyline:{ positions: Cesium.Cartesian3.fromDegreesArray([lon,lat,lon2,lat2]), width: 7, material: new Cesium.PolylineArrowMaterialProperty(new Cesium.Color(col[0]/255,col[1]/255,col[2]/255,0.95)) } }); } }
+  if(F.hl){ const v=(i,j)=>val(i,j); for(let j=1;j<g.NY-1;j++) for(let i=1;i<g.NX-1;i++){ const c=v(i,j); if(c==null) continue; let mx=true,mn=true; for(let dj=-2;dj<=2;dj++) for(let di=-2;di<=2;di++){ if(!di&&!dj) continue; const o=v(i+di,j+dj); if(o==null) continue; if(o>=c) mx=false; if(o<=c) mn=false; } if((mx&&c>=1016)||(mn&&c<=1010)){ const p=g.pts[j*g.NX+i]; FS.arrowDS.entities.add({ position: Cesium.Cartesian3.fromDegrees(+p.longitude,+p.latitude,0), label:{ text:`${mx?'H':'L'}\n${Math.round(c)}`, font:`800 ${mx?16:16}px Inter, sans-serif`, fillColor: mx? Cesium.Color.fromCssColorString('#7fb7f5') : Cesium.Color.fromCssColorString('#ff5d5d'), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth:4, style: Cesium.LabelStyle.FILL_AND_OUTLINE, disableDepthTestDistance: Number.POSITIVE_INFINITY } }); } } }
+}
+function clearField(){ FS.token++; if(FS.layer){ viewer.imageryLayers.remove(FS.layer, true); FS.layer=null; } if(FS.arrowDS) FS.arrowDS.entities.removeAll(); FS.grid=null; FS.id=null; showLegend(null); }
+async function setField(id){ // 격자 필드는 한 번에 하나 (EARTHUS live= 와 동일)
+  if(FS.id && FS.id!==id){ STATE.on.delete(FS.id); } clearField(); FS.id = id; await sampleField(id);
+}
+let moveTimer=null; camera.moveEnd.addEventListener(()=>{ if(!FS.id) return; clearTimeout(moveTimer); moveTimer = setTimeout(()=>{ const k = extentKey(viewExtent()); if(FS.grid && k!==FS.grid.key && !FS.busy) sampleField(FS.id); }, 900); });
+
+/* ---------- 레이더 (RainViewer) ---------- */
+const RV = { meta:null, frames:[], layers:{}, cur:null, satFrames:[] };
+async function loadRadar(){ const r = await tf('https://api.rainviewer.com/public/weather-maps.json'); RV.meta = await r.json(); RV.frames = [...RV.meta.radar.past, ...RV.meta.radar.nowcast]; RV.satFrames = RV.meta.satellite?.infrared || []; }
+function radarFrameFor(t){ if(!RV.frames.length) return null; const s = t/1000; let best=RV.frames[0]; for(const f of RV.frames) if(Math.abs(f.time-s) < Math.abs(best.time-s)) best=f; return best; }
+async function showRadar(){ if(!RV.meta) await loadRadar(); const f = radarFrameFor(simTime().getTime()); if(!f) return; if(RV.cur && RV.cur!==f.time && RV.layers[RV.cur]) RV.layers[RV.cur].show=false;
+  if(!RV.layers[f.time]){ RV.layers[f.time] = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({ url: `${RV.meta.host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`, maximumLevel: 10, credit:'RainViewer' })); RV.layers[f.time].alpha = .85; viewer.imageryLayers.raiseToTop(layersImg.labels); }
+  RV.layers[f.time].show = true; RV.cur = f.time;
+  const isNow = Math.abs(f.time*1000 - Date.now()) < 3600e3*2.5;
+  showLegend('레이더 강수 (전지구 합성)', [[0,'#3fc7c0'],[1,'#a4c81c'],[2,'#f5d76e'],[3,'#f2a65a'],[4,'#ff5d5d']], '', `RainViewer · 프레임 ${kst(f.time*1000)} KST${f.time*1000>Date.now()?' (나우캐스트)':''} · 10분 간격 · 과거 2시간 ~ +30분${isNow?'':' · 시간 바 범위 밖 → 가장 가까운 프레임'}`); }
+function hideRadar(){ for(const k in RV.layers) RV.layers[k].show=false; RV.cur=null; showLegend(null); }
+
+/* ---------- 벡터 레이어 ---------- */
+const VDS = {}; // id -> CustomDataSource
+function ds(id){ if(!VDS[id]){ VDS[id] = new Cesium.CustomDataSource(id); viewer.dataSources.add(VDS[id]); } return VDS[id]; }
+const PT = (col, size=8) => ({ pixelSize:size, color: Cesium.Color.fromCssColorString(col), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth:2, disableDepthTestDistance: Number.POSITIVE_INFINITY });
+const LBL = (text, col='#fff', off=-12) => ({ text, font:'600 12px Inter, "Noto Sans KR", sans-serif', fillColor: Cesium.Color.fromCssColorString(col), outlineColor: Cesium.Color.fromCssColorString('#03122A'), outlineWidth:3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0,off), verticalOrigin: Cesium.VerticalOrigin.BOTTOM, disableDepthTestDistance: Number.POSITIVE_INFINITY, scaleByDistance: new Cesium.NearFarScalar(1e5,1,2e7,0.7) });
+const CARD = (title, sub, html) => { STATE.point=null; $('#card').classList.add('open'); $('#cardTitle').innerHTML = `${title}<small>${sub||''}</small>`; $('#cardBody').innerHTML = html; };
+const EONET_COL = { wildfires:'#ff5d5d', severeStorms:'#7fb7f5', volcanoes:'#f2a65a', seaLakeIce:'#dce8f5', floods:'#3fc7c0', earthquakes:'#f5d76e', drought:'#c2a060', dustHaze:'#c9a7ff', landslides:'#b07a4a', snow:'#ffffff', tempExtremes:'#ff9e5d', waterColor:'#3fc7c0', manmade:'#8fa7c4' };
+async function loadEonet(filterCat){
+  const id = filterCat ? 'eonet_'+filterCat : 'eonet'; const D = ds(id); if(D.entities.values.length){ D.show=true; return; }
+  toast('NASA EONET 이벤트 불러오는 중…'); const r = await tf('https://eonet.gsfc.nasa.gov/api/v3/events/geojson?status=open&days=30'); const j = await r.json(); let n=0;
+  for(const f of j.features){ const cat = f.properties.categories[0]; if(filterCat && cat.id!==filterCat) continue; let c = f.geometry.type==='Point' ? f.geometry.coordinates : (f.geometry.coordinates[0][0]||f.geometry.coordinates[0]); if(!Array.isArray(c)||c.length<2) continue; n++;
+    D.entities.add({ position: Cesium.Cartesian3.fromDegrees(c[0],c[1],0), point: PT(EONET_COL[cat.id]||'#a4c81c', 7), properties:{ kind:'eonet', title:f.properties.title, cat:cat.title, date:f.properties.date, link:f.properties.link, src:(f.properties.sources||[]).map(s=>s.url).join(' ') } }); }
+  toast(`EONET ${filterCat? '산불':'자연재해 이벤트'} ${n}건 (최근 30일, 진행 중)`);
+}
+async function loadTyphoon(){
+  const D = ds('typhoon'); D.entities.removeAll(); toast('JMA 태풍 정보 불러오는 중…');
+  const list = await (await tf('https://www.jma.go.jp/bosai/typhoon/data/targetTc.json')).json(); let n=0; const infos=[];
+  for(const tc of list){ try{ const spec = await (await tf(`https://www.jma.go.jp/bosai/typhoon/data/${tc.tropicalCyclone}/specifications.json`)).json(); const fc = await (await tf(`https://www.jma.go.jp/bosai/typhoon/data/${tc.tropicalCyclone}/forecast.json`)).json();
+    const name = spec[0]?.name?.en || tc.typhoonNumber; const cat = spec[0]?.category?.en || tc.category; const an = spec.find(p=>p.part?.en==='Analysis'); const wind = an?.maximumWind?.sustained?.['m/s'];
+    const parts = fc.filter(p=>p.center); const analysis = parts[0];
+    const past = (analysis.track?.typhoon||[]).map(([la,lo])=>[lo,la]); if(past.length>1) D.entities.add({ polyline:{ positions: Cesium.Cartesian3.fromDegreesArray(past.flat()), width:3, material: Cesium.Color.WHITE.withAlpha(.8) } });
+    const fcPts = parts.map(p=>[p.center[1], p.center[0]]); if(fcPts.length>1) D.entities.add({ polyline:{ positions: Cesium.Cartesian3.fromDegreesArray(fcPts.flat()), width:3, material: new Cesium.PolylineDashMaterialProperty({ color: Cesium.Color.fromCssColorString('#ff5d5d') }) } });
+    for(const p of parts){ const [la,lo]=p.center; const isA = p.advancedHours===0; D.entities.add({ position: Cesium.Cartesian3.fromDegrees(lo,la,0), point: PT(isA?'#ff5d5d':'#f2a65a', isA?12:7), label: LBL(isA? `${name} (${cat})${wind?' '+wind+' m/s':''}` : `+${p.advancedHours}h ${p.validtime?.JST?.slice(5,16).replace('T',' ')||''}`, isA?'#ff5d5d':'#f2a65a'), properties:{ kind:'typhoon', name, cat, wind, hours:p.advancedHours, valid:p.validtime?.JST, lat:la, lon:lo } });
+      if(p.probabilityCircle?.radius) D.entities.add({ position: Cesium.Cartesian3.fromDegrees(lo,la,0), ellipse:{ semiMajorAxis:p.probabilityCircle.radius, semiMinorAxis:p.probabilityCircle.radius, material: Cesium.Color.fromCssColorString('#f2a65a').withAlpha(.08), outline:true, outlineColor: Cesium.Color.fromCssColorString('#f2a65a').withAlpha(.7) } });
+      if(isA && p.stormWarningArea?.arc?.[0]) { const rr = p.stormWarningArea.arc[0][1]; D.entities.add({ position: Cesium.Cartesian3.fromDegrees(lo,la,0), ellipse:{ semiMajorAxis:rr, semiMinorAxis:rr, material: Cesium.Color.fromCssColorString('#ff5d5d').withAlpha(.15), outline:true, outlineColor: Cesium.Color.fromCssColorString('#ff5d5d') } }); }
+      if(isA && p.galeWarningArea?.radius) { const gc=p.galeWarningArea.center||p.center; D.entities.add({ position: Cesium.Cartesian3.fromDegrees(gc[1],gc[0],0), ellipse:{ semiMajorAxis:p.galeWarningArea.radius, semiMinorAxis:p.galeWarningArea.radius, material: Cesium.Color.fromCssColorString('#f5d76e').withAlpha(.08), outline:true, outlineColor: Cesium.Color.fromCssColorString('#f5d76e').withAlpha(.8) } }); } }
+    n++; infos.push({name,cat,wind,center:analysis.center,parts:parts.length, issue: spec[0]?.issue?.JST});
+  }catch(e){ console.warn('typhoon', e); } }
+  STATE.data.typhoons = infos; toast(n? `태풍 ${n}개 · JMA 공식 경로 (${infos.map(i=>i.name).join(', ')})` : '현재 JMA가 추적 중인 태풍이 없습니다');
+  if(n){ const i = infos[0]; CARD(`태풍 ${i.name} (${i.cat})`, `JMA 발표 ${i.issue?.slice(0,16).replace('T',' ')} JST`, `<div class="sec"><p class="lead">현재 중심 <b>N${i.center[0]}° E${i.center[1]}°</b>, 중심 부근 최대풍속 <b>${i.wind||'—'} m/s</b>. 흰 선 = 지나온 경로, 붉은 점선 = 예보 경로(+12/24/45/69h), 주황 원 = 예보원(70% 확률), 붉은 원 = 폭풍역, 노란 원 = 강풍역.</p><div class="meta"><span class="tag obs">OFFICIAL</span> 일본 기상청(JMA) 태풍 정보 · 기상청(KMA) 공식 자료는 API 키 필요</div></div>`); }
+}
+async function loadPlates(){ if(VDS.plates){ VDS.plates.show=true; return; } toast('판 경계(PB2002) 불러오는 중…'); const g = await Cesium.GeoJsonDataSource.load('https://raw.githubusercontent.com/fraxen/tectonicplates/master/GeoJSON/PB2002_boundaries.json', { stroke: Cesium.Color.fromCssColorString('#f2a65a'), strokeWidth: 2, clampToGround:false }); for(const e of g.entities.values){ if(e.polyline){ e.polyline.width=2; e.polyline.material=Cesium.Color.fromCssColorString('#f2a65a').withAlpha(.85); } } VDS.plates = g; viewer.dataSources.add(g); toast('판 경계 241개 구간 (Bird 2003 PB2002)'); }
+const TRENCHES = [['마리아나 해구',11.35,142.2,10994],['통가 해구',-23.25,-174.75,10882],['쿠릴-캄차카 해구',44.0,150.0,10542],['필리핀 해구',10.0,126.6,10540],['케르마덱 해구',-31.9,-177.3,10047],['이즈-오가사와라 해구',29.8,142.8,9810],['일본 해구',36.1,142.8,8412],['뉴브리튼 해구',-6.0,153.0,9140],['푸에르토리코 해구',19.7,-66.0,8376],['사우스샌드위치 해구',-55.0,-26.0,8428],['페루-칠레 해구',-23.3,-71.3,8065],['알류샨 해구',51.0,-175.0,7822],['류큐 해구',24.5,127.5,7460],['순다(자바) 해구',-10.3,110.0,7290],['중앙아메리카 해구',12.0,-91.0,6669],['야프 해구',8.6,138.4,8527],['팔라우 해구',6.5,135.5,8054],['헬레닉 해구',35.0,22.0,5267],['난카이 트로프',32.5,135.0,4900],['히쿠랑기 해구',-40.0,178.5,3750]];
+function loadTrenches(){ const D = ds('trenches'); if(D.entities.values.length){ D.show=true; return; } for(const [n,la,lo,d] of TRENCHES) D.entities.add({ position: Cesium.Cartesian3.fromDegrees(lo,la,0), point: PT('#3fc7c0',7), label: LBL(`${n} ${d.toLocaleString()} m`,'#3fc7c0'), properties:{ kind:'trench', name:n, depth:d } }); toast('주요 해구 20곳 (GEBCO 가제티어 기준 대략 좌표)'); }
+const GYRES = [['북태평양 환류',30,-150,'시계'],['남태평양 환류',-30,-110,'반시계'],['북대서양 환류',30,-40,'시계'],['남대서양 환류',-30,-20,'반시계'],['인도양 환류',-30,70,'반시계']];
+function loadGyres(){ const D = ds('gyres'); if(D.entities.values.length){ D.show=true; return; } for(const [n,la,lo,dir] of GYRES){ D.entities.add({ position: Cesium.Cartesian3.fromDegrees(lo,la,0), ellipse:{ semiMajorAxis:2.2e6, semiMinorAxis:1.4e6, material: Cesium.Color.fromCssColorString('#3fc7c0').withAlpha(.06), outline:true, outlineColor: Cesium.Color.fromCssColorString('#3fc7c0').withAlpha(.6) }, label: LBL(`${n} (${dir} 방향)`,'#3fc7c0',0) }); } toast('5대 아열대 환류 · 정적 참고 위치 (DERIVED)'); }
+async function loadExtremes(){
+  toast('오늘의 극값 계산 중 (전지구 성긴 격자)…'); const lats=[], lons=[]; for(let la=-60; la<=70; la+=10) for(let lo=-180; lo<180; lo+=12){ lats.push(la); lons.push(lo); }
+  const [wx, mr] = await Promise.all([ tf(`${API.forecast}?latitude=${lats.join(',')}&longitude=${lons.join(',')}&current=temperature_2m,wind_speed_10m&wind_speed_unit=ms`, {}, 25000).then(r=>r.json()), tf(`${API.marine}?latitude=${lats.join(',')}&longitude=${lons.join(',')}&current=wave_height`, {}, 25000).then(r=>r.json()).catch(()=>null) ]);
+  const pick = (arr, key, max) => arr.reduce((b,p)=>{ const v=p.current?.[key]; if(v==null) return b; return (!b || (max? v>b.v : v<b.v)) ? {v, lat:+p.latitude, lon:+p.longitude} : b; }, null);
+  const hot = pick(wx,'temperature_2m',true), cold = pick(wx,'temperature_2m',false), windy = pick(wx,'wind_speed_10m',true), wave = mr? pick(mr,'wave_height',true):null;
+  const D = ds('extremes'); D.entities.removeAll();
+  const items = [['가장 더운 곳', hot, '#ff5d5d', `${hot?.v?.toFixed(1)} °C`],['가장 추운 곳', cold, '#7fb7f5', `${cold?.v?.toFixed(1)} °C`],['바람 가장 센 곳', windy, '#f5d76e', `${windy?.v?.toFixed(1)} m/s`],['파도 가장 높은 곳', wave, '#3fc7c0', `${wave?.v?.toFixed(1)} m`]];
+  for(const [n,p,c,v] of items){ if(!p) continue; D.entities.add({ position: Cesium.Cartesian3.fromDegrees(p.lon,p.lat,0), point: PT(c,11), label: LBL(`${n} ${v}`, c), properties:{ kind:'extreme', name:n, value:v } }); }
+  CARD('오늘의 극값', '전지구 10°×12° 성긴 격자 · 지금', `<div class="sec">${items.map(([n,p,c,v])=> p? `<p class="lead" style="margin:0 0 6px"><b style="color:${c}">${n}</b> ${v} · ${p.lat.toFixed(0)}°, ${p.lon.toFixed(0)}°</p>`:'').join('')}<div class="meta"><span class="tag model">MODEL</span> Open-Meteo 현재값 · 성긴 격자라 실제 극값과 다를 수 있음 (EARTHUS는 1.0° S3 격자 사용)</div></div>`);
+}
+async function loadPOI(kind){
+  const Q = { beach:['해변','beach','#3fc7c0'], fishing:['낚시터','fishing','#7fb7f5'], paragliding:['활공장','paragliding','#a4c81c'], peak:['산 정상','peak','#f2a65a'], attraction:['관광지','tourist attraction','#f5d76e'] }[kind];
+  const ext = viewExtent(); if(ext.global) return toast('지역 단위로 확대한 뒤 켜 주세요 (화면 범위 검색)');
+  toast(`${Q[0]} 검색 중 (OpenStreetMap)…`); const r = await tf(`https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(Q[1])}&viewbox=${ext.w},${ext.n},${ext.e},${ext.s}&bounded=1&limit=40&accept-language=ko`); const j = await r.json();
+  const D = ds('poi_'+kind); D.entities.removeAll(); for(const x of j){ D.entities.add({ position: Cesium.Cartesian3.fromDegrees(+x.lon,+x.lat,0), point: PT(Q[2],7), label: LBL(x.display_name.split(',')[0], Q[2]), properties:{ kind:'poi', name:x.display_name, type:x.type, lat:+x.lat, lon:+x.lon, poiKind:kind } }); }
+  toast(`${Q[0]} ${j.length}곳 (화면 범위, OSM)`); if(j.length) CARD(`${Q[0]} ${j.length}곳`, '현재 화면 범위 · OpenStreetMap Nominatim', `<div class="sec">${j.slice(0,25).map(x=>`<p class="lead" style="margin:0 0 6px;font-size:13px"><b>${x.display_name.split(',')[0]}</b> <span style="color:var(--text-dim)">${x.display_name.split(',').slice(1,3).join(',')}</span></p>`).join('')}<div class="meta"><span class="tag obs">OSM</span> 지점을 클릭하면 그곳의 날씨·파도·활동 판정을 볼 수 있습니다</div></div>`);
+}
+async function loadGBIF(kind, lat, lon){
+  const Q = { birds:[212,'조류 관측 기록','#a4c81c',''], migbird:[212,'봄철(3~5월) 조류 기록','#f5d76e','&month=3,5'], turtle:[9413,'바다거북과 기록','#3fc7c0',''], seabird:[9316,'갈매기과(바닷새) 기록','#7fb7f5',''] }[kind];
+  if(lat==null){ const c = camera.positionCartographic; lat = deg(c.latitude); lon = deg(c.longitude); }
+  const R = kind==='turtle' ? 3 : 0.5;
+  toast(`GBIF ${Q[1]} 조회 중…`); const r = await tf(`https://api.gbif.org/v1/occurrence/search?taxonKey=${Q[0]}&hasCoordinate=true&decimalLatitude=${(lat-R).toFixed(2)},${(lat+R).toFixed(2)}&decimalLongitude=${(lon-R).toFixed(2)},${(lon+R).toFixed(2)}&limit=200${Q[3]}`); const j = await r.json();
+  const D = ds('gbif_'+kind); D.entities.removeAll(); const sp = {}; for(const o of j.results){ sp[o.species||o.scientificName]=(sp[o.species||o.scientificName]||0)+1; D.entities.add({ position: Cesium.Cartesian3.fromDegrees(o.decimalLongitude,o.decimalLatitude,0), point: PT(Q[2],5), properties:{ kind:'gbif', name:o.species||o.scientificName, date:o.eventDate, dataset:o.datasetName||'', basis:o.basisOfRecord } }); }
+  const top = Object.entries(sp).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  CARD(Q[1], `GBIF · 반경 약 ${Math.round(R*111)} km · 전체 ${j.count.toLocaleString()}건 중 ${j.results.length}건 표시`, `<div class="sec"><p class="lead">${top.length? `가장 많이 기록된 종: <b>${top[0][0]}</b> (${top[0][1]}건)` : '이 범위에 기록이 없습니다'}</p>${top.map(([s,n])=>`<div style="font-size:13px;display:flex;justify-content:space-between"><span>${s}</span><b>${n}</b></div>`).join('')}<div class="meta"><span class="tag obs">OBS</span> GBIF 생물다양성 정보기구 · 시민과학·박물관 표본 포함 · eBird 실시간 자료는 키 필요</div></div>`);
+  toast(`${Q[1]} ${j.results.length}건 표시`);
+}
+async function loadEclipse(){ toast('일식 자료 (USNO)…'); const y = new Date().getFullYear(); const j = await (await tf(`https://aa.usno.navy.mil/api/eclipses/solar/year?year=${y}`)).json(); const list = j.eclipses_in_year||[]; CARD(`${y}년 일식`, 'US Naval Observatory', `<div class="sec">${list.map(e=>`<p class="lead" style="margin:0 0 8px"><b>${e.year}-${String(e.month).padStart(2,'0')}-${String(e.day).padStart(2,'0')}</b> ${e.event}</p>`).join('')||'<p class="lead">자료 없음</p>'}<div class="meta"><span class="tag obs">OFFICIAL</span> USNO 일식 API · 경로 지도는 NASA GSFC 자료 연결 예정</div></div>`); }
+async function loadPopulation(lat, lon){ if(lat==null) return toast('지도를 먼저 클릭해 지점을 선택하세요'); toast('WorldPop 인구 집계 중 (약 10초)…'); const d=0.045; const geo = {type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Polygon',coordinates:[[[lon-d,lat-d],[lon+d,lat-d],[lon+d,lat+d],[lon-d,lat+d],[lon-d,lat-d]]]}}]};
+  const j = await (await tf(`https://api.worldpop.org/v1/services/stats?dataset=wpgppop&year=2020&geojson=${encodeURIComponent(JSON.stringify(geo))}`)).json(); let res=null; for(let k=0;k<12;k++){ await new Promise(r=>setTimeout(r,2000)); const t = await (await tf(`https://api.worldpop.org/v1/tasks/${j.taskid}`)).json(); if(t.status==='finished'){ res=t.data; break; } }
+  const sec = `<div class="sec"><p class="lead">이 지점 주변 약 10 km × 10 km 안에 <b>${res? fmtN(res.total_population):'집계 실패'} 명</b>이 거주합니다 (2020년 추정).</p><div class="meta"><span class="tag model">MODEL</span> WorldPop 100 m 격자 인구 추정 · EARTHUS 인구 조각(21개국 격자)은 자체 자료</div></div>`;
+  if(STATE.point){ STATE.point.pop = sec; renderCard(); } else CARD('인구', `N${lat.toFixed(3)} E${lon.toFixed(3)}`, sec); }
+
+/* ---------- 지점 카드 확장 섹션 ---------- */
+const CARD_FETCH = {
+  marine: async (P) => { const r = await tf(`${API.marine}?latitude=${P.lat}&longitude=${P.lon}&hourly=wave_height,wave_period,wave_direction,swell_wave_height,swell_wave_period,swell_wave_direction,wind_wave_height,sea_surface_temperature,ocean_current_velocity,ocean_current_direction&forecast_days=3&timezone=Asia%2FSeoul`); return r.json(); },
+  wx2: async (P) => { const r = await tf(`${API.forecast}?latitude=${P.lat}&longitude=${P.lon}&hourly=wind_speed_10m,wind_speed_80m,wind_gusts_10m,cloud_cover_low,cape,temperature_2m,uv_index&forecast_days=3&timezone=Asia%2FSeoul&wind_speed_unit=ms`); return r.json(); },
+  climate: async (P) => { const end = new Date(Date.now()-5*86400e3), start = new Date(end.getTime()-365*86400e3); const r = await tf(`https://archive-api.open-meteo.com/v1/archive?latitude=${P.lat}&longitude=${P.lon}&start_date=${start.toISOString().slice(0,10)}&end_date=${end.toISOString().slice(0,10)}&daily=temperature_2m_mean,precipitation_sum&timezone=Asia%2FSeoul`, {}, 25000); return r.json(); },
+  anom: async (P) => { const now = new Date(); const y = now.getFullYear(); const mmdd = (d)=>d.toISOString().slice(5,10); const a = new Date(now.getTime()-7*86400e3), b = new Date(now.getTime()+7*86400e3); const reqs = [1,2,3,4,5].map(k => tf(`https://archive-api.open-meteo.com/v1/archive?latitude=${P.lat}&longitude=${P.lon}&start_date=${y-k}-${mmdd(a)}&end_date=${y-k}-${mmdd(b)}&daily=temperature_2m_mean&timezone=Asia%2FSeoul`, {}, 25000).then(r=>r.json()).catch(()=>null)); const js = await Promise.all(reqs); const vals = js.flatMap(j => j?.daily?.temperature_2m_mean||[]).filter(v=>v!=null); return { mean: vals.length? vals.reduce((s,x)=>s+x,0)/vals.length : null, n: vals.length }; },
+  elev: async (P) => (await (await tf(`https://api.open-meteo.com/v1/elevation?latitude=${P.lat}&longitude=${P.lon}`)).json()).elevation?.[0],
+};
+const CARD_SECTIONS = {
+  surf: { needs:['marine'], render:(P)=>{ const h=P.marine?.hourly; if(!h) return ''; const i=hourIndex(h); const sw=h.swell_wave_height[i], sp=h.swell_wave_period[i], sd=h.swell_wave_direction[i], wh=h.wave_height[i]; if(sw==null) return `<div class="sec"><p class="lead" style="color:var(--text-dim)">서핑: 바다 격자가 아닙니다(내륙).</p></div>`; const w=P.wx2?.hourly?.wind_speed_10m?.[hourIndex(P.wx2.hourly)]; const g = sp>=8 && sw>=0.5 && sw<=2.5 && (w==null||w<8) ? ['ok','서핑 양호 · 긴 주기 너울'] : sp>=6 && sw>=0.3 ? ['warn','보통 · 짧은 주기/바람'] : ['bad','너울 약함 또는 바람 강함']; return `<div class="sec"><div class="fly ${g[0]}">${g[1]}</div><p class="lead">너울 <b>${sw} m</b> · 주기 <b>${sp} s</b> · 방향 ${dirName(sd)}(${sd}°) · 전체 파고 ${wh} m${w!=null?` · 바람 ${w} m/s`:''}</p><div class="meta"><span class="tag model">MODEL</span> Open-Meteo Marine · 판정 기준은 예시(주기 8s+, 너울 0.5~2.5m, 바람 8m/s 미만)</div></div>`; } },
+  fishing: { needs:['marine','wx2'], render:(P)=>{ const h=P.marine?.hourly; if(!h) return ''; const i=hourIndex(h); const wh=h.wave_height[i]; if(wh==null) return `<div class="sec"><p class="lead" style="color:var(--text-dim)">낚시: 바다 격자가 아닙니다(내륙).</p></div>`; const cv=h.ocean_current_velocity[i], cd=h.ocean_current_direction[i], sst=h.sea_surface_temperature[i]; const w=P.wx2?.hourly?.wind_speed_10m?.[hourIndex(P.wx2.hourly)]; const g = wh<1 && (w==null||w<7) ? ['ok','출조 양호'] : wh<1.5 && (w==null||w<10) ? ['warn','주의 · 파고/바람'] : ['bad','위험 · 출조 부적합']; return `<div class="sec"><div class="fly ${g[0]}">${g[1]}</div><p class="lead">파고 <b>${wh} m</b> · 해류 <b>${cv} m/s</b> ${dirName(cd)}쪽 · 수온 ${sst}°C${w!=null?` · 바람 ${w} m/s`:''}</p><div class="meta"><span class="tag model">MODEL</span> Open-Meteo Marine · 판정 기준은 예시(파고 1m, 바람 7m/s) · 물때(조위)는 국립해양조사원 자료 필요</div></div>`; } },
+  paraglide: { needs:['wx2'], render:(P)=>{ const h=P.wx2?.hourly; if(!h) return ''; const i=hourIndex(h); const w=h.wind_speed_10m[i], w80=h.wind_speed_80m[i], g=h.wind_gusts_10m[i], cl=h.cloud_cover_low[i], cape=h.cape[i]; const j = w>=2&&w<=7&&g<10&&cape<500&&cl<60 ? ['ok','비행 양호'] : w<=9&&g<13&&cape<1000 ? ['warn','주의 · 경험자'] : ['bad','부적합']; return `<div class="sec"><div class="fly ${j[0]}">패러글라이딩: ${j[1]}</div><p class="lead">바람 10 m <b>${w} m/s</b> · 80 m <b>${w80} m/s</b> · 돌풍 ${g} · 저층 운량 ${cl}% · CAPE ${cape} J/kg</p><div class="meta"><span class="tag model">MODEL</span> Open-Meteo · 판정 기준은 예시 · 활공장 목록은 지역 › 활공장 검색</div></div>`; } },
+  summit: { needs:['elev'], render:(P)=>{ const e=P.elev; if(e==null) return ''; const t = P.wx?.hourly?.temperature_2m?.[hourIndex(P.wx.hourly)]; return `<div class="sec"><p class="lead">이 지점 표고 <b>${Math.round(e)} m</b>. ${t!=null? `1,000 m 더 오르면 약 <b>${(t-6.5).toFixed(1)}°C</b> (지금 ${t}°C, 감률 6.5°C/km)`:''}</p><div class="meta"><span class="tag model">MODEL</span> Open-Meteo 표고(Copernicus DEM 90m) · 표준 기온 감률 적용(DERIVED) · 산 정상 목록은 지역 › 산 정상 검색</div></div>`; } },
+  climate: { needs:['climate'], render:(P)=>{ const d=P.climate?.daily; if(!d) return ''; const t=d.temperature_2m_mean.filter(v=>v!=null), r=d.precipitation_sum; const mn=Math.min(...t), mx=Math.max(...t), avg=t.reduce((s,x)=>s+x,0)/t.length, rs=r.reduce((s,x)=>s+(x||0),0); const W=320,H=60; const pts=t.map((v,i)=>`${(i/(t.length-1)*W).toFixed(1)},${(H-(v-mn)/(mx-mn||1)*H).toFixed(1)}`).join(' '); return `<div class="sec"><p class="lead">최근 1년 일평균 기온 <b>${avg.toFixed(1)}°C</b> (최저 ${mn.toFixed(1)} · 최고 ${mx.toFixed(1)}), 연 강수 <b>${rs.toFixed(0)} mm</b></p><svg width="${W}" height="${H}" style="display:block;margin:4px 0"><polyline points="${pts}" fill="none" stroke="#A4C81C" stroke-width="1.5"/></svg><div class="meta"><span class="tag obs">REANALYSIS</span> Open-Meteo ERA5 과거기상 · ${d.time[0]} ~ ${d.time[d.time.length-1]}</div></div>`; } },
+  anom: { needs:['anom'], render:(P)=>{ const t = P.wx?.hourly?.temperature_2m?.[hourIndex(P.wx.hourly)]; if(P.anom?.mean==null||t==null) return ''; const dlt=t-P.anom.mean; return `<div class="sec"><p class="lead">지금 기온은 과거 5년 같은 시기 평균(${P.anom.mean.toFixed(1)}°C)보다 <b style="color:${dlt>0?'var(--amber)':'var(--sky)'}">${dlt>0?'+':''}${dlt.toFixed(1)}°C</b> ${dlt>0?'높습니다':'낮습니다'}.</p><div class="meta"><span class="tag derived">DERIVED</span> ERA5 ±7일 × 5년(${P.anom.n}일) 평균 대비 · 기상청 1991~2020 평년값은 키 필요</div></div>`; } },
+  pop: { needs:[], render:(P)=> P.pop || '' },
+};
+const ACTIVE_SECTIONS = () => Object.keys(CARD_SECTIONS).filter(k => STATE.on.has('card_'+k));
+const _pickPoint = pickPoint;
+pickPoint = async function(lat, lon){ await _pickPoint(lat, lon); const P = STATE.point; if(!P) return; const needs = new Set(ACTIVE_SECTIONS().flatMap(k=>CARD_SECTIONS[k].needs)); for(const n of needs){ CARD_FETCH[n](P).then(v=>{ if(STATE.point===P){ P[n]=v; renderCard(); } }).catch(e=>{ P[n+'_err']=e.message; }); } if(STATE.on.has('card_pop')) loadPopulation(lat, lon); };
+const _renderCard = renderCard;
+renderCard = function(){ _renderCard(); const P = STATE.point; if(!P) return; let extra=''; for(const k of ACTIVE_SECTIONS()){ try{ extra += CARD_SECTIONS[k].render(P); }catch(e){} } if(extra){ const body=$('#cardBody'); const anchor = body.querySelector('.sec:last-child'); const div=document.createElement('div'); div.innerHTML=extra; body.insertBefore(div, anchor); } };
+
+/* ---------- 레이어 레지스트리 ---------- */
+const TILES = {
+  hillshade: { url:'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', max:16, alpha:.55, credit:'Esri World Hillshade', label:'지형 음영' },
+  ocean: { url:'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', max:13, alpha:.9, credit:'Esri World Ocean Base (GEBCO)', label:'바다 깊이' },
+  forestloss: { url:'https://tiles.globalforestwatch.org/umd_tree_cover_loss/latest/dynamic/{z}/{x}/{y}.png', max:12, alpha:.85, credit:'Global Forest Watch · Hansen/UMD', label:'산림 손실 2001~' },
+};
+const L = {}; // id -> {type, on(), off()}
+for(const id in TILES){ L[id] = { type:'imagery', on:()=>{ if(!layersImg[id]){ layersImg[id] = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({ url: TILES[id].url, maximumLevel: TILES[id].max, credit: TILES[id].credit })); layersImg[id].alpha = TILES[id].alpha; viewer.imageryLayers.raiseToTop(layersImg.labels); } else layersImg[id].show = true; toast(`${TILES[id].label} · ${TILES[id].credit}`); }, off:()=>{ if(layersImg[id]) layersImg[id].show=false; }, src: TILES[id].credit+' '+TILES[id].label }; }
+for(const id in FIELDS){ L['f_'+id] = { type:'field', on:()=>setField(id), off:()=>{ if(FS.id===id) clearField(); }, src: ()=> FS.id===id ? `<b>Open-Meteo</b> ${FIELDS[id].label} 격자 (MODEL)` : '' }; }
+L.radar = { type:'radar', on:()=>showRadar(), off:()=>hideRadar(), src:'<b>RainViewer</b> 레이더 합성' };
+L.eonet = { type:'vector', on:()=>loadEonet(), off:()=>{ if(VDS.eonet) VDS.eonet.show=false; }, src:'<b>NASA EONET</b> 자연재해 이벤트' };
+L.fire = { type:'vector', on:()=>loadEonet('wildfires'), off:()=>{ if(VDS.eonet_wildfires) VDS.eonet_wildfires.show=false; }, src:'<b>NASA EONET</b> 산불' };
+L.typhoon = { type:'vector', on:()=>loadTyphoon(), off:()=>{ if(VDS.typhoon) VDS.typhoon.show=false; }, src:'<b>JMA</b> 태풍 공식 경로 (OFFICIAL)' };
+L.plates = { type:'vector', on:()=>loadPlates(), off:()=>{ if(VDS.plates) VDS.plates.show=false; }, src:'PB2002 판 경계' };
+L.trenches = { type:'vector', on:()=>loadTrenches(), off:()=>{ if(VDS.trenches) VDS.trenches.show=false; }, src:'해구 20곳' };
+L.gyres = { type:'vector', on:()=>loadGyres(), off:()=>{ if(VDS.gyres) VDS.gyres.show=false; }, src:'해양 환류(정적)' };
+for(const k of ['beach','fishing','paragliding','peak','attraction']) L['poi_'+k] = { type:'vector', on:()=>loadPOI(k), off:()=>{ if(VDS['poi_'+k]) VDS['poi_'+k].entities.removeAll(); }, src:'<b>OSM</b> '+k };
+for(const k of ['birds','migbird','turtle','seabird']) L['gbif_'+k] = { type:'vector', on:()=>loadGBIF(k, STATE.point?.lat, STATE.point?.lon), off:()=>{ if(VDS['gbif_'+k]) VDS['gbif_'+k].entities.removeAll(); }, src:'<b>GBIF</b> '+k };
+for(const k in CARD_SECTIONS) L['card_'+k] = { type:'card', on:()=>{ if(STATE.point) pickPoint(STATE.point.lat, STATE.point.lon); else toast('지도를 클릭하면 이 항목이 지점 카드에 표시됩니다'); }, off:()=>{ if(STATE.point) renderCard(); }, src:'' };
+L.extremes = { type:'action', run:()=>loadExtremes() };
+L.eclipse = { type:'action', run:()=>loadEclipse() };
+L.population = { type:'card', on:()=>{ if(STATE.point) loadPopulation(STATE.point.lat, STATE.point.lon); else toast('지도를 클릭하면 그 지점 주변 인구를 집계합니다'); }, off:()=>{}, src:'' };
+L.card_pop = L.population;
+
+/* ---------- toggleLayer 확장 ---------- */
+const _toggle = toggleLayer;
+toggleLayer = async function(id, force){
+  if(!L[id]) return _toggle(id, force);
+  const want = force!==undefined ? force : !STATE.on.has(id);
+  if(L[id].type==='action'){ return L[id].run(); }
+  if(want) STATE.on.add(id); else STATE.on.delete(id);
+  try{ if(want) await L[id].on(); else L[id].off(); }catch(e){ toast('레이어 오류: '+e.message, 4000); STATE.on.delete(id); }
+  renderCats(); renderSub(); updateSrc();
+};
+const _updateSrc = updateSrc;
+updateSrc = function(){ _updateSrc(); const extra = []; for(const id of STATE.on){ const s = L[id]?.src; if(!s) continue; const v = typeof s==='function'? s() : s; if(v) extra.push(v); } if(extra.length) $('#hudSrc').innerHTML = $('#hudSrc').innerHTML.replace('지형 없음', extra.join(' · ')+' · 지형 없음'); };
+const _setT = setT;
+setT = function(v){ _setT(v); if(FS.grid) renderField(); if(STATE.on.has('radar')) showRadar(); };
+
+/* ---------- 클릭 카드: 새 엔티티 종류 ---------- */
+const _handlerClick = handler.getInputAction(Cesium.ScreenSpaceEventType.LEFT_CLICK);
+handler.setInputAction(e=>{
+  if(STATE.measure) return _handlerClick(e);
+  const picked = scene.pick(e.position);
+  if(Cesium.defined(picked) && picked.id && picked.id.properties){ const pr = {}; const kind = picked.id.properties.kind?.getValue(); for(const k of picked.id.properties.propertyNames) pr[k]=picked.id.properties[k].getValue();
+    if(kind==='eonet') return CARD(pr.title, pr.cat, `<div class="sec"><p class="lead">${pr.cat} 이벤트 · 최근 갱신 ${kst(pr.date)}</p><div class="meta"><span class="tag obs">OBS</span> NASA EONET · 원 출처: ${pr.src||'—'}</div><a class="cta ghost" href="${pr.link}" target="_blank" rel="noopener">EONET 상세 ↗</a></div>`);
+    if(kind==='typhoon') return CARD(`태풍 ${pr.name} ${pr.hours===0?'현재':'+'+pr.hours+'h 예보'}`, `${pr.cat} · ${pr.valid?.slice(0,16).replace('T',' ')||''} JST`, `<div class="sec"><p class="lead">중심 <b>N${pr.lat}° E${pr.lon}°</b>${pr.wind?` · 최대풍속 <b>${pr.wind} m/s</b>`:''}</p><div class="meta"><span class="tag obs">OFFICIAL</span> JMA 태풍 정보</div></div>`);
+    if(kind==='trench') return CARD(pr.name, '해구', `<div class="sec"><p class="lead">최대 수심 약 <b>${pr.depth.toLocaleString()} m</b></p><div class="meta"><span class="tag obs">GEBCO</span> 가제티어 기준 대략 위치</div></div>`);
+    if(kind==='extreme') return CARD(pr.name, '오늘의 극값', `<div class="sec"><p class="lead"><b>${pr.value}</b></p><div class="meta"><span class="tag model">MODEL</span> Open-Meteo 성긴 격자</div></div>`);
+    if(kind==='poi'){ pickPoint(+pr.lat.toFixed(4), +pr.lon.toFixed(4)); setTimeout(()=>{ if(STATE.point){ $('#cardTitle').innerHTML = `${pr.name.split(',')[0]}<small>${pr.name.split(',').slice(1,4).join(',')}</small>`; } }, 300); return; }
+    if(kind==='gbif') return CARD(pr.name, 'GBIF 기록', `<div class="sec"><p class="lead">${pr.date? kst(pr.date):'날짜 미상'} · ${pr.basis||''}</p><div class="meta"><span class="tag obs">OBS</span> ${pr.dataset||'GBIF'}</div></div>`);
+  }
+  return _handlerClick(e);
+}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+/* ---------- 메뉴 확장 ---------- */
+const E = MENUS.earth; const cat = (id) => E.find(c=>c.id===id);
+cat('globe').items.splice(2, 0,
+  { id:'hillshade', q:'땅의 높낮이는', name:'지형 음영', src:'Esri World Hillshade · 과장 배율은 DEM 연결 후', type:'layer' },
+  { id:'ocean', q:'이 바다의 깊이는', name:'바다 깊이 (수심 음영)', src:'Esri Ocean Base · GEBCO', type:'layer' },
+  { id:'trenches', q:'가장 깊은 해구는 어디인가', name:'해구 20곳', src:'GEBCO 가제티어 (대략 좌표)', type:'layer' });
+cat('globe').items = cat('globe').items.filter(i=>i.id!=='terrain');
+cat('globe').items.push({ id:'eclipse', q:'올해 일식은 언제인가', name:'일식', src:'USNO', type:'action', run:()=>loadEclipse() });
+cat('weather').items = [
+  { id:'f_temp', q:'선택한 곳은 몇 도인가', name:'기온', src:'Open-Meteo 격자 열지도 · 시간 바 연동', type:'layer' },
+  { id:'card_anom', q:'평년보다 얼마나 덥거나 추운가', name:'평년 대비 기온', src:'ERA5 과거 5년 대비 (지점 카드, DERIVED)', type:'layer' },
+  { id:'extremes', q:'오늘 지구에서 가장 덥고 춥고 파도가 높은 곳은', name:'오늘의 극값', src:'전지구 성긴 격자 계산', type:'action', run:()=>loadExtremes() },
+  { id:'radar', q:'지금 내 주변에 비가 오나', name:'강수 레이더', src:'RainViewer 전지구 합성 · 10분 · 시간 바 연동', type:'layer' },
+  { id:'f_rain', q:'모델이 보는 비는 어디에', name:'강수 (모델 격자)', src:'Open-Meteo', type:'layer' },
+  { id:'f_wind', q:'어느 방향으로 얼마나 세게 부나', name:'바람', src:'격자 화살표 + 풍속 열지도', type:'layer' },
+  { id:'f_pres', q:'고기압과 저기압은 어디인가', name:'기압 · H/L', src:'해면기압 열지도 + 중심 기호', type:'layer' },
+  { id:'ptwx', q:'선택한 곳의 상세 예보는', name:'지점 기상', src:'Open-Meteo (지점 카드)', type:'layer' },
+  { id:'flight', q:'지금 드론을 띄울 수 있나', name:'비행 가능 판정', src:'풍속·돌풍·강수·시정·운량 규칙 (예시)', type:'layer' },
+  { id:'synop', q:'지금 각 관측소는 무엇을 재고 있나', name:'지상 관측 (AWS·METAR)', src:'기상청 API허브 키 · METAR CORS → 프록시 필요', type:'soon' },
+  { id:'card_climate', q:'올해가 예년과 얼마나 다른가', name:'기후 시계열', src:'ERA5 365일 스파크라인 (지점 카드)', type:'layer' },
+  { id:'f_rh', q:'습도는', name:'습도', src:'격자', type:'layer' },
+  { id:'wv', q:'수증기 통로는', name:'수증기', src:'NASA MODIS (GFS 대체)', type:'layer' },
+  { id:'f_tmax', q:'내일 최고기온은', name:'내일 최고기온', src:'격자 (일별)', type:'layer' },
+  { id:'f_tmin', q:'내일 최저기온은', name:'내일 최저기온', src:'격자 (일별)', type:'layer' },
+  { id:'f_windfc', q:'내일 바람은', name:'내일 최대 풍속', src:'격자 (일별)', type:'layer' },
+  { id:'f_vis', q:'시정은', name:'시정', src:'격자', type:'layer' },
+  { id:'f_soil', q:'토양은 얼마나 말랐나', name:'토양 수분', src:'격자', type:'layer' },
+  { id:'ukfc', q:'영국 예보', name:'영국 예보', src:'Met Office 키 · 영국 한정', type:'soon' },
+  { id:'coverage', q:'관측 공백', name:'관측 공백', src:'관측망 자료 필요', type:'soon' },
+];
+const W = cat('weather').items;
+cat('sea').items = [
+  { id:'f_wave', q:'선택 해역의 파고는', name:'파고', src:'Open-Meteo Marine 격자', type:'layer' },
+  { id:'f_swell', q:'너울은', name:'너울', src:'격자', type:'layer' },
+  { id:'f_sst', q:'바다 표면 온도는', name:'해수면 온도', src:'격자', type:'layer' },
+  { id:'sstanom', q:'평년보다 바다가 얼마나 따뜻한가', name:'평년 대비 수온', src:'OISST 평년 자료 필요', type:'soon' },
+  { id:'f_current', q:'표층 물은 어디로 흐르나', name:'표층 해류', src:'격자 화살표', type:'layer' },
+  { id:'gyres', q:'큰 환류는 어디인가', name:'해양 환류', src:'5대 환류 정적 위치 (DERIVED)', type:'layer' },
+  { id:'card_surf', q:'이 해변에 너울이 들어오는가', name:'서핑 판정', src:'지점 카드 · Marine', type:'layer' },
+  { id:'card_fishing', q:'지금 나가면 위험한가', name:'낚시 판정', src:'지점 카드 · Marine+바람', type:'layer' },
+  { id:'slr', q:'2100년에 해수면이 얼마나 오를 수 있나', name:'해수면 상승 전망', src:'IPCC·KHOA 시나리오 자료 필요', type:'soon' },
+  { id:'buoys', q:'바다에서 실제로 잰 값은', name:'바다 실측 (부이)', src:'NDBC·기상청 CORS → 프록시', type:'soon' },
+  { id:'argo', q:'깊이에 따라 수온이 어떻게 변하나', name:'수심별 수온 (Argo)', src:'Argo 서버 필요', type:'soon' },
+  { id:'deepsea', q:'그 아래에 무엇이 사나', name:'심해', src:'EARTHUS 자체 콘텐츠', type:'soon' },
+  { id:'tide', q:'물때는', name:'조위', src:'국립해양조사원 키', type:'soon' },
+  { id:'ais', q:'선박은 어디에 있나', name:'선박 (AIS)', src:'AIS 키', type:'soon' },
+];
+cat('air').items = [
+  { id:'f_pm25', q:'공기가 얼마나 탁한가', name:'초미세먼지 PM2.5', src:'CAMS 격자 열지도', type:'layer' },
+  { id:'f_pm10', q:'미세먼지는', name:'미세먼지 PM10', src:'CAMS 격자', type:'layer' },
+  { id:'f_aqi', q:'대기질 지수는', name:'대기질 지수 (EAQI)', src:'CAMS 격자', type:'layer' },
+  { id:'f_o3', q:'오존은', name:'오존', src:'CAMS 격자', type:'layer' },
+  { id:'f_dust', q:'황사·먼지는', name:'먼지 농도', src:'CAMS 격자', type:'layer' },
+  { id:'f_uv', q:'자외선 수준은', name:'자외선 지수', src:'Open-Meteo 격자', type:'layer' },
+  { id:'aq', q:'선택한 곳의 대기질 수치는', name:'지점 대기질', src:'지점 카드', type:'layer' },
+  { id:'aod', q:'연무와 먼지는 어디에', name:'에어로졸 (위성)', src:'NASA MODIS AOD', type:'layer' },
+];
+cat('hazard').items = [
+  { id:'eonet', q:'지금 일어나는 일', name:'지금 일어나는 일 (자연재해)', src:'NASA EONET · 폭풍·산불·화산·해빙 등', type:'layer' },
+  { id:'news', q:'이 지역에 무슨 일이 생겼나', name:'지역 뉴스', src:'GDELT CORS → 프록시 필요', type:'soon' },
+  { id:'warn', q:'내 현장의 공식 특보는', name:'기상 특보', src:'기상청 API 키 (상단 배너 예시)', type:'soon' },
+  { id:'typhoon', q:'공식 태풍 경로는', name:'태풍 (JMA 공식)', src:'실황·예보 경로·폭풍역·예보원', type:'layer' },
+  { id:'quake', q:'최근 일주일 지진은 어디서 났나', name:'지진 (M2.5+)', src:'USGS', type:'layer' },
+  { id:'tsunami', q:'현재 유효한 쓰나미 정보는', name:'쓰나미', src:'tsunami.gov CORS → 프록시', type:'soon' },
+  { id:'fire', q:'지금 어디가 불타고 있나', name:'산불', src:'NASA EONET (FIRMS 키 입력 시 열점 추가 예정)', type:'layer' },
+  { id:'lightning', q:'최근 주변에 낙뢰가 있었나', name:'낙뢰', src:'공개 API 없음', type:'soon' },
+  { id:'flood', q:'물이 차면 어디까지 잠기나', name:'연안 침수 범위', src:'DEM 필요 → SITE 침수 시뮬레이션', type:'site' },
+  { id:'plates', q:'땅이 어느 방향으로 움직이나', name:'지각 이동 (판 경계)', src:'PB2002 판 경계선', type:'layer' },
+  { id:'crustal', q:'지각 이동 속도는', name:'지각 이동 속도 (GNSS)', src:'UNR MIDAS CORS → 프록시', type:'soon' },
+  { id:'glof', q:'빙하호 붕괴 시 영향은', name:'빙하호 홍수', src:'USGS 단일 사례', type:'soon' },
+  { id:'f_heatdome', q:'열돔은 어디에', name:'열돔', src:'격자 기온·기압 조건 (DERIVED)', type:'layer' },
+];
+cat('region').items = [
+  { id:'me', q:'내가 있는 곳은', name:'내 위치', src:'브라우저 위치', type:'action', run: goMyLocation },
+  { id:'card_pop', q:'어디에 사람이 거주하나', name:'인구 (지점 주변 10 km)', src:'WorldPop 2020 · 지점 카드', type:'layer' },
+  { id:'crowd', q:'서울 어느 곳이 지금 붐비나', name:'실시간 혼잡', src:'서울 열린데이터 키', type:'soon' },
+  { id:'poi_attraction', q:'내 조건에 맞는 관광지는', name:'관광지 (화면 범위)', src:'OSM 검색', type:'layer' },
+  { id:'poi_beach', q:'갈 해변은', name:'해변', src:'OSM 검색', type:'layer' },
+  { id:'poi_fishing', q:'낚시 장소는', name:'낚시터', src:'OSM 검색', type:'layer' },
+  { id:'poi_paragliding', q:'활공장은', name:'활공장', src:'OSM 검색', type:'layer' },
+  { id:'card_paraglide', q:'이 활공장의 바람과 구름 밑면은', name:'패러글라이딩 판정', src:'지점 카드', type:'layer' },
+  { id:'poi_peak', q:'산 정상은', name:'산 정상', src:'OSM 검색', type:'layer' },
+  { id:'card_summit', q:'정상은 여기보다 얼마나 추운가', name:'산 정상 날씨', src:'지점 카드 · 표고+감률', type:'layer' },
+  { id:'forestloss', q:'이 땅의 숲은 언제 사라졌나', name:'산림 손실 (2001~)', src:'Global Forest Watch', type:'layer' },
+  { id:'ndvi', q:'숲이 얼마나 있나', name:'식생 지수', src:'MODIS NDVI', type:'layer' },
+  { id:'gbif_migbird', q:'봄에 우리 동네 새가 어디로 갔나', name:'철새 (봄철 기록)', src:'GBIF · 지점/화면 중심', type:'layer' },
+  { id:'gbif_birds', q:'어느 곳에 조류 기록이 있나', name:'조류 조사 기록', src:'GBIF', type:'layer' },
+  { id:'gbif_turtle', q:'바다거북은 어디로 갔나', name:'바다거북', src:'GBIF 바다거북과', type:'layer' },
+  { id:'gbif_seabird', q:'바닷새는 어디서 셌나', name:'바닷새 (갈매기과)', src:'GBIF', type:'layer' },
+  { id:'flights', q:'비행기가 실제 어디에 있나', name:'항공편', src:'ADS-B API CORS → 프록시', type:'soon' },
+  { id:'visitors', q:'어느 기간에 방문이 많았나', name:'지역 방문자', src:'자체 통계', type:'soon' },
+  { id:'tour', q:'오늘 어디를 가면 좋을까', name:'오늘 갈 곳 · 연관 관광지', src:'EARTHUS 자체 카탈로그', type:'soon' },
+];
+// 위성 도크: 안개 항목 추가
+cat('sat').items.splice(3,0,{ id:'fog', q:'밤에 낮은 구름이 있는가', name:'안개·낮은 구름 (천리안 야간)', src:'기상청 위성센터 키', type:'soon' });
+// SITE 모드 분석에 연안 침수 안내
+MENUS.site.find(c=>c.id==='analysis').items.push({ id:'sflood', q:'연안 침수 범위', name:'연안 침수 시뮬레이션', src:'3D 모델 + 수위 입력', type:'site' });
+
+/* ---------- 설정: 구름 모드 · 눈·얼음 ---------- */
+const setBox = $('#settings'); const cloudRow = document.createElement('div'); cloudRow.className='row'; cloudRow.innerHTML = `<span>구름</span><div class="seg" id="segCloud"><button data-c="none">없음</button><button data-c="obs" title="히마와리-9 적외 10분">관측</button><button data-c="model" title="MODIS 어제 합성">모델</button><button data-c="static" title="Suomi NPP 어제">정적</button></div>`;
+const snowRow = document.createElement('div'); snowRow.className='row'; snowRow.innerHTML = `<span>눈·얼음 (관측)</span><button class="switch" id="swSnow" aria-label="눈 얼음"></button>`;
+setBox.insertBefore(cloudRow, setBox.querySelector('.note')); setBox.insertBefore(snowRow, setBox.querySelector('.note'));
+cloudRow.querySelectorAll('button').forEach(b=>b.onclick=()=>{ cloudRow.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); const m=b.dataset.c; const map={obs:'hima_ir', model:'cloud', static:'viirs'}; for(const id of Object.values(map)) if(STATE.on.has(id)) toggleLayer(id,false); if(map[m]) toggleLayer(map[m], true); });
+$('#swSnow').onclick = e=>{ const on=!e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on',on); toggleLayer('snow', on); toggleLayer('seaice', on); };
+
+/* ---------- 물어보기 (규칙 기반) ---------- */
+const _qkey = $('#q').onkeydown;
+$('#q').onkeydown = async (e) => {
+  if(e.key!=='Enter') return; const q = $('#q').value.trim();
+  const rules = [
+    [/비|강수|우산|rain/, ()=>{ toggleLayer('radar', true); return '레이더 강수를 켰습니다. 지점을 클릭하면 그곳의 강수 예보를 볼 수 있어요.'; }],
+    [/바람|풍속|wind/, ()=>{ toggleLayer('f_wind', true); return '바람 격자(화살표·풍속)를 켰습니다.'; }],
+    [/기온|온도|더워|추워|temp/, ()=>{ toggleLayer('f_temp', true); return '기온 열지도를 켰습니다.'; }],
+    [/미세먼지|대기질|공기|pm/, ()=>{ toggleLayer('f_pm25', true); toggleLayer('aq', true); return 'PM2.5 열지도와 지점 대기질을 켰습니다.'; }],
+    [/지진|earthquake/, ()=>{ toggleLayer('quake', true); return '최근 7일 지진(USGS)을 표시했습니다.'; }],
+    [/태풍|typhoon/, ()=>{ toggleLayer('typhoon', true); return 'JMA 태풍 경로를 표시했습니다.'; }],
+    [/위성|satellite|아리랑/, ()=>{ toggleLayer('sats', true); return '위성 위치를 표시했습니다. 위성을 클릭하면 통과 예보를 볼 수 있어요.'; }],
+    [/드론|비행/, ()=>{ toggleLayer('ptwx', true); toggleLayer('flight', true); return '비행 가능 판정을 켰습니다. 현장을 클릭해 확인하세요.'; }],
+    [/파도|파고|서핑|너울/, ()=>{ toggleLayer('f_wave', true); toggleLayer('card_surf', true); return '파고 격자와 서핑 판정을 켰습니다.'; }],
+    [/산불|화재|fire/, ()=>{ toggleLayer('fire', true); return 'NASA EONET 산불 이벤트를 표시했습니다.'; }],
+    [/구름|cloud/, ()=>{ toggleLayer('hima_ir', true); return '히마와리-9 적외 구름 영상을 켰습니다.'; }],
+    [/인구|사람/, ()=>{ toggleLayer('card_pop', true); return '지점을 클릭하면 주변 10 km 인구를 집계합니다.'; }],
+  ];
+  const hit = rules.find(([re])=>re.test(q));
+  if(hit && /[?？]|나|까|지|요$|어디|얼마|언제|있/.test(q)){ const ans = hit[1](); $('#qres').innerHTML = `<li><span>💬 ${ans}</span></li>`; const place = q.replace(/(의|에서|에|은|는|이|가|도|지금|오늘|내일|비|강수|바람|풍속|기온|온도|미세먼지|대기질|지진|태풍|위성|드론|비행|파도|파고|서핑|너울|산불|화재|구름|인구|사람|오나|오니|있나|있어|어때|어떤가|얼마나|어디|언제|\?|？)/g,' ').trim(); if(place.length>=2){ try{ const r = await tf(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=ko&q=${encodeURIComponent(place)}`); const j = await r.json(); if(j[0]){ camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(+j[0].lon,+j[0].lat,120000),duration:2.5,complete:()=>pickPoint(+(+j[0].lat).toFixed(4),+(+j[0].lon).toFixed(4))}); } }catch(err){} } return; }
+  return _qkey(e);
+};
+$('#q').placeholder = '나라 · 도시 · 주소 · 프로젝트 · 질문 (예: 인천에 비 오나?)';
+
+/* ---------- 리포트 ---------- */
+function buildReport(){ const P = STATE.point; const layers = [...STATE.on].filter(id=>id!=='imagery'&&id!=='labels'&&id!=='projects'); const now = new Date().toLocaleString('ko-KR',{timeZone:'Asia/Seoul'});
+  const body = `<h1>SISTECH EARTH 지점 리포트</h1><p>${now} KST · 카메라 고도 ${fmtKm(camera.positionCartographic.height)} · 단계 ${STATE.stage}</p>${P? `<h2>${H.pick(P.lat,P.lon)} ${P.place||''}</h2>${$('#cardBody').innerHTML}` : '<p>선택된 지점이 없습니다. 지도를 클릭해 지점을 고르세요.</p>'}<h2>켜진 레이어</h2><ul>${layers.map(l=>`<li>${l}</li>`).join('')||'<li>없음</li>'}</ul><h2>출처</h2><p>${$('#hudSrc').innerText}</p><p style="color:#888;font-size:12px">SISTECH EARTH 데모 · 모델값은 선택 지점의 실측이 아닙니다 · DRONE 메타데이터는 예시</p>`;
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>SISTECH EARTH 리포트</title><style>body{font-family:Inter,"Noto Sans KR",sans-serif;max-width:800px;margin:30px auto;color:#111;line-height:1.5}h1{color:#003A80;border-bottom:3px solid #A4C81C;padding-bottom:6px}.tag{font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px;background:#003A80;color:#A4C81C;margin-right:6px}.meta{font-size:12px;color:#666}.kv div{display:inline-block;margin-right:14px}.fly,.cta{display:none}.sec{border-bottom:1px solid #ddd;padding:10px 0}.lead b{color:#003A80}</style></head><body>${body}</body></html>`; }
+function openReport(){ const w = window.open('', '_blank'); w.document.write(buildReport()); w.document.close(); setTimeout(()=>w.print(), 600); }
+function exportJSON(){ const P = STATE.point; const data = { generated:new Date().toISOString(), point:P? {lat:P.lat,lon:P.lon,place:P.place,weather:P.wx?.hourly? Object.fromEntries(Object.entries(P.wx.hourly).map(([k,v])=>[k, v[hourIndex(P.wx.hourly)]])):null, airQuality:P.aq?.hourly? Object.fromEntries(Object.entries(P.aq.hourly).map(([k,v])=>[k, v[hourIndex(P.aq.hourly)]])):null, marine:P.marine?.hourly? Object.fromEntries(Object.entries(P.marine.hourly).map(([k,v])=>[k, v[hourIndex(P.marine.hourly)]])):null } : null, layers:[...STATE.on], tIdx:STATE.tIdx, sources:$('#hudSrc').innerText }; const a=document.createElement('a'); a.download=`sistech-earth-${Date.now()}.json`; a.href='data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(data,null,2)); a.click(); }
+function exportCSV(){ const P = STATE.point; if(!P?.wx?.hourly) return toast('지점 기상 데이터가 있어야 CSV를 만들 수 있습니다'); const h=P.wx.hourly; const keys=Object.keys(h); const rows=[keys.join(',')]; for(let i=0;i<h.time.length;i++) rows.push(keys.map(k=>h[k][i]).join(',')); const a=document.createElement('a'); a.download=`sistech-earth-${P.lat}_${P.lon}.csv`; a.href='data:text/csv;charset=utf-8,\uFEFF'+encodeURIComponent(rows.join('\n')); a.click(); }
+cat('globe').items.unshift({ id:'report', q:'이 지점·레이어를 정리한 보고서', name:'리포트', src:'인쇄용 HTML · JSON · CSV', type:'action', run:()=>{ const P=STATE.point; CARD('리포트', P? H.pick(P.lat,P.lon) : '지점 미선택', `<div class="sec"><p class="lead">현재 지점 카드·켜진 레이어·출처를 묶어 내보냅니다.</p><button class="cta" id="rpHtml">인쇄용 HTML 열기</button><button class="cta ghost" id="rpJson">JSON 내보내기</button><button class="cta ghost" id="rpCsv">지점 시계열 CSV</button></div>`); $('#rpHtml').onclick=openReport; $('#rpJson').onclick=exportJSON; $('#rpCsv').onclick=exportCSV; } });
+MENUS.site.find(c=>c.id==='export').items.unshift({ id:'sreport', q:'현장 보고서', name:'현장 리포트 (HTML)', src:'', type:'action', run: openReport });
+
+/* ---------- 초기 복원 ---------- */
+for(const id of [...STATE.on]) if(L[id] && L[id].type!=='action') { try{ L[id].on(); }catch(e){} }
+renderCats(); renderSub(); updateSrc();
+console.log('SISTECH EARTH ext v2 loaded', Object.keys(L).length, 'layers');
+})();
+
+</script>
 </body>
 </html>
