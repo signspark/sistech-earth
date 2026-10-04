@@ -2251,6 +2251,70 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   renderCats(); renderSub();
 })();
 
+/* ---------- 22. 3D 모델 화질 자동: 모니터 해상도·그래픽카드 등급 + 고도에 따라 고/중/저 자동 전환 ---------- */
+(function(){
+  const SSE = { '고':6, '중':16, '저':32 };
+  // 1) 기기 등급 판정
+  let renderer = ''; try{ const gl = scene.context._gl; const ext = gl.getExtension('WEBGL_debug_renderer_info'); renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER); }catch(e){}
+  const gpuName = ((renderer.match(/ANGLE \([^,]+, (.+?)(?: \(0x| Direct3D|, D3D|\)$)/)||[])[1] || renderer.slice(0,40)).replace(/\((R|TM)\)/g,'').replace(/\s+/g,' ').trim();
+  const mobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+  let tier = '중';
+  if(/RTX|GTX 1[6-9]|GTX [2-9]\d|Radeon RX|Radeon Pro|Arc\(TM\) A|Arc A|Apple M\d (Pro|Max|Ultra)/i.test(renderer) && !mobile) tier = '상';
+  else if(mobile || /UHD|HD Graphics|Mali|Adreno|PowerVR|SwiftShader|llvmpipe|Basic Render/i.test(renderer) || (navigator.deviceMemory && navigator.deviceMemory <= 4)) tier = '하';
+  const TIER = {
+    '상': { hi: 800,  mid: 4000, max:'고', msaa:4, scale:1.0,  budget:1000 },
+    '중': { hi: 400,  mid: 2500, max:'고', msaa:2, scale:1.0,  budget:600 },
+    '하': { hi: 0,    mid: 1000, max:'중', msaa:1, scale:0.85, budget:350 },
+  };
+  const T = () => TIER[tier];
+  // 2) 화면 해상도 보정: 1080p 기준보다 큰 화면은 같은 화질에서 타일이 늘어나므로 SSE를 완만히 키움
+  const pxFactor = () => Math.max(0.85, Math.min(1.6, Math.sqrt(scene.context.drawingBufferHeight / 1080)));
+  // 3) 고도 → 화질 (경계 ±15% 히스테리시스)
+  const S = { mode: localStorage.getItem('q.mode') || '자동', level: '중', perfDown: 0, fpsLow: 0, fpsHigh: 0, fps: null };
+  function groundAlt(){ const c = camera.positionCartographic; let g = 0; try{ g = globe.getHeight(c) || 0; }catch(e){} return Math.max(0, c.height - g); }
+  function levelForAlt(h){ const t = T(); const cur = S.level; const k = 0.15;
+    const hiB = t.hi * (cur==='고' ? 1+k : 1-k), midB = t.mid * (cur==='저' ? 1-k : 1+k);
+    let L = h <= hiB ? '고' : h <= midB ? '중' : '저'; if(t.max==='중' && L==='고') L = '중'; return L; }
+  const down = L => L==='고' ? '중' : '저';
+  function apply(){
+    const h = groundAlt(); let L = S.mode==='자동' ? levelForAlt(h) : S.mode;
+    if(S.mode==='자동' && S.perfDown && L==='고') L = '중';               // 성능 보호: 고 → 중
+    const mem = PROJECTS.reduce((s,p)=>s+(p.ts? p.ts.totalMemoryUsageInBytes/1048576 : 0), 0);
+    let sse = SSE[L] * pxFactor(); if(S.mode==='자동' && mem > T().budget) sse *= 1.3; // 메모리 보호
+    sse = Math.round(sse*10)/10;
+    S.level = L; STATE.quality = L; STATE.sse = sse;
+    for(const p of PROJECTS) if(p.ts && Math.abs(p.ts.maximumScreenSpaceError - sse) > 0.05) p.ts.maximumScreenSpaceError = sse;
+    S.alt = h; S.mem = mem; S.sse = sse; label();
+  }
+  // 4) 실제 프레임 속도 감시 (탭이 보일 때만): 15fps 미만이 12초 지속 → 고를 중으로 한 단계 낮춤(최대 1단계), 40fps 이상 12초 → 복구
+  let frames = 0; scene.postRender.addEventListener(()=>frames++);
+  setInterval(()=>{ const f = frames/4; frames = 0; if(document.visibilityState!=='visible' || !document.hasFocus()) return; S.fps = f;
+    if(S.mode!=='자동') return;
+    if(f < 15){ S.fpsLow++; S.fpsHigh = 0; if(S.fpsLow >= 3 && S.perfDown < 1 && S.level==='고'){ S.perfDown++; S.fpsLow = 0; toast('화면이 느려 3D 화질을 한 단계 낮췄습니다 (FPS '+f.toFixed(0)+')', 3000); apply(); } }
+    else if(f > 40){ S.fpsHigh++; S.fpsLow = 0; if(S.fpsHigh >= 3 && S.perfDown > 0){ S.perfDown--; S.fpsHigh = 0; apply(); } }
+    else { S.fpsLow = 0; S.fpsHigh = 0; } }, 4000);
+  // 5) 렌더링 기본값 (등급별)
+  try{ scene.msaaSamples = T().msaa; if(T().msaa <= 1) scene.postProcessStages.fxaa.enabled = true; viewer.resolutionScale = T().scale; }catch(e){}
+  // 6) 메뉴 · HUD 표시
+  const qi = MENUS.site.find(c=>c.id==='model')?.items.find(i=>i.id==='quality');
+  const fmtKm = m => m >= 1000 ? (m/1000).toFixed(m%1000?1:0)+' km' : m+' m';
+  function rule(){ const t = T(); return t.max==='중' ? '중 ≤'+fmtKm(t.mid)+' · 저 그 위' : '고 ≤'+fmtKm(t.hi)+' · 중 ≤'+fmtKm(t.mid)+' · 저 그 위'; }
+  function label(){
+    if(qi){ qi.name = S.mode==='자동' ? '화질: 자동 · 지금 '+S.level : '화질: '+S.mode+' (수동)'; qi.q = '누를 때마다 자동 → 저 → 중 → 고';
+      qi.src = '이 PC '+tier+'급 ('+gpuName.trim()+') · 화면 '+scene.context.drawingBufferWidth+'×'+scene.context.drawingBufferHeight+' · 자동 기준 '+rule()+' · 고도 '+fmtKm(Math.round(S.alt||0))+' · SSE '+S.sse+(S.perfDown?' · 성능 보호 '+S.perfDown+'단계':''); }
+    let hq = document.getElementById('hudQ'); if(!hq){ const top = document.querySelector('#hud .top'); if(top){ const sp = document.createElement('span'); sp.innerHTML = '화질 <b id="hudQ"></b>'; top.insertBefore(sp, document.getElementById('hudCursor')); hq = document.getElementById('hudQ'); } }
+    if(hq) hq.textContent = (S.mode==='자동'?'자동·':'')+S.level;
+    if(STATE.mode==='site' && STATE.cat==='model'){ const el = document.querySelector('#subList .item[data-i="quality"]'); if(el){ el.querySelector('.t b').textContent = qi.name; const sp = el.querySelectorAll('.t > span'); if(sp[1]) sp[1].textContent = qi.src; } }
+  }
+  cycleQuality = function(){ const seq = ['자동','저','중','고']; S.mode = seq[(seq.indexOf(S.mode)+1)%seq.length]; localStorage.setItem('q.mode', S.mode); S.perfDown = 0; apply(); renderSub(); toast(S.mode==='자동' ? '3D 화질 자동 · '+rule() : '3D 화질 '+S.mode+' 고정 (수동)', 2600); };
+  // 7) 갱신 시점: 카메라 이동 중 0.7초마다, 이동 끝, 모델 로드 후
+  let lastPos = null; setInterval(()=>{ const p = camera.position; if(!lastPos || Cesium.Cartesian3.distance(p, lastPos) > 5){ lastPos = p.clone(); apply(); } }, 700);
+  camera.moveEnd.addEventListener(apply);
+  const _ens2 = ensureTileset; ensureTileset = async function(p){ const ts = await _ens2(p); if(ts) ts.maximumScreenSpaceError = STATE.sse; return ts; };
+  window.sistechQuality = { S, tier, renderer, apply };
+  apply();
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
