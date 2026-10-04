@@ -2346,6 +2346,29 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   };
 })();
 
+/* ---------- 25. SITE 정리: 켜진 자료만 숨김 · 프로젝트 카드 없애고 활성 지역명을 연두색으로 · EARTH에서는 3D 모델 끔 ---------- */
+(function(){
+  // 1) '켜진 자료만' 필터: SITE의 3D 모델·측정·비교·분석에서는 숨김
+  const HIDE_FILTER = ['model','smeasure','scompare','analysis'];
+  const filt = document.querySelector('#sub .filter');
+  function syncFilter(){ if(!filt) return; const hide = STATE.mode==='site' && HIDE_FILTER.includes(STATE.cat); filt.style.display = hide ? 'none' : ''; if(hide && $('#onlyOn').checked) $('#onlyOn').checked = false; }
+  // 2) 오른쪽 프로젝트 카드(인천-1 등) 표시 안 함
+  showProjectCard = function(){};
+  // 3) 활성 지역(모델이 화면에 표시 중)은 이름을 연두색으로
+  const css = document.createElement('style'); css.textContent = '#subList .proj b{transition:color .2s}#subList .proj .pin{background:#5E7391;box-shadow:none}#subList .proj.active b{color:#BFE33A}#subList .proj.active .pin{background:var(--lime,#A4C81C);box-shadow:0 0 0 4px rgba(191,227,58,.35)}#tsModels .tsRow.active b{color:#BFE33A}';
+  document.head.appendChild(css);
+  const isActive = p => !!(p.ts && p.ts.show);
+  function markActive(){ document.querySelectorAll('#subList .proj[data-p]').forEach(b=>{ const p = PROJECTS.find(x=>x.id===b.dataset.p); b.classList.toggle('active', !!p && isActive(p)); });
+    document.querySelectorAll('#tsModels .tsRow[data-p]').forEach(r=>{ const p = PROJECTS.find(x=>x.id===r.dataset.p); r.classList.toggle('active', !!p && isActive(p)); }); }
+  const _rs2 = renderSub; renderSub = function(){ const r = _rs2.apply(this, arguments); syncFilter(); markActive(); return r; };
+  setInterval(markActive, 1000);
+  // 4) EARTH 모드에서는 3D 모델 끄고 메모리 해제, SITE로 오면 다시 자동 로드
+  const _auto2 = autoLoadTileset;
+  autoLoadTileset = function(){ if(STATE.mode==='earth'){ for(const p of PROJECTS) if(p.ts){ try{ scene.primitives.remove(p.ts); }catch(e){} p.ts = null; } markActive(); return; } return _auto2.apply(this, arguments); };
+  const _setMode5 = setMode; setMode = function(m){ const r = _setMode5(m); setTimeout(()=>{ autoLoadTileset(); syncFilter(); markActive(); }, 50); return r; };
+  syncFilter(); autoLoadTileset();
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
