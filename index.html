@@ -1931,7 +1931,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
 (function(){
   const an = MENUS.site.find(c=>c.id==='analysis'); const it = an && an.items.find(i=>i.id==='shadow'); if(!it) return;
   Object.assign(it, { type:'layer', name:'일조·그림자 분석', q:'해가 어디까지 드나 · 그림자는 어디로', src:'태양 위치 계산 + 3D 모델 그림자 · 날짜·시각 선택 · 시간 바 연동' });
-  const SH = { on:false, date:null, prevLight:null, prevNight:null, timer:null, hud:null };
+  const SH = { on:false, date:null, prevLight:null, prevNight:null, timer:null, hud:null, darkness: +(localStorage.getItem('shadow.darkness')||0.6) };
   const pad = n => String(n).padStart(2,'0');
   const kstParts = d => { const s = new Date(d.getTime()+9*3600e3); return { y:s.getUTCFullYear(), m:s.getUTCMonth()+1, d:s.getUTCDate(), h:s.getUTCHours()+s.getUTCMinutes()/60 }; };
   const fromKst = (y,m,d,h) => new Date(Date.UTC(y,m-1,d) + h*3600e3 - 9*3600e3);
@@ -1975,6 +1975,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
       + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input type="date" id="shDate" value="'+k.y+'-'+pad(k.m)+'-'+pad(k.d)+'" style="background:var(--panel-2,#0b1a30);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px"><b id="shHourLbl" style="min-width:48px">'+pad(Math.floor(k.h))+':'+pad(Math.round((k.h%1)*60))+'</b></div>'
       + '<input type="range" id="shHour" min="0" max="24" step="0.25" value="'+k.h.toFixed(2)+'" style="width:100%;margin:8px 0">'
       + '<div style="display:flex;gap:6px;flex-wrap:wrap">'+[['춘분','03-20'],['하지','06-21'],['추분','09-23'],['동지','12-22']].map(x=>'<button class="cta ghost" data-md="'+x[1]+'" style="flex:1;margin:0;padding:8px 6px">'+x[0]+'</button>').join('')+'</div>'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12.5px"><span style="color:var(--text-dim);white-space:nowrap">그림자 농도</span><input type="range" id="shDark" min="0.2" max="0.9" step="0.05" value="'+SH.darkness+'" style="flex:1"><b id="shDarkLbl" style="min-width:36px;text-align:right">'+Math.round((1-SH.darkness)/0.8*100)+'%</b></div>'
       + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="cta" id="shPlay" style="flex:1;margin:0">▶ 하루 재생 (06→18시)</button><button class="cta ghost" id="shNow" style="flex:1;margin:0">지금</button></div>'
       + '<div class="meta">그림자는 <b>SITE › 3D 모델 › 3D Tiles</b>가 켜져 있고 현장 근처(60 km 이내)에서 모델이 로드된 뒤 보입니다. 하단 시간 바를 움직여도 시각이 바뀝니다. 끄려면 분석 › 일조·그림자를 다시 누르세요.</div></div>';
     renderReadout();
@@ -1982,13 +1983,14 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     $('#shDate').onchange = e=>{ const [y,m,d] = e.target.value.split('-').map(Number); if(!y) return; const k2 = kstParts(SH.date); applyTime(fromKst(y,m,d,k2.h)); };
     $('#cardBody').querySelectorAll('button[data-md]').forEach(b=>b.onclick=()=>{ const [m,d] = b.dataset.md.split('-').map(Number); const k2 = kstParts(SH.date); applyTime(fromKst(k2.y,m,d,12)); });
     $('#shNow').onclick = ()=>{ stopPlay(); applyTime(new Date()); };
+    $('#shDark').oninput = e=>{ SH.darkness = +e.target.value; viewer.shadowMap.darkness = SH.darkness; localStorage.setItem('shadow.darkness', SH.darkness); $('#shDarkLbl').textContent = Math.round((1-SH.darkness)/0.8*100)+'%'; };
     $('#shPlay').onclick = ()=>{ if(SH.timer) return stopPlay(); const k2 = kstParts(SH.date); let h = 6; $('#shPlay').textContent='■ 정지'; SH.timer = setInterval(()=>{ h += 0.1; if(h>18){ h = 6; } applyTime(fromKst(k2.y,k2.m,k2.d,h)); }, 100); };
   }
   function stopPlay(){ if(SH.timer){ clearInterval(SH.timer); SH.timer=null; const b=$('#shPlay'); if(b) b.textContent='▶ 하루 재생 (06→18시)'; } }
   function on(){
     SH.on = true; SH.prevLight = globe.enableLighting; SH.prevNight = layersImg.nightAuto ? layersImg.nightAuto.show : null;
     globe.enableLighting = true; $('#swLight').classList.add('on'); if(layersImg.nightAuto) layersImg.nightAuto.show = false;
-    viewer.shadows = true; viewer.terrainShadows = Cesium.ShadowMode.RECEIVE_ONLY; const sm = viewer.shadowMap; sm.size = 2048; sm.softShadows = true; sm.darkness = 0.35; sm.maximumDistance = 3000; sm.normalOffset = true;
+    viewer.shadows = true; viewer.terrainShadows = Cesium.ShadowMode.RECEIVE_ONLY; const sm = viewer.shadowMap; sm.size = 2048; sm.softShadows = true; sm.darkness = SH.darkness; sm.maximumDistance = 3000; sm.normalOffset = true;
     for(const p of PROJECTS) if(p.ts) p.ts.shadows = Cesium.ShadowMode.ENABLED;
     if(!SH.hud){ SH.hud = document.createElement('div'); SH.hud.id='shHud'; SH.hud.style.cssText='position:fixed;left:50%;transform:translateX(-50%);top:64px;z-index:25;background:rgba(3,18,42,.85);border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:12.5px;color:var(--text);pointer-events:none'; document.body.appendChild(SH.hud); }
     SH.hud.style.display='block';
