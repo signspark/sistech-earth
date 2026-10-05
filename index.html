@@ -2994,7 +2994,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     <div class="hint">연두색 사각형이 단면 구역 · <b>모서리 점을 끌어</b> 크기 조정 (최대 500 m에서 멈춤) · 구역 밖 건물은 자르지 않음</div>
   </div>
   <div class="btns"><button id="xsTop">⬇ 위에서 보기 (평면도)</button><button id="xsBack">원래 시점</button><button id="xsPick">기준 지면 다시 찍기</button></div>
-  <div class="hint"><b>Ctrl + 마우스 휠</b>: 단면을 0.5 m씩 스크롤 · <b>↑ ↓</b>: 한 층씩 · <b>Shift+↑↓</b>: 0.5 m씩<br>절단선은 연두색 테두리 · 층고 기본 2.9 m (아파트) · 단면은 각 층 바닥 +1.5 m</div>
+  <div class="hint"><b>Ctrl + 마우스 휠</b>: 단면을 0.5 m씩 스크롤 · <b>↑ ↓</b>: 한 층씩 · <b>Shift+↑↓</b>: 0.5 m씩<br>절단선은 연두색 테두리 · 단면 안쪽 벽면(메쉬 뒷면)도 표시 · 층고 기본 2.9 m (아파트) · 단면은 각 층 바닥 +1.5 m</div>
 </div>`; document.body.appendChild(P);
   const q = s => P.querySelector(s);
   const fmt = v => (Math.round(v*10)/10).toFixed(1);
@@ -3012,7 +3012,8 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
 
   /* ---- 절단면 적용 ---- */
   function applyTo(ts){ if(!ts || (ts.isDestroyed && ts.isDestroyed())) return;
-    if(!XS.on || XS.lon==null){ if(ts.clippingPlanes) ts.clippingPlanes.enabled = false; return; }
+    if(!XS.on || XS.lon==null){ if(ts.clippingPlanes) ts.clippingPlanes.enabled = false; if(ts._xsBfc!==undefined){ ts.backFaceCulling = ts._xsBfc; ts._xsBfc = undefined; } return; }
+    if(ts._xsBfc===undefined){ ts._xsBfc = ts.backFaceCulling; } ts.backFaceCulling = false; /* 절단면 안쪽(벽 뒷면)이 보이도록 */
     const planes = [ new C.ClippingPlane(new C.Cartesian3(0,0,-1), 0) ];
     if(XS.region){ const hw = XS.w/2, hd = XS.d/2; planes.push(new C.ClippingPlane(new C.Cartesian3(1,0,0), -hw), new C.ClippingPlane(new C.Cartesian3(-1,0,0), -hw), new C.ClippingPlane(new C.Cartesian3(0,1,0), -hd), new C.ClippingPlane(new C.Cartesian3(0,-1,0), -hd)); }
     const frame = localFrame(); let mm; try{ const inv = C.Matrix4.inverse(ts.clippingPlanesOriginMatrix, new C.Matrix4()); mm = C.Matrix4.multiply(inv, frame, new C.Matrix4()); }catch(e){ mm = frame; }
@@ -3093,7 +3094,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     const cv = scene.canvas; const pt = pickGround(new C.Cartesian2(cv.clientWidth/2, cv.clientHeight/2)); if(pt) setBase(pt); XS.savedCam = null; XS.top = false; q('#xsTop').classList.remove('on');
     setFloor(XS.floor); scene.canvas.addEventListener('wheel', onWheel, { capture:true, passive:false }); window.addEventListener('keydown', onKey);
     if(!PROJECTS.some(p=>p.ts && p.ts.show)) toast('3D 모델이 보이는 곳으로 이동한 뒤 사용하세요 (SITE › 3D 모델 › 이동)', 4500); else toast('수평 단면 · 연두색 구역('+Math.round(XS.w)+'×'+Math.round(XS.d)+' m) 안에서 '+XS.floor+'층 위를 숨겼습니다 · 모서리를 끌어 구역 조정', 4500); }
-  function off(){ XS.on = false; XS.picking = false; XS.drawing = false; XS.drag = null; scene.screenSpaceCameraController.enableInputs = true; P.classList.remove('open'); q('#xsDraw').classList.remove('on'); for(const p of PROJECTS) if(p.ts && p.ts.clippingPlanes) p.ts.clippingPlanes.enabled = false; drawRegion(); scene.canvas.removeEventListener('wheel', onWheel, { capture:true }); window.removeEventListener('keydown', onKey); if(XS.savedCam){ camera.flyTo({ destination: XS.savedCam.pos, orientation: XS.savedCam.hpr, duration: 1 }); XS.savedCam = null; } XS.top = false; }
+  function off(){ XS.on = false; XS.picking = false; XS.drawing = false; XS.drag = null; scene.screenSpaceCameraController.enableInputs = true; P.classList.remove('open'); q('#xsDraw').classList.remove('on'); for(const p of PROJECTS) if(p.ts){ if(p.ts.clippingPlanes) p.ts.clippingPlanes.enabled = false; if(p.ts._xsBfc!==undefined){ p.ts.backFaceCulling = p.ts._xsBfc; p.ts._xsBfc = undefined; } } drawRegion(); scene.canvas.removeEventListener('wheel', onWheel, { capture:true }); window.removeEventListener('keydown', onKey); if(XS.savedCam){ camera.flyTo({ destination: XS.savedCam.pos, orientation: XS.savedCam.hpr, duration: 1 }); XS.savedCam = null; } XS.top = false; }
   L3.xsec = { on, off, src:()=> XS.on ? '<b>수평 단면</b> '+XS.floor+'층 · 지상 '+fmt(XS.h)+' m'+(XS.region? ' · 구역 '+Math.round(XS.w)+'×'+Math.round(XS.d)+' m':'')+' (DERIVED)' : '' };
   const _ensX = ensureTileset; ensureTileset = async function(p){ const ts = await _ensX(p); if(ts && XS.on) applyTo(ts); return ts; };
   const _smX = setMode; setMode = function(m){ if(m==='earth' && STATE.on.has('xsec')) try{ toggleLayer('xsec', false); }catch(e){} return _smX(m); };
