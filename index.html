@@ -2230,9 +2230,10 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     box.innerHTML = html;
     box.querySelectorAll('.tsRow').forEach(r=>{ const p = PROJECTS.find(x=>x.id===r.dataset.p);
       r.querySelector('.tsSw').onclick = ()=>{ if(OFF.has(p.id)){ OFF.delete(p.id); save(); autoLoadTileset(); toast(p.name+' 3D 모델 켬'+(distKm(p)>LOAD_KM?' · 현장 20 km 안에서 보입니다 → "이동"을 누르세요':''), 3500); } else { OFF.add(p.id); save(); unload(p); toast(p.name+' 3D 모델 끔 · 메모리 해제', 2000); } refresh(); };
-      r.querySelector('.tsGo').onclick = ()=>{ if(OFF.has(p.id)){ OFF.delete(p.id); save(); } for(const q of PROJECTS) if(q!==p && q.ts && distKm(q, Cesium.Cartographic.fromDegrees(p.lon,p.lat)) > UNLOAD_KM) unload(q); ensureTileset(p).then(ts=>{ if(ts) ts.show = true; }); flyToProject(p.id); toast(p.name+'(으)로 이동 · 3D 모델 불러오는 중', 2500); refresh(); };
+      r.querySelector('.tsGo').onclick = ()=>{ flyToProject(p.id); };
     });
   }
+  window.sistechTiles = { activateOnly(id){ const p = PROJECTS.find(x=>x.id===id); if(!p || !p.tsId) return; OFF.delete(p.id); const offed = []; for(const q of PROJECTS) if(q!==p && q.tsId && !OFF.has(q.id)){ OFF.add(q.id); offed.push(q.name); } for(const q of PROJECTS) if(q!==p) unload(q); save(); ensureTileset(p).then(ts=>{ if(ts) ts.show = true; }); refresh(); return offed; } };
   let rT = null; function refresh(){ clearTimeout(rT); rT = setTimeout(inject, 50); }
   const _rs = renderSub; renderSub = function(){ _rs(); inject(); };
   camera.moveEnd.addEventListener(()=>autoLoadTileset());
@@ -2935,6 +2936,12 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   const _smE = setMode; setMode = function(m){ const r = _smE(m); if(m==='site'){ for(const id of [...autoOn]){ if(STATE.on.has(id)) try{ toggleLayer(id, false); }catch(e){} } autoOn.clear(); } return r; };
   // 순서: SITE 먼저, EARTH 다음 (상단 알약 + 좌측 레일)
   for(const sel of ['.modes','#rail']){ const p = document.querySelector(sel); if(!p) continue; const s = p.querySelector('[data-mode="site"]'), e = p.querySelector('[data-mode="earth"]'); if(s && e) p.insertBefore(s, e); }
+})();
+
+/* ---------- 29. 이동(현장 이동) 시 그 지역 3D 모델만 활성화, 다른 지역은 자동 비활성화 ---------- */
+(function(){
+  const _fly = flyToProject;
+  flyToProject = function(id){ const p = PROJECTS.find(x=>x.id===id); if(p && p.tsId && window.sistechTiles){ const offed = window.sistechTiles.activateOnly(id); toast(p.name+' 3D 모델 활성화'+(offed && offed.length ? ' · '+offed.join('·')+' 비활성화(메모리 해제)' : ''), 3000); } return _fly.apply(this, arguments); };
 })();
 
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
