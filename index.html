@@ -3101,6 +3101,21 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   window.sistechXsec = XS;
 })();
 
+/* ---------- 19. 분석 메뉴: 한 번에 하나만 활성 (다른 분석을 켜면 나머지는 자동 해제) ---------- */
+(function(){
+  const _toggleExcl = toggleLayer;
+  const ids = () => { const an = MENUS.site.find(c=>c.id==='analysis'); return an ? an.items.filter(i=>i.type==='layer').map(i=>i.id) : []; };
+  toggleLayer = async function(id, force){
+    const want = force!==undefined ? force : !STATE.on.has(id);
+    const grp = ids();
+    if(want && grp.includes(id)){
+      for(const o of grp){ if(o!==id && STATE.on.has(o)) { try{ await _toggleExcl(o, false); }catch(e){} } }
+      for(const h of ['shHud','vsHud']){ /* 이전 분석 HUD 정리는 각 off()에서 처리 */ }
+    }
+    return _toggleExcl(id, force);
+  };
+})();
+
 console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.length, 'sats');
 })();
 
