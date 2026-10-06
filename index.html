@@ -263,10 +263,10 @@ const ymd = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTC
 /* ---------- 프로젝트 (SISTECH 3D 모델) ---------- */
 const VIEWER_URL = 'https://3dview.sistech3d.com/ko/viewer';
 const PROJECTS = [
-  { id:'incheon1', name:'인천-1', desc:'인천 전체 3D 모델', lat:37.4561, lon:126.7052, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'인천광역시', tsId:'incheon_01' },
-  { id:'busan1', name:'부산-1', desc:'부산 마린시티·해운대 3D 모델', lat:35.1565, lon:129.1455, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'부산 해운대구', tsId:'busan_01' },
-  { id:'bundang1', name:'분당-1', desc:'분당 신도시 3D 모델', lat:37.3826, lon:127.1189, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'성남시 분당구', tsId:'bundang_01' },
-  { id:'goyang1', name:'고양-1', desc:'고양시 3D 모델', lat:37.6584, lon:126.8320, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'고양시', tsId:'goyang_01' },
+  { id:'incheon1', name:'인천', desc:'인천 전체 3D 모델', lat:37.4561, lon:126.7052, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'인천광역시', tsId:'incheon_01' },
+  { id:'busan1', name:'부산', desc:'부산 마린시티·해운대 3D 모델', lat:35.1565, lon:129.1455, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'부산 해운대구', tsId:'busan_01' },
+  { id:'bundang1', name:'분당', desc:'분당 신도시 3D 모델', lat:37.3826, lon:127.1189, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'성남시 분당구', tsId:'bundang_01' },
+  { id:'goyang1', name:'고양', desc:'고양시 3D 모델', lat:37.6584, lon:126.8320, status:'서비스', shot:'2025 (예시)', gsd:'3 cm (예시)', rmse:'5 cm (예시)', area:'고양시', tsId:'goyang_01' },
 ];
 
 /* ---------- Cesium 초기화 ---------- */
@@ -2372,7 +2372,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   const HIDE_FILTER = ['model','smeasure','scompare','analysis'];
   const filt = document.querySelector('#sub .filter');
   function syncFilter(){ if(!filt) return; const hide = STATE.mode==='site' && HIDE_FILTER.includes(STATE.cat); filt.style.display = hide ? 'none' : ''; if(hide && $('#onlyOn').checked) $('#onlyOn').checked = false; }
-  // 2) 오른쪽 프로젝트 카드(인천-1 등) 표시 안 함
+  // 2) 오른쪽 프로젝트 카드(인천 등) 표시 안 함
   showProjectCard = function(){};
   // 3) 활성 지역(모델이 화면에 표시 중)은 이름을 연두색으로
   const css = document.createElement('style'); css.textContent = '#subList .proj b{transition:color .2s}#subList .proj .pin{background:#5E7391;box-shadow:none}#subList .proj.active b{color:#BFE33A}#subList .proj.active .pin{background:var(--lime,#A4C81C);box-shadow:0 0 0 4px rgba(191,227,58,.35)}#tsModels .tsRow.active b{color:#BFE33A}';
