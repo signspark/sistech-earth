@@ -1407,7 +1407,7 @@ function fbRender(){ fbPanel.innerHTML = `<div style="display:flex;justify-conte
   fbPanel.querySelector('#fbClear').onclick = ()=>{ if(confirm('기록을 모두 지울까요?')){ FB.list=[]; fbSave(); fbRender(); } };
 }
 fbBtn.onclick = ()=>{ fbPanel.style.display = fbPanel.style.display==='none'?'block':'none'; fbRender(); };
-document.addEventListener('click', (e)=>{ if(!FB.on) return; if(e.target.closest('#fbPanel,#btnFeedback')) return; const el = e.target.closest('button,a,input,label,.sec,.item,.proj,.cat,#card,#timebar,#hud,#legend,#stage,.brand,#alert,#topbar .modes'); if(!el || el.closest('#cesium')) return; e.preventDefault(); e.stopPropagation(); document.querySelectorAll('.fb-hl').forEach(x=>x.classList.remove('fb-hl')); el.classList.add('fb-hl'); const label = (el.getAttribute('aria-label')||el.getAttribute('title')||el.innerText||el.tagName).replace(/\s+/g,' ').trim().slice(0,60); FB.list.push({ label, sel: fbDescribe(el), at: new Date().toLocaleTimeString('ko-KR'), note:'' }); fbSave(); fbPanel.style.display='block'; fbRender(); const ta = fbPanel.querySelectorAll('textarea'); if(ta.length) ta[ta.length-1].focus(); }, true);
+document.addEventListener('click', (e)=>{ if(!FB.on) return; if(e.target.closest('#fbPanel,#btnFeedback')) return; const el = e.target.closest('button,a,input,label,.sec,.item,.proj,.cat,#card,#timebar,#hud,#legend,#stage,.brand,#alert,#wx,#topbar .modes'); if(!el || el.closest('#cesium')) return; e.preventDefault(); e.stopPropagation(); document.querySelectorAll('.fb-hl').forEach(x=>x.classList.remove('fb-hl')); el.classList.add('fb-hl'); const label = (el.getAttribute('aria-label')||el.getAttribute('title')||el.innerText||el.tagName).replace(/\s+/g,' ').trim().slice(0,60); FB.list.push({ label, sel: fbDescribe(el), at: new Date().toLocaleTimeString('ko-KR'), note:'' }); fbSave(); fbPanel.style.display='block'; fbRender(); const ta = fbPanel.querySelectorAll('textarea'); if(ta.length) ta[ta.length-1].focus(); }, true);
 const _fbPick = handler.getInputAction(Cesium.ScreenSpaceEventType.LEFT_CLICK);
 handler.setInputAction(e=>{ if(!FB.on) return _fbPick(e); const cart = camera.pickEllipsoid(e.position, globe.ellipsoid); if(cart){ const c=Cesium.Cartographic.fromCartesian(cart); const la=deg(c.latitude).toFixed(4), lo=deg(c.longitude).toFixed(4); FB.list.push({ label:`지도 지점 ${la}, ${lo}`, sel:`globe@${la},${lo} alt=${Math.round(camera.positionCartographic.height)}m layers=${[...STATE.on].join(',')}`, at:new Date().toLocaleTimeString('ko-KR'), note:'' }); fbSave(); fbPanel.style.display='block'; fbRender(); } }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
@@ -3351,5 +3351,114 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
 
 </script>
 <style id="v4-norail">#rail{display:none!important}#menu{left:10px!important}</style>
+<style id="v4-topbar">
+/* 상단바 가독성: 글자·버튼 한 단계 확대 (56 → 64px) */
+#topbar{height:64px;gap:16px;padding:0 16px}
+.brand .word{font-size:23px}
+.brand .sub{font-size:15px;color:#9FB6CF}
+.modes button{padding:7px 18px;font-size:15px}
+.modes button.on::before{width:8px;height:8px}
+#stage{font-size:14px;padding:4px 7px}
+#stage span{padding:4px 12px}
+#topbar .icons > button{width:38px;height:34px}
+#topbar .icons > button svg{width:21px;height:21px}
+/* 실시간 날씨 위젯 (특보 배너 대체) */
+#wx{margin-left:auto;display:flex;align-items:center;gap:12px;padding:6px 14px 6px 12px;background:rgba(3,18,42,.88);border:1px solid var(--line-strong);border-radius:999px;font-size:14px;color:var(--text);backdrop-filter:blur(8px);cursor:default;max-width:min(58vw,760px);white-space:nowrap}
+#wx .ico{width:30px;height:30px;flex:none}
+#wx .ico svg{width:30px;height:30px;stroke:#DCE8F5;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+#wx .tmp{font-size:22px;font-weight:800;color:#fff;line-height:1}
+#wx .tmp small{font-size:12px;font-weight:500;color:var(--text-dim);margin-left:2px}
+#wx .loc{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+#wx .loc b{font-size:14px;color:#fff;font-weight:700;overflow:hidden;text-overflow:ellipsis}
+#wx .loc small{font-size:11.5px;color:var(--text-dim)}
+#wx .sep{width:1px;height:26px;background:var(--line);flex:none}
+#wx .kv{display:flex;flex-direction:column;line-height:1.15;align-items:flex-start}
+#wx .kv small{font-size:11px;color:var(--text-dim);letter-spacing:.02em}
+#wx .kv b{font-size:14px;color:#fff;font-weight:600;white-space:nowrap}
+#wx .kv b i{font-style:normal;color:var(--lime-bright);font-weight:700}
+#wx .upd{font-size:11px;color:var(--text-dim);flex:none}
+#wx.loading{opacity:.75}
+@media (max-width:1280px){ #wx .kv.hum, #wx .sep.hum{display:none} }
+@media (max-width:1100px){ #wx .kv.rain, #wx .sep.rain{display:none} #wx .upd{display:none} }
+@media (max-width:900px){ #wx{display:none} }
+</style>
+<script>
+/* ---------- 32. 상단 실시간 날씨 위젯: 화면 중심 위치의 현재 기온·풍속·풍향·습도·강수 (Open-Meteo) · 카메라 이동 시 갱신 · 10분마다 자동 갱신 ---------- */
+(function(){
+  const old = document.getElementById('alert'); if(old) old.remove();
+  const tb = document.getElementById('topbar'); if(!tb) return;
+  const W = document.createElement('div'); W.id = 'wx'; W.setAttribute('role','status'); W.setAttribute('aria-label','현재 날씨'); W.className='loading';
+  W.innerHTML = `<span class="ico" id="wxIco"></span><span class="tmp" id="wxT">--<small>°C</small></span>
+    <span class="loc"><b id="wxLoc">위치 확인 중</b><small id="wxDesc">날씨 불러오는 중</small></span>
+    <span class="sep"></span><span class="kv"><small>바람</small><b id="wxWind">-</b></span>
+    <span class="sep hum"></span><span class="kv hum"><small>습도 · 체감</small><b id="wxHum">-</b></span>
+    <span class="sep rain"></span><span class="kv rain"><small>강수 (1h)</small><b id="wxRain">-</b></span>
+    <span class="upd" id="wxUpd"></span>`;
+  tb.appendChild(W);
+  const ICO = {
+    sun:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg>',
+    partly:'<svg viewBox="0 0 24 24"><circle cx="8" cy="8.5" r="3.2"/><path d="M8 2.6v1.6M2.1 8.5h1.6M3.8 4.3l1.1 1.1M12.2 4.3l-1.1 1.1"/><path d="M8.5 19.5h9.2a3.3 3.3 0 0 0 .4-6.6 5 5 0 0 0-9.6-1.2A4 4 0 0 0 8.5 19.5z"/></svg>',
+    cloud:'<svg viewBox="0 0 24 24"><path d="M7 19h10.5a3.8 3.8 0 0 0 .5-7.6 5.6 5.6 0 0 0-10.8-1.4A4.5 4.5 0 0 0 7 19z"/></svg>',
+    fog:'<svg viewBox="0 0 24 24"><path d="M4 10h13M3 14h18M6 18h12"/><path d="M7.5 10a4.5 4.5 0 0 1 8.7-1.5 3 3 0 0 1 3 1.5"/></svg>',
+    rain:'<svg viewBox="0 0 24 24"><path d="M7 15h10.5a3.8 3.8 0 0 0 .5-7.6 5.6 5.6 0 0 0-10.8-1.4A4.5 4.5 0 0 0 7 15z"/><path d="M9 18l-1 3M13 18l-1 3M17 18l-1 3"/></svg>',
+    snow:'<svg viewBox="0 0 24 24"><path d="M7 14h10.5a3.8 3.8 0 0 0 .5-7.6 5.6 5.6 0 0 0-10.8-1.4A4.5 4.5 0 0 0 7 14z"/><path d="M9 18v3M8 19.5h2M13 17.5v3M12 19h2M17 18v3M16 19.5h2"/></svg>',
+    storm:'<svg viewBox="0 0 24 24"><path d="M7 14h10.5a3.8 3.8 0 0 0 .5-7.6 5.6 5.6 0 0 0-10.8-1.4A4.5 4.5 0 0 0 7 14z"/><path d="M13 14l-2.5 4h3L11 22"/></svg>',
+    moon:'<svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>'
+  };
+  function wmo(code, day){ // WMO weather_code → 설명·아이콘
+    if(code===0) return ['맑음', day?'sun':'moon'];
+    if(code===1) return ['대체로 맑음', day?'sun':'moon'];
+    if(code===2) return ['구름 조금', day?'partly':'cloud'];
+    if(code===3) return ['흐림','cloud'];
+    if(code===45||code===48) return ['안개','fog'];
+    if(code>=51&&code<=57) return ['이슬비','rain'];
+    if(code>=61&&code<=67) return [code>=65?'강한 비':'비','rain'];
+    if(code>=71&&code<=77) return ['눈','snow'];
+    if(code>=80&&code<=82) return [code===82?'강한 소나기':'소나기','rain'];
+    if(code===85||code===86) return ['소낙눈','snow'];
+    if(code>=95) return ['뇌우','storm'];
+    return ['-','cloud'];
+  }
+  const DIR = ['북','북북동','북동','동북동','동','동남동','남동','남남동','남','남남서','남서','서남서','서','서북서','북서','북북서'];
+  const dirTxt = d => DIR[Math.round(((d%360)+360)%360/22.5)%16];
+  const $i = id => document.getElementById(id);
+  let last = { lat:null, lon:null, at:0, name:'', nameLat:null, nameLon:null };
+  function viewCenter(){ try{ const cv = scene.canvas; const ray = camera.getPickRay(new Cesium.Cartesian2(cv.clientWidth/2, cv.clientHeight/2)); const p = ray && scene.globe.pick(ray, scene); if(!p) return null; const c = Cesium.Cartographic.fromCartesian(p); return { lat:Cesium.Math.toDegrees(c.latitude), lon:Cesium.Math.toDegrees(c.longitude) }; }catch(e){ return null; } }
+  const km = (a,b)=> a&&b ? 111*Math.hypot(a.lat-b.lat, (a.lon-b.lon)*Math.cos(a.lat*Math.PI/180)) : 1e9;
+  async function placeName(lat, lon){
+    if(last.name && km({lat,lon},{lat:last.nameLat,lon:last.nameLon}) < 2) return last.name;
+    try{ const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&zoom=14&accept-language=ko`); const j = await r.json(); const a = j.address||{};
+      const city = a.city||a.county||a.state||''; const dist = a.borough||a.city_district||a.district||a.town||''; const dong = a.suburb||a.quarter||a.village||a.neighbourhood||'';
+      const name = [city.replace(/(특별시|광역시|특별자치시|특별자치도)$/,''), dist, dong].filter(Boolean).slice(0,3).join(' ') || (lat.toFixed(3)+', '+lon.toFixed(3));
+      last.name = name; last.nameLat = lat; last.nameLon = lon; return name; }catch(e){ return lat.toFixed(3)+', '+lon.toFixed(3); }
+  }
+  let busy = false;
+  async function refresh(force){
+    if(busy) return; const c = viewCenter(); if(!c) return;
+    const moved = km(c, last) > 3; const stale = Date.now()-last.at > 10*60e3;
+    if(!force && !moved && !stale) return;
+    busy = true; W.classList.add('loading');
+    try{
+      const u = `https://api.open-meteo.com/v1/forecast?latitude=${c.lat.toFixed(4)}&longitude=${c.lon.toFixed(4)}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day&wind_speed_unit=ms&timezone=Asia%2FSeoul`;
+      const [j, name] = await Promise.all([ fetch(u).then(r=>r.json()), placeName(c.lat, c.lon) ]);
+      const cu = j.current; const [desc, ico] = wmo(cu.weather_code, cu.is_day===1);
+      $i('wxIco').innerHTML = ICO[ico]; $i('wxT').innerHTML = Math.round(cu.temperature_2m)+'<small>°C</small>';
+      $i('wxLoc').textContent = name; $i('wxDesc').textContent = desc + ' · 화면 중심 기준';
+      $i('wxWind').innerHTML = dirTxt(cu.wind_direction_10m)+' <i>'+cu.wind_speed_10m.toFixed(1)+'</i> m/s' + (cu.wind_gusts_10m>=cu.wind_speed_10m+3 ? ' · 돌풍 '+cu.wind_gusts_10m.toFixed(0) : '');
+      $i('wxHum').innerHTML = cu.relative_humidity_2m+'% · '+Math.round(cu.apparent_temperature)+'°';
+      $i('wxRain').innerHTML = (cu.precipitation||0).toFixed(1)+' mm';
+      const t = new Date(cu.time); $i('wxUpd').textContent = String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')+' 기준 · Open-Meteo';
+      W.title = name+' · '+desc+' · 기온 '+cu.temperature_2m+'°C · 체감 '+cu.apparent_temperature+'°C · 바람 '+dirTxt(cu.wind_direction_10m)+' '+cu.wind_speed_10m+' m/s (돌풍 '+cu.wind_gusts_10m+') · 습도 '+cu.relative_humidity_2m+'% · 강수 '+cu.precipitation+' mm · '+cu.time.replace('T',' ')+' KST · 출처 Open-Meteo (화면 중심 위치)';
+      last.lat = c.lat; last.lon = c.lon; last.at = Date.now(); W.classList.remove('loading');
+    }catch(e){ $i('wxDesc').textContent = '날씨 조회 실패 · 재시도 예정'; }
+    busy = false;
+  }
+  let tmr = null; try{ camera.moveEnd.addEventListener(()=>{ clearTimeout(tmr); tmr = setTimeout(()=>refresh(false), 1200); }); }catch(e){}
+  setInterval(()=>refresh(false), 60e3);
+  setTimeout(()=>refresh(true), 1500);
+  window.__wx = { refresh };
+})();
+</script>
+
 </body>
 </html>
