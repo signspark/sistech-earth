@@ -3157,13 +3157,14 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
   // 하도 경사 S0: 상류 수면 → 하류 수면 (buildST에서 계산)
 
   // ---- 시나리오 상태 ----
-  const RF = { on:false, t:0, terrain:'dsm', I:124.5, dur:1.0, Cc:0.85, A:33.58, nMan:0.035, free:1.0, tide:1, tc:1.2, kd:0.35,
+  const RF = { on:false, t:0, terrain:'dsm', arfOn:true, arf:0.90, I:124.5, dur:1.0, Cc:0.85, A:33.58, nMan:0.035, free:1.0, tide:1, tc:1.2, kd:0.35,
                playing:false, timer:null, speed:1, cache:new Map(), prim:null, ents:[], savedCam:null, dirty:true };
   const TIDE = [ {n:'저조', f:1.0, d:'하류 통수능 100%'}, {n:'평균', f:0.8, d:'하류 통수능 80%'}, {n:'고조', f:0.55, d:'하류 통수능 55% (배수 불량)'} ];
   const REACH_N = ['상류 (구월·선학)', '중류 (연수·남동)', '하류 (논현·남동유수지)'];
 
   // ---- 수문 계산 ----
-  function Qpeak(){ return 0.2778 * RF.Cc * RF.I * RF.A * Math.min(1, RF.dur/RF.tc); } // 합리식 (㎥/s) · 지속시간 < 도달시간이면 비례 축소
+  function Ieff(){ return RF.I * (RF.arfOn ? RF.arf : 1); } // 유역 평균 강우 = 지점 강우 × 면적감소계수(ARF · 33.58 ㎢ · 1 h ≈ 0.90)
+  function Qpeak(){ return 0.2778 * RF.Cc * Ieff() * RF.A * Math.min(1, RF.dur/RF.tc); } // 합리식 (㎥/s) · 지속시간 < 도달시간이면 비례 축소
   function tp(){ return RF.dur/2 + 0.6*RF.tc; }
   function Q(t){ const p = tp(), qp = Qpeak(); if(t<=0) return 0; if(t<=p) return qp*t/p; const r = 1 - (t-p)/(1.67*p); return Math.max(0, qp*r); }
   function manningQ(w, d){ if(d<=0) return 0; const A=w*d, R=A/(w+2*d); return (1/RF.nMan)*A*Math.pow(R,2/3)*Math.sqrt(S0); }
@@ -3252,11 +3253,12 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
     <div class="row"><label>강수량</label><input type="number" id="rfI" min="10" max="300" step="0.5"><label>mm/h</label><label>지속</label><input type="number" id="rfDur" min="0.5" max="6" step="0.5" style="width:56px"><label>h</label></div>
     <div class="btns"><button data-i="124.5" class="on">2026 최대 124.5 (8/17 거제)</button><button data-i="152.2">역대 152.2 (군산)</button><button data-i="100">100</button><button data-i="200">200</button></div>
     <div class="row"><label>조위</label><span class="btns" id="rfTide"><button data-t="0">저조</button><button data-t="1" class="on">평균</button><button data-t="2">고조</button></span><span id="rfTideD" style="font-size:11px;color:var(--text-dim)"></span></div>
+    <div class="row"><label>면적감소계수</label><span class="btns" id="rfArf"><button data-a="1" class="on">적용 0.90</button><button data-a="0">미적용</button></span><span id="rfArfD" style="font-size:11px;color:var(--text-dim)"></span></div>
     <div class="row"><label>유출계수</label><input type="number" id="rfC" min="0.3" max="1" step="0.05" style="width:58px"><label>여유고</label><input type="number" id="rfFree" min="0" max="3" step="0.5" style="width:56px"><label>m</label><label>조도 n</label><input type="number" id="rfN" min="0.02" max="0.06" step="0.005" style="width:62px"></div>
   </div>
   <div class="lg"><span><i style="background:rgba(70,150,255,.6)"></i>하도 내</span><span><i style="background:rgba(140,210,255,.5)"></i>&lt;0.3 m</span><span><i style="background:rgba(70,150,255,.65)"></i>0.3–1 m</span><span><i style="background:rgba(30,90,230,.75)"></i>1–2 m</span><span><i style="background:rgba(10,40,170,.85)"></i>&gt;2 m</span></div>
   <div class="btns"><button id="rfFly">승기천 전체 보기</button><button id="rfFlyUp">상류</button><button id="rfFlyMid">중류</button><button id="rfFlyDn">하류</button></div>
-  <div class="hint"><b>데모용 간이 모델</b> · 유출: 합리식 Q=0.278·C·I·A (지속시간 &lt; 도달시간 1.2 h면 비례 축소), 삼각형 수문곡선 · 통수능: 매닝식(하도 폭 상류 60·중류 90·하류 120 m, 깊이 = DEM 제방고 − 수면 + 저수심 1 m − 여유고, 경사 자동) · 범람: 구간별 넘친 양만큼 제방 위로 수위를 올려 DEM 따라 채움(지형 턱에서 멈춤) · 배수: 통수능 여유의 35% · 하수관·펌프장·실제 하천단면 미반영 · 지형: SISTECH DSM 평준화(기본) 또는 Esri DEM, 25 m 격자</div>
+  <div class="hint"><b>데모용 간이 모델</b> · 강우: 유역 33.58 ㎢ 전체에 균일 강우, 지점값 × 면적감소계수 0.90(홍수량 산정 표준지침 방식) · 유출: 합리식 Q=0.278·C·I·A (지속시간 &lt; 도달시간 1.2 h면 비례 축소), 삼각형 수문곡선 · 통수능: 매닝식(하도 폭 상류 60·중류 90·하류 120 m, 깊이 = DEM 제방고 − 수면 + 저수심 1 m − 여유고, 경사 자동) · 범람: 구간별 넘친 양만큼 제방 위로 수위를 올려 DEM 따라 채움(지형 턱에서 멈춤) · 배수: 통수능 여유의 35% · 하수관·펌프장·실제 하천단면 미반영 · 지형: SISTECH DSM 평준화(기본) 또는 Esri DEM, 25 m 격자</div>
 </div>`;
   document.body.appendChild(P);
   const $$ = s => P.querySelector(s);
@@ -3274,6 +3276,8 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
   P.querySelectorAll('.btns button[data-i]').forEach(b=>b.onclick=()=>{ RF.I=+b.dataset.i; $$('#rfI').value=RF.I; markPreset(); paramsChanged(); });
   P.querySelectorAll('#rfTide button').forEach(b=>b.onclick=()=>{ RF.tide=+b.dataset.t; P.querySelectorAll('#rfTide button').forEach(x=>x.classList.toggle('on', x===b)); $$('#rfTideD').textContent = TIDE[RF.tide].d; paramsChanged(); });
   $('#rfTideD').textContent = TIDE[RF.tide].d;
+  function arfTxt(){ $('#rfArfD').textContent = RF.arfOn ? '유역 평균 '+Ieff().toFixed(1)+' mm/h (지점 '+RF.I+' × 0.90)' : '유역 전체에 지점값 '+RF.I+' mm/h 그대로'; }
+  P.querySelectorAll('#rfArf button').forEach(b=>b.onclick=()=>{ RF.arfOn = b.dataset.a==='1'; P.querySelectorAll('#rfArf button').forEach(x=>x.classList.toggle('on', x===b)); paramsChanged(); });
   function setTerrain(g){ RF.terrain = g; H = decodeH(HSRC[g]); buildST(); P.querySelectorAll('#rfTerr button').forEach(b=>b.classList.toggle('on', b.dataset.g===g)); const cap = reachCap(); $('#rfTerrD').innerHTML = '<b>'+TERR[g].n+'</b> · '+TERR[g].d+' · 하도 경사 '+(S0*1000).toFixed(2)+' ‰ · 제방고(중류 대표) '+ST[Math.floor(NS/2)].bank.toFixed(1)+' m · 수면 '+ST[Math.floor(NS/2)].chan.toFixed(1)+' m'; paramsChanged(); }
   P.querySelectorAll('#rfTerr button').forEach(b=>b.onclick=()=>setTerrain(b.dataset.g));
   $('#rfRange').oninput = e=>{ setStep(+e.target.value); };
@@ -3291,13 +3295,13 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
   function setStep(k){ k = Math.max(0, Math.min(NSTEP-1, k)); RF.t = k*DT; $$('#rfRange').value = k; if(RF.on) showStep(k); update(); }
 
   function update(){
-    if(!SERIES) buildSeries();
+    if(!SERIES) buildSeries(); try{ arfTxt(); }catch(e){}
     const k = Math.round(RF.t/DT); const rec = SERIES[k]; const f = RF.on ? floodAt(k) : null;
     $$('#rfT').textContent = fmtT(RF.t);
     const raining = RF.t < RF.dur, over = rec.cap.some(c=>rec.Q>c), wet = rec.V.some(v=>v>0);
     const tag = $$('#rfTag'); tag.className = 'tag ' + (over ? 'over' : raining ? 'rain' : wet ? 'drain' : '');
     tag.textContent = over ? '범람 중' : raining ? '강우 중' : wet ? '배수 중' : (RF.t===0 ? '시작 전' : '종료');
-    $$('#rfTsub').textContent = raining ? '비 내리는 중 · '+RF.I+' mm/h' : '비 그침 (지속 '+RF.dur+' h)';
+    $('#rfTsub').textContent = raining ? '비 내리는 중 · 유역 평균 '+Ieff().toFixed(0)+' mm/h' : '비 그침 (지속 '+RF.dur+' h)';
     $$('#rfQ').textContent = Math.round(rec.Q); $$('#rfQp').textContent = Math.round(Qpeak());
     $$('#rfCap').textContent = rec.cap.map(c=>Math.round(c)).join(' · ')+' ㎥/s';
     const vol = rec.V.reduce((a,b)=>a+b,0); $$('#rfVol').textContent = (vol/1e4).toFixed(1);
@@ -3328,7 +3332,7 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
     if(far) flyTo(mid, 5200, -62);
     toast('하천 범람 시뮬레이션 · 승기천 · ▶ 재생 또는 슬라이더로 0~6 h 진행 · 2026년 최대 시간당 강수량 124.5 mm 기본', 5000); }
   function off(){ RF.on = false; stop(); P.classList.remove('open'); for(const [,pr] of PRIMS) pr.show=false; scene.requestRender && scene.requestRender(); }
-  const L4 = { rflood: { on, off, src:()=> RF.on ? '<b>하천 범람</b> 승기천 · '+RF.I+' mm/h × '+RF.dur+' h · '+fmtT(RF.t)+' (DERIVED · 간이 모델)' : '' } };
+  const L4 = { rflood: { on, off, src:()=> RF.on ? '<b>하천 범람</b> 승기천 · 유역 평균 '+Ieff().toFixed(0)+' mm/h × '+RF.dur+' h · '+fmtT(RF.t)+' (DERIVED · 간이 모델)' : '' } };
   const _toggle4 = toggleLayer;
   toggleLayer = async function(id, force){
     if(!L4[id]) return _toggle4(id, force);
