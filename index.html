@@ -3286,7 +3286,7 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
   $$('#rfFlyMid').onclick = ()=> flyTo(mid, 1500, -50);
   $$('#rfFlyDn').onclick = ()=> flyTo(dn, 1500, -50);
 
-  function play(){ RF.playing = true; $$('#rfPlay').textContent='❚❚'; if(RF.timer) clearInterval(RF.timer); RF.timer = setInterval(()=>{ let k = Math.round(RF.t/DT)+1; if(k>=NSTEP){ stop(); return; } setStep(k); }, 450); }
+  function play(){ if(Math.round(RF.t/DT) >= NSTEP-1) setStep(0); RF.playing = true; $('#rfPlay').textContent='❚❚'; if(RF.timer) clearInterval(RF.timer); RF.timer = setInterval(()=>{ let k = Math.round(RF.t/DT)+1; if(k>=NSTEP){ stop(); return; } setStep(k); }, 450); }
   function stop(){ RF.playing=false; $$('#rfPlay').textContent='▶'; if(RF.timer){ clearInterval(RF.timer); RF.timer=null; } }
   function setStep(k){ k = Math.max(0, Math.min(NSTEP-1, k)); RF.t = k*DT; $$('#rfRange').value = k; if(RF.on) showStep(k); update(); }
 
