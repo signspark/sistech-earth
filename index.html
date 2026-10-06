@@ -441,7 +441,7 @@ const MENUS = {
       { id:'ab', q:'회차 A/B 분할', name:'회차 비교', src:'', type:'site' },{ id:'diff', q:'바뀐 곳만 보기', name:'변화 하이라이트', src:'', type:'site' },
     ]},
     { id:'analysis', name:'분석', icon:I.analysis, items:[
-      { id:'shadow', q:'해가 어디까지 드나', name:'일조·그림자', src:'시간 바 연동', type:'site' },{ id:'view', q:'여기서 어디까지 보이나', name:'가시권', src:'', type:'site' },{ id:'fl', q:'물이 차면', name:'침수 수위', src:'', type:'site' },
+      { id:'shadow', q:'해가 어디까지 드나', name:'일조·그림자', src:'시간 바 연동', type:'site' },{ id:'view', q:'여기서 어디까지 보이나', name:'가시권', src:'', type:'site' },
     ]},
     { id:'export', name:'내보내기', icon:I.export, items:[
       { id:'png', q:'화면을 저장', name:'PNG 저장', src:'', type:'action', run: savePng },{ id:'ortho', q:'정사영상으로', name:'GeoTIFF', src:'', type:'site' },{ id:'kml', q:'측정 결과를', name:'KML · GeoJSON', src:'', type:'site' },{ id:'mp4', q:'비행 영상으로', name:'영상 녹화', src:'', type:'site' },
@@ -1344,7 +1344,7 @@ cat('region').items = [
 // 위성 도크: 안개 항목 추가
 cat('sat').items.splice(3,0,{ id:'fog', q:'밤에 낮은 구름이 있는가', name:'안개·낮은 구름 (천리안 야간)', src:'기상청 위성센터 키', type:'soon' });
 // SITE 모드 분석에 연안 침수 안내
-MENUS.site.find(c=>c.id==='analysis').items.push({ id:'sflood', q:'연안 침수 범위', name:'연안 침수 시뮬레이션', src:'3D 모델 + 수위 입력', type:'site' });
+/* 연안 침수 시뮬레이션 항목 제거 (2026-10-06) */
 
 /* ---------- 설정: 구름 모드 · 눈·얼음 ---------- */
 const setBox = $('#settings'); const cloudRow = document.createElement('div'); cloudRow.className='row'; cloudRow.innerHTML = `<span>구름</span><div class="seg" id="segCloud"><button data-c="none">없음</button><button data-c="obs" title="히마와리-9 적외 10분">관측</button><button data-c="model" title="MODIS 어제 합성">모델</button><button data-c="static" title="Suomi NPP 어제">정적</button></div>`;
