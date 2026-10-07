@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SISTECH EARTH · 지구 → 지역 → 현장 (데모)</title>
 <script src="https://cesium.com/downloads/cesiumjs/releases/1.126/Build/Cesium/Cesium.js"></script>
 <link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.126/Build/Cesium/Widgets/widgets.css">
@@ -3526,14 +3526,14 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
 </script>
 
 <script>
-/* ---------- 34. SITE › 지역 › 공개 CCTV (인천시청 1 km): 행정안전부 전국 CCTV 표준데이터(남동구청 등록분) · 위치 실측 · 촬영 방향은 도로 방향 기반 추정(세로 부채꼴) ---------- */
+/* ---------- 34. SITE › 분석 › 공개 CCTV (인천시청 1 km): 행정안전부 전국 CCTV 표준데이터(남동구청 등록분) · 위치 실측 · 촬영 방향은 도로 방향 기반 추정(세로 부채꼴) ---------- */
 (function(){
   const C = Cesium;
   const CAMS = [[37.45734,126.7047,2,1,[177],"구월로131번길 7-1"],[37.45729,126.70448,0,2,[177,357],"구월로125번길 8"],[37.45753,126.7057,0,2,[177,357],"구월로157번길 7"],[37.45766,126.70511,0,3,[177,357],"구월로131번길 18"],[37.45769,126.70433,0,2,[87,267],"구월로115번길 20-18"],[37.45813,126.70502,0,3,[177,357],"간석동 410-6"],[37.45745,126.70718,0,1,[215],"구월로157번길 6"],[37.45821,126.70442,0,4,[87,267],"예술로268번길 40"],[37.45727,126.70277,0,1,[88],"예술로258번길 5"],[37.45828,126.70655,1,1,[124],"남동대로837번길 31"],[37.45779,126.70747,0,2,[215,35],"구월로157번길 6"],[37.45401,126.70597,0,3,[276,96],"남동대로799번길 38"],[37.45811,126.70302,0,2,[87,267],"간석동 906-3"],[37.4542,126.70322,0,3,[278,98],"구월동 1135-5"],[37.45579,126.70866,0,2,[6,186],"남동대로 828"],[37.45511,126.70201,0,2,[110,290],"예술로 230"],[37.45626,126.70873,0,1,[6],"남동대로 828"],[37.45947,126.7056,0,3,[177,357],"구월로137번길 50"],[37.45884,126.70263,0,2,[176,356],"예술로 276"],[37.45935,126.70367,0,3,[88,268],"예술로282번길 19"],[37.4596,126.70471,1,2,[133,313],"구월로131번길 61"],[37.45978,126.70419,0,2,[177,357],"구월로125번길 65"],[37.45949,126.70298,0,3,[180,360],"예술로282번길 7"],[37.45678,126.70045,0,2,[5,185],"문화로 197"],[37.46027,126.70487,1,4,[177,357],"간석동 342-1"],[37.45713,126.71016,1,1,[98],"간석동 939-5"],[37.46041,126.70539,0,2,[175,355],"석산로 121-3"],[37.45851,126.70066,0,3,[3,183],"구월로 73"],[37.4609,126.70692,1,3,[87,267],"석산로131번길 10-8"],[37.45466,126.69933,0,2,[294,114],"문화로169번길 30"],[37.4613,126.7065,0,2,[177,357],"석산로141번길 29"],[37.46066,126.70856,0,2,[357,177],"남동대로 880"],[37.45544,126.69864,0,2,[98,278],"간석동 508-30"],[37.45381,126.69925,0,2,[98,278],"문화로 161"],[37.4587,126.69918,0,1,[95],"석산로62번길 42"],[37.45653,126.71196,0,2,[98,278],"구월동 23-2"],[37.45115,126.70319,0,2,[97,277],"예술로192번길 31"],[37.45087,126.70483,0,2,[89,269],"미래로 8"],[37.4512,126.70277,0,2,[186,6],"예술로192번길 25"],[37.46032,126.70043,0,3,[113,293],"석산로 78"],[37.45704,126.69824,0,2,[190,10],"구월로 78"],[37.45652,126.69813,0,2,[6,186],"구월로72번길 12"],[37.45311,126.69936,0,4,[183,3],"구월동 1092-32"],[37.46062,126.70983,1,2,[86,266],"간석동 195-1"],[37.46169,126.70748,0,2,[177,357],"석산로141번길 29"],[37.45306,126.69927,1,1,[183],"구월동 1093"],[37.45553,126.6979,0,2,[191,11],"구월로72번길 33"],[37.45312,126.69891,0,2,[184,4],"구월동 1093"],[37.46036,126.69976,0,3,[115,295],"석산로 72"],[37.46015,126.69951,0,3,[115,295],"간석동 514"],[37.45369,126.69843,0,1,[93],"구월남로 81-2"],[37.45613,126.69762,0,1,[190],"구월로8번길 120"],[37.45227,126.71083,0,2,[94,274],"독점로 27-1"],[37.45425,126.69801,0,1,[183],"구월남로 75"],[37.45968,126.69885,0,2,[165,345],"석산로62번길 22"],[37.45772,126.71267,0,2,[176,356],"석산로184번길 66"],[37.46102,126.70026,0,3,[179,359],"경인로552번길 33"],[37.46241,126.70399,0,2,[176,356],"석산로101번길 56"],[37.46242,126.70643,0,1,[85],"석산로141번길 29"],[37.46101,126.71029,0,1,[87],"석산로 161"],[37.46006,126.69895,0,2,[165,345],"간석동 514"],[37.45666,126.69735,0,1,[191],"구월로64번길 11"],[37.46238,126.70307,0,2,[89,269],"석산로101번길 56"],[37.46149,126.70977,0,2,[87,267],"간석동 192"],[37.45516,126.69734,0,1,[288],"문화로169번길 45"],[37.46243,126.70744,0,2,[177,357],"석산로141번길 29"],[37.45131,126.7102,0,2,[184,4],"남동대로774번길 35"],[37.45232,126.71148,0,2,[94,274],"독점로30번길 15"],[37.46259,126.70323,1,1,[179],"석산로101번길 56"],[37.45839,126.69747,0,2,[256,76],"구월로 65"],[37.44975,126.70455,0,3,[91,271],"인주대로610번길 1"],[37.45043,126.70901,1,1,[183],"구월동 1196-4"],[37.4497,126.70521,0,3,[94,274],"인주대로614번길 1"],[37.46184,126.70978,0,3,[87,267],"남동대로884번길 21"],[37.45318,126.69782,0,3,[184,4],"문화서로90번길 22"],[37.452,126.6987,0,2,[184,4],"문화로133번길 18-19"],[37.45977,126.7125,0,1,[176],"석산로184번길 17"],[37.45584,126.69671,0,2,[102,282],"구월로60번길 27"],[37.45174,126.71152,0,2,[183,3],"용천로21번길 48"],[37.45994,126.69799,1,2,[177,357],"경인로524번길 11"],[37.45109,126.71069,0,2,[184,4],"남동대로774번길 46"],[37.46068,126.7118,0,2,[85,265],"석산로 179"],[37.46154,126.71083,0,2,[86,266],"남동대로884번길 41"],[37.45543,126.69657,0,2,[286,106],"문화로169번길 70"],[37.45717,126.69652,0,4,[187,7],"구월로 56"],[37.46255,126.70913,0,4,[87,267],"석촌로 20"],[37.46147,126.69925,0,1,[90],"경인로552번길 22-17"],[37.46312,126.7031,0,3,[87,267],"이화로 5"],[37.45786,126.69657,0,2,[187,7],"간석동 900-34"],[37.45619,126.69634,0,3,[191,11],"구월로56번길 22"],[37.44926,126.70486,0,3,[3,183],"인주대로612번길 9"],[37.45719,126.714,1,1,[86],"용천로87번길 23"],[37.46028,126.71256,0,3,[176,356],"구월동 142-10"],[37.46102,126.69857,1,1,[198],"경인로 530"],[37.45114,126.71134,0,3,[94,274],"용천로17번길 51"],[37.46218,126.70015,0,2,[180,360],"경인로 548"],[37.44925,126.7064,2,2,[184,4],"인주대로626번길 10"],[37.44916,126.70543,0,1,[94],"남동대로747번길 35"],[37.45007,126.70969,0,2,[94,274],"인주대로653번길 10"],[37.45378,126.69667,0,2,[93,273],"구월남로57번길 12"],[37.46223,126.71046,0,2,[87,267],"석산로169번길 33-6"],[37.45637,126.69605,0,3,[191,11],"구월로8번길 90"],[37.46031,126.71288,0,3,[176,356],"구월동 142-10"],[37.4621,126.71077,0,2,[176,356],"석촌로14번길 41"],[37.46094,126.698,0,2,[110,290],"석산로 56-2"],[37.44927,126.7024,0,3,[274,94],"구월동 1124-8"],[37.45216,126.71289,0,2,[94,274],"독점로30번길 34"],[37.45102,126.69866,0,2,[94,274],"문화로133번길 18-2"],[37.45623,126.71456,0,3,[98,278],"구월동 23-2"],[37.45541,126.71451,0,2,[96,276],"구월로 192"],[37.46108,126.71241,0,1,[176],"석산로183번길 5"],[37.45515,126.69586,0,2,[272,92],"구월남로57번길 31"],[37.46098,126.6978,0,2,[110,290],"간석동 746-11"],[37.45322,126.69655,0,2,[184,4],"문화서로 89"],[37.45166,126.71268,0,1,[94],"인주대로681번길 47"],[37.4619,126.71156,0,3,[87,267],"석촌로14번길 44"],[37.46021,126.71332,0,3,[86,266],"구월동 142-10"],[37.45454,126.71445,0,1,[276],"구월로 192"],[37.44877,126.70394,0,2,[94,274],"인주대로604번길 19"],[37.45104,126.69821,0,2,[94,274],"문화서로62번길 39"],[37.45418,126.69592,0,2,[183,3],"구월남로57번길 12"],[37.44867,126.70609,0,4,[4,184],"인주대로624번길 22"],[37.46046,126.71334,0,3,[86,266],"구월동 142-10"],[37.45263,126.69667,1,1,[184],"문화서로 84"],[37.46262,126.71075,0,3,[87,267],"석촌로20번길 31"],[37.44984,126.71049,0,3,[94,274],"인주대로 661"],[37.46154,126.71237,0,2,[86,266],"남동대로884번길 68"],[37.46305,126.71005,0,3,[266,86],"석산로169번길 49"],[37.46107,126.69746,0,2,[151,331],"석산로 52"],[37.4506,126.71188,0,1,[94],"용천로11번길 39"],[37.46346,126.70904,0,2,[176,356],"석촌로 34"],[37.45566,126.6954,0,2,[283,103],"구월로50번길 34"],[37.46023,126.7137,0,2,[86,266],"구월동 142-10"],[37.45398,126.71466,1,1,[5],"용천로 50"],[37.45228,126.69669,0,2,[274,94],"문화서로 76"],[37.44855,126.70695,0,3,[93,273],"성말로53번길 77"],[37.45231,126.71376,0,3,[168,348],"구월동 1215-7"],[37.46048,126.71363,0,3,[86,266],"구월동 142-10"],[37.45612,126.69521,0,2,[102,282],"구월로46번길 25"],[37.4642,126.70631,0,2,[102,282],"남동대로915번길 25"],[37.45465,126.69538,0,1,[183],"구월남로53번길 16"],[37.44895,126.70906,0,2,[186,6],"남동대로748번길 20"],[37.45105,126.7128,0,4,[94,274],"인주대로681번길 29"],[37.45328,126.69585,0,2,[93,273],"구월남로 58-7"],[37.46114,126.71334,0,2,[85,265],"석산로 193-7"],[37.46361,126.70951,0,3,[101,281],"석촌로 34"],[37.46197,126.71246,0,2,[87,267],"석산로183번길 30"],[37.45653,126.695,0,1,[280],"구월로8번길 70"],[37.46051,126.714,0,3,[86,266],"구월동 142-10"],[37.44813,126.70503,0,3,[186,6],"성말로35번길 61"],[37.45953,126.69571,0,2,[275,95],"경인로 508"],[37.46038,126.71416,0,3,[91,271],"구월동 142-10"],[37.45727,126.71548,0,2,[185,5],"용천로88번길 18"],[37.44989,126.71168,0,2,[95,275],"인주대로 673"],[37.46333,126.7106,2,1,[176],"석산로169번길 55-2"],[37.46232,126.7123,0,2,[87,267],"석산로183번길 33"],[37.4582,126.71532,0,2,[87,267],"용천로 94"],[37.45464,126.69499,0,2,[185,5],"구월남로47번길 16"],[37.45991,126.71459,1,2,[356,176],"용천로 118"],[37.44964,126.699,2,1,[274],"문화로115번길 10"],[37.45779,126.71547,1,1,[177],"석산로208번길 65"],[37.45917,126.69532,0,1,[239],"경인로524번길 111-8"],[37.44806,126.70699,0,2,[185,5],"남동대로733번길 4"],[37.4608,126.71411,0,2,[177,357],"석산로197번길 2"],[37.46464,126.70632,0,1,[102],"남동대로915번길 30"],[37.45371,126.69515,1,1,[93],"구월남로 52-1"],[37.45658,126.69463,0,2,[186,6],"구월로40번길 19"],[37.4637,126.70015,0,1,[273],"주안로 269"],[37.4642,126.709,0,2,[177,357],"석촌로 42"],[37.44945,126.69894,0,3,[186,6],"문화로115번길 7"],[37.45913,126.71528,0,2,[177,357],"석산로208번길 36"],[37.44806,126.70796,1,1,[186],"구월동 1192-7"],[37.45114,126.69659,0,1,[94],"문화서로62번길 3"],[37.45609,126.716,0,2,[97,277],"구월로 228"],[37.46278,126.71228,0,3,[176,356],"남동대로898번길 65"],[37.46337,126.71136,0,1,[101],"석촌로36번길 43"],[37.46081,126.71452,0,1,[91],"석산로 201"],[37.46489,126.70663,0,2,[101,281],"남동대로921번길 29"],[37.44878,126.71063,0,3,[94,274],"인주대로676번길 18"],[37.44913,126.69904,0,2,[186,6],"문화로89번길 8-42"],[37.46428,126.70087,0,1,[180],"경인로561번길 21"],[37.4501,126.71287,0,2,[94,274],"인주대로681번길 14"],[37.45984,126.7152,0,2,[177,357],"석산로208번길 20"],[37.44796,126.70838,0,3,[186,6],"구월동 1192-7"],[37.45152,126.71439,0,3,[5,185],"용천로 22"],[37.46166,126.71394,0,2,[178,358],"석산로197번길 19"],[37.45218,126.6954,0,2,[184,4],"문화서로77번길 21"],[37.44962,126.69797,0,1,[274],"인주대로552번길 7"],[37.44746,126.70509,0,3,[186,6],"남동대로725번길 32"],[37.44754,126.70375,0,2,[184,4],"인하로507번길 98"],[37.4568,126.71635,0,3,[97,277],"구월로231번길 8"],[37.46427,126.70026,0,2,[94,274],"주안로259번길 28"],[37.45096,126.71417,0,2,[94,274],"용천로 13"],[37.46325,126.71224,0,2,[177,357],"남동대로916번길 70"],[37.4571,126.7164,0,3,[187,7],"구월로231번길 16"],[37.46266,126.6973,2,1,[275],"석산로 35"],[37.44735,126.70437,0,2,[186,6],"인주대로604번길 49-16"],[37.45053,126.69651,0,4,[184,4],"인주대로 539"],[37.45048,126.71385,1,1,[94],"용천로11번길 3"],[37.4473,126.70558,0,1,[186],"남동대로725번길 32"],[37.45947,126.71582,0,2,[87,267],"석산로208번길 37"],[37.45241,126.69497,0,4,[184,4],"문화서로77번길 34"]]; // [lat, lon, purpose(0 생활방범·1 어린이보호·2 쓰레기단속), cnt, bearings[], addr]
   const PURP = [ {n:'생활방범', c:'#A4C81C'}, {n:'어린이보호', c:'#F2A65A'}, {n:'쓰레기단속', c:'#5AC8FA'} ];
   const CENTER = { lat:37.4563, lon:126.7052 };
-  const reg = MENUS.site.find(c=>c.id==='region');
-  if(reg && !reg.items.some(x=>x.id==='cctv')){ const i = reg.items.findIndex(x=>x.id==='me'); reg.items.splice(i<0?0:i+1, 0, { id:'cctv', q:'인천시청 주변 공개 CCTV는 어디를 보나', name:'공개 CCTV · 인천시청 1 km (방향 추정)', src:'행정안전부 CCTV 표준데이터(남동구청) '+CAMS.length+'대 · 위치 실측 · 촬영 방향은 도로 방향 기준 추정', type:'layer' }); try{ renderCats(); renderSub(); }catch(e){} }
+  const reg = MENUS.site.find(c=>c.id==='analysis');
+  if(reg && !reg.items.some(x=>x.id==='cctv')){ const i = reg.items.findIndex(x=>x.id==='view'); reg.items.splice(i<0?reg.items.length:i+1, 0, { id:'cctv', q:'인천시청 주변 공개 CCTV는 어디를 보나', name:'공개 CCTV · 인천시청 1 km (방향 추정)', src:'행정안전부 CCTV 표준데이터(남동구청) '+CAMS.length+'대 · 위치 실측 · 촬영 방향은 도로 방향 기준 추정', type:'layer' }); try{ renderCats(); renderSub(); }catch(e){} }
   let DS = null, built = false;
   const POLE = 6, REACH = 30, TOPH = 9; // 지주 높이 6 m · 부채꼴 길이 30 m · 끝 높이 9 m
   function dest(lat, lon, brg, dist){ const r = brg*Math.PI/180; const dlat = dist*Math.cos(r)/111000, dlon = dist*Math.sin(r)/(111000*Math.cos(lat*Math.PI/180)); return [lat+dlat, lon+dlon]; }
@@ -3577,5 +3577,88 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
 })();
 
 </script>
+<style id="v4-mobile">
+#mQuick{ display:none }
+/* ===== 세로형 폰 (너비 ≤ 600px): 하단 탭바 + 아래에서 올라오는 시트 ===== */
+@media (max-width:600px){
+  :root{ --mTab:64px; --mSafeB:env(safe-area-inset-bottom,0px); --mSafeT:env(safe-area-inset-top,0px); }
+  html,body{ overscroll-behavior:none; -webkit-text-size-adjust:100%; }
+  /* 상단바: 로고 + 모드 전환만 한 줄, 아이콘은 두 번째 줄 */
+  #topbar{ height:auto !important; flex-wrap:wrap; gap:5px 6px !important; padding:6px 8px 5px !important; padding-top:calc(6px + var(--mSafeT)) !important; align-items:center; background:linear-gradient(rgba(3,18,42,.9),rgba(3,18,42,.55) 70%,rgba(3,18,42,0)); }
+  .brand{ gap:4px; order:1; flex:0 1 auto; min-width:0 } .brand .word{ font-size:16px !important; letter-spacing:.04em } .brand .sub{ font-size:10px !important; letter-spacing:.15em }
+  .modes{ order:2; margin-left:auto; padding:2px; flex:none } .modes button{ padding:5px 10px !important; font-size:12px !important } .modes button.on::before{ margin-right:4px; width:6px; height:6px }
+  #topbar .icons{ order:3; padding:2px 3px; gap:0; flex:none } #topbar .icons > button{ width:32px !important; height:28px !important } #topbar .icons > button svg{ width:17px !important; height:17px !important }
+  #topbar #memBox{ order:7; height:26px !important; padding:0 8px; font-size:10px; margin-left:0; flex:0 0 auto } #topbar #memBox b{ font-size:11.5px }
+  #topbar #wx{ display:flex !important; order:6; flex:1 1 calc(100% - 110px); min-width:0; margin:0; max-width:none !important; padding:2px 10px 2px 7px; gap:7px; font-size:12px; height:26px; box-sizing:border-box; white-space:nowrap }
+  #wx .ico{ width:18px; height:18px } #wx .ico svg{ width:18px; height:18px } #wx .tmp{ font-size:15px } #wx .tmp small{ font-size:9px }
+  #topbar #wx .loc{ min-width:0; flex:1 1 auto; display:block } #topbar #wx .loc b{ font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; max-width:none } #wx .loc small{ display:none } #wx .kv.hum,#wx .sep.hum,#wx .kv.rain,#wx .sep.rain,#wx .upd{ display:none } #wx .kv{ flex-direction:row; align-items:baseline; gap:4px; flex:none } #wx .kv b{ font-size:11.5px } #wx .kv small{ display:none } #wx .sep{ height:16px }
+  #stage,#rail{ display:none !important }
+  /* 왼쪽 메뉴 → 하단 탭바 */
+  #menu{ left:0 !important; right:0; top:auto !important; bottom:0; max-height:none; height:auto; display:flex; flex-direction:column-reverse; z-index:26; pointer-events:none; margin:0 }
+  #menu > *{ pointer-events:auto }
+  #cats{ width:100%; flex-direction:row; align-items:stretch; padding:6px 6px 6px; padding-bottom:calc(6px + var(--mSafeB)); gap:2px; overflow-x:auto; overflow-y:hidden; border-radius:16px 16px 0 0; height:var(--mTab); height:calc(var(--mTab) + var(--mSafeB)); box-sizing:border-box; scrollbar-width:none }
+  #cats::-webkit-scrollbar{ display:none }
+  #cats .hd{ display:none }
+  #cats .cat{ width:auto; flex:1 1 0; min-width:48px; flex-direction:column; justify-content:center; gap:3px; padding:4px 2px; font-size:11px; border-radius:10px; text-align:center; position:relative }
+  #cats .cat svg{ width:22px; height:22px }
+  #cats .cat .n{ white-space:nowrap } #cats .cat .n .cnt{ position:absolute; top:-6px; right:-12px }
+  #cats .cat.on::after{ content:none }
+  #cats .quick{ display:none }
+  #mQuick{ display:flex; gap:4px; order:4; margin-left:auto; flex:none } #mQuick button{ height:28px; padding:0 9px; border-radius:999px; border:1px solid var(--line); background:rgba(3,18,42,.7); color:var(--text); font:600 11.5px var(--font) }
+  /* 하위 메뉴 → 탭바 위 시트 */
+  #sub{ position:fixed; left:0; right:0; bottom:calc(var(--mTab) + var(--mSafeB)); top:auto; width:100% !important; margin:0; max-height:58vh; border-radius:16px 16px 0 0; z-index:25 }
+  #sub .hd{ padding:10px 14px 8px; font-size:16px }
+  #sub .hd::before{ content:""; position:absolute; left:50%; top:5px; width:36px; height:4px; border-radius:2px; background:var(--line-strong); transform:translateX(-50%) }
+  #sub .hd{ position:relative }
+  #sub .list{ -webkit-overflow-scrolling:touch }
+  .item{ padding:11px 10px } .item .t b{ font-size:15px } .item .t span{ font-size:12px }
+  /* 오른쪽 패널들 → 하단 시트 (탭바 위) */
+  #card,#navPanel,#xsPanel,#rfPanel{ left:0 !important; right:0 !important; top:auto !important; bottom:calc(var(--mTab) + var(--mSafeB)) !important; width:100% !important; max-height:62vh !important; border-radius:16px 16px 0 0; z-index:27 !important }
+  #card .hd,#navPanel .hd,#xsPanel .hd,#rfPanel .hd{ position:relative; padding:12px 14px 8px }
+  #card .hd::before,#navPanel .hd::before,#xsPanel .hd::before,#rfPanel .hd::before{ content:""; position:absolute; left:50%; top:4px; width:36px; height:4px; border-radius:2px; background:var(--line-strong); transform:translateX(-50%) }
+  #rfPanel .bd,#xsPanel .bd,#navPanel .bd,#card .body{ padding:10px 12px }
+  #rfPanel input[type=number],#xsPanel input[type=number]{ width:56px; height:34px; font-size:14px }
+  #rfPanel .btns button,#rfPanel .row button,#xsPanel .btns button,#xsPanel .row button{ height:34px; font-size:12px }
+  #rfPanel .kv{ font-size:12px } #rfPanel .kv b{ font-size:14px }
+  #rfPanel .big b{ font-size:22px } #xsPanel .big b{ font-size:22px }
+  #xsPanel .vert input[type=range]{ height:120px } #xsPanel .scale{ height:120px }
+  /* 설정·검색·측정 바 */
+  #settings{ left:8px !important; right:8px; width:auto !important; top:calc(118px + var(--mSafeT)); max-height:65vh; overflow:auto }
+  #search{ top:calc(118px + var(--mSafeT)); width:calc(100vw - 16px) }
+  #measure{ top:calc(118px + var(--mSafeT)); width:calc(100vw - 16px); flex-wrap:wrap; justify-content:center; gap:6px; font-size:12px }
+  #shHud{ top:calc(118px + var(--mSafeT)) !important; max-width:calc(100vw - 16px); font-size:12px !important }
+  /* 상태 줄: 한 줄만, 탭바 바로 위 */
+  #hud{ left:8px; right:8px; bottom:calc(var(--mTab) + var(--mSafeB) + 6px); max-width:none; min-width:0; font-size:11px; line-height:1.3; pointer-events:none }
+  #hud .top{ display:flex; gap:8px; white-space:nowrap; overflow:hidden }
+  #hud .top > span{ flex:none } #hud #hudCursor{ display:none }
+  #hud .src{ display:none }
+  /* 시간 바: 상태 줄 위 */
+  #timebar{ width:calc(100vw - 16px) !important; max-width:none; left:8px; transform:none; bottom:calc(var(--mTab) + var(--mSafeB) + 28px); padding:6px 8px; gap:6px; flex-wrap:wrap; z-index:24 }
+  #timebar #tRange{ flex:1 1 100%; order:9; min-width:0 } #timebar .lbl{ font-size:11px } #timebar button{ font-size:12px; padding:4px 8px }
+  #timebar .seg button{ font-size:11px; padding:3px 6px } #tInfo{ display:none !important }
+  /* 시트가 열려 있으면 시간바·상태줄을 시트 위로 */
+  body.m-sheet #timebar,body.m-sheet #hud{ display:none !important }
+  #toast{ bottom:auto; top:calc(120px + var(--mSafeT)); width:calc(100vw - 24px); font-size:12px; text-align:center; z-index:60 }
+  /* 터치 대상 최소 크기 */
+  button,input[type=range]{ touch-action:manipulation }
+  #tsModels .tsRow button{ min-height:34px }
+}
+@media (max-width:600px) and (max-height:700px){ #sub{ max-height:50vh } #card,#navPanel,#xsPanel,#rfPanel{ max-height:55vh !important } }
+</style>
+<script>
+/* ---------- 35. 모바일(세로형 폰) 보조: 시트 열림 상태를 body 클래스로 · 탭 재선택 시 시트 닫힘 · 선택한 탭이 보이도록 스크롤 ---------- */
+(function(){
+  const mq = window.matchMedia('(max-width:600px)');
+  function sheetOpen(){ const ids=['sub','card','navPanel','xsPanel','rfPanel']; return ids.some(id=>{ const e=document.getElementById(id); if(!e) return false; const cs=getComputedStyle(e); return cs.display!=='none' && (id!=='sub' || e.classList.contains('open') || cs.display==='flex'); }); }
+  function sync(){ if(!mq.matches){ document.body.classList.remove('m-sheet'); return; } document.body.classList.toggle('m-sheet', sheetOpen()); const on = document.querySelector('#cats .cat.on'); if(on && on.scrollIntoView) try{ on.scrollIntoView({ block:'nearest', inline:'center', behavior:'smooth' }); }catch(e){} }
+  const mo = new MutationObserver(()=>sync()); for(const id of ['sub','card','navPanel','xsPanel','rfPanel']){ const e=document.getElementById(id); if(e) mo.observe(e, { attributes:true, attributeFilter:['class','style'] }); }
+  try{ const _rs = renderSub; renderSub = function(){ const r=_rs.apply(this, arguments); sync(); return r; }; }catch(e){}
+  try{ const _rc = renderCats; renderCats = function(){ const r=_rc.apply(this, arguments); setTimeout(sync, 0); return r; }; }catch(e){}
+  function ensureQuick(){ if(document.getElementById('mQuick')) return; const tb=document.getElementById('topbar'); const mem=document.getElementById('memBox'); if(!tb) return; const q=document.createElement('div'); q.id='mQuick'; q.innerHTML='<button data-q="me">내 위치</button><button data-q="home">전지구로</button>'; q.querySelectorAll('button').forEach(b=>b.onclick=()=>{ const t=document.querySelector('#cats .quick button[data-q="'+b.dataset.q+'"]'); if(t) t.click(); else if(b.dataset.q==='home') flyHome(); else goMyLocation(); }); if(mem) mem.insertAdjacentElement('beforebegin', q); else tb.appendChild(q); }
+  ensureQuick(); setInterval(ensureQuick, 2000);
+  window.addEventListener('resize', sync); setInterval(sync, 1500); sync();
+})();
+</script>
+
 </body>
 </html>
