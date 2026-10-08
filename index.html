@@ -4510,6 +4510,321 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   };
   window.__ANALYSIS_EXCLUSIVE = true;
 })();
+
+/* ---------- 42. SITE › 측정 › 반경 · 체적 · 단면 활성화 ---------- 
+   반경: 중심 클릭 → 마우스 이동으로 반경 → 클릭 확정 · 지름·둘레·원 면적(㎡·평·ha) · 직접 입력
+   체적: 구역 다각형(3점 이상) → 3D 모델(없으면 지형) 표면을 격자 샘플링(sampleHeightMostDetailed) → 기준면(최적 평면·최저점·평균·직접 입력) 대비 절토(위)·성토(아래) 체적 · 격자 점 색상(위 빨강·아래 하늘) · CSV
+   단면: 선(2점 이상) → 선을 따라 표고 추출 → 종단면 그래프(거리-표고) · 최고/최저·고도차·평균/최대 경사·누적 상승/하강·표면 거리 · 그래프 위 마우스 ↔ 3D 위치 연동 · CSV
+*/
+(function(){
+  const C = Cesium;
+  const NEW = new Set(['radius','volume','profile']);
+  const LIME = C.Color.fromCssColorString('#BFE33A'), LIME2 = C.Color.fromCssColorString('#A4C81C'), NAVY = C.Color.fromCssColorString('#06224A');
+  const RED = C.Color.fromCssColorString('#FF5D5D'), SKY = C.Color.fromCssColorString('#7FB7F5');
+  const deg = r=>r*180/Math.PI;
+  const f1 = v=>(Math.round(v*10)/10).toLocaleString('ko-KR',{minimumFractionDigits:1,maximumFractionDigits:1});
+  const f0 = v=>Math.round(v).toLocaleString('ko-KR');
+  const fmtM = m => m>=1000 ? (m/1000).toFixed(2)+' km' : f1(m)+' m';
+  const fmtVol = v => v>=1e6 ? (v/1e6).toFixed(3)+'백만 ㎥' : v>=1e4 ? f0(v)+' ㎥' : f1(v)+' ㎥';
+  const cb = f => new C.CallbackProperty(f, false);
+  const MX = { pc:null, vol:null, prof:null, base:'fit', res:'auto', custom:null, hoverIdx:-1 };
+
+  /* ---- 메뉴 항목 활성화 (준비 중 → 실행) ---- */
+  const sm = (MENUS.site||[]).find(c=>c.id==='smeasure');
+  if(sm){
+    const set = (id, o) => { const it = sm.items.find(x=>x.id===id); if(it) Object.assign(it, o); };
+    set('s4', { q:'이 점에서 얼마나 떨어져 있나', name:'반경', src:'중심 클릭 → 끌어서 반경 → 클릭 · 지름·둘레·원 면적', type:'action', run:()=>startMeasure('radius') });
+    set('s5', { q:'흙은 얼마나 쌓였나 (깎였나)', name:'체적', src:'구역 다각형 → 표면 격자 샘플링 → 기준면 대비 절토·성토 ㎥', type:'action', run:()=>startMeasure('volume') });
+    set('s6', { q:'이 길의 높낮이는', name:'단면', src:'선을 그으면 종단면(거리-표고 그래프) · 경사·고도차 · CSV', type:'action', run:()=>startMeasure('profile') });
+  }
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  /* ---- 결과 패널 ---- */
+  const css = document.createElement('style'); css.textContent = `
+#mxPanel{position:fixed;right:14px;top:72px;width:360px;max-height:calc(100vh - 120px);z-index:21;display:none;flex-direction:column;overflow:hidden}
+#mxPanel.open{display:flex}
+#mxPanel .hd{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+#mxPanel .hd h2{margin:0;font-size:15px;font-weight:700;flex:1}#mxPanel .hd h2 small{display:block;font-weight:400;color:var(--text-dim);font-size:12px;line-height:1.4}
+#mxPanel .hd button{color:var(--text-dim);font-size:18px;background:none;border:0;cursor:pointer}
+#mxPanel .bd{padding:12px 14px;display:flex;flex-direction:column;gap:10px;overflow:auto}
+#mxPanel .big{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:rgba(0,0,0,.3);border-radius:10px;padding:10px 12px}
+#mxPanel .big b{font-size:24px;color:#fff;line-height:1;font-variant-numeric:tabular-nums;white-space:nowrap}#mxPanel .big small{display:block;color:var(--text-dim);font-size:12px;margin-top:4px}
+#mxPanel .big .cf{margin-left:auto;display:flex;flex-direction:column;gap:3px;font-size:12px;text-align:right;min-width:0}
+#mxPanel .big .cf b{font-size:14px}#mxPanel .cut{color:#FF8A8A !important}#mxPanel .fill{color:#9FCBFF !important}#mxPanel .kv div.cut b{color:#FFB3B3}#mxPanel .kv div.fill b{color:#C9E2FF}
+#mxPanel .kv{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;font-size:12px}
+#mxPanel .kv div{color:var(--text-dim);background:rgba(0,0,0,.18);border-radius:8px;padding:7px 9px}#mxPanel .kv div b{display:block;color:var(--text);font-size:13.5px;margin-top:2px;font-variant-numeric:tabular-nums}
+#mxPanel .kv div.w{grid-column:1 / -1}
+#mxPanel .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}#mxPanel .row label{font-size:12px;color:var(--text-dim);white-space:nowrap}
+#mxPanel .seg{display:flex;gap:3px;background:rgba(3,18,42,.6);border:1px solid var(--line);border-radius:999px;padding:2px}
+#mxPanel .seg button{padding:4px 10px;border-radius:999px;font-size:12px;color:var(--text-dim);background:none;border:0;cursor:pointer;font-family:var(--font)}
+#mxPanel .seg button.on{background:var(--lime);color:var(--navy-950);font-weight:700}
+#mxPanel input[type=number]{width:84px;height:30px;border-radius:7px;border:1px solid var(--line);background:rgba(0,0,0,.25);color:var(--text);padding:0 8px;font:13px var(--font)}
+#mxPanel .btns{display:flex;gap:6px;flex-wrap:wrap}
+#mxPanel .btns button{height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--text);font:600 12px var(--font);cursor:pointer;white-space:nowrap}
+#mxPanel .btns button:hover,#mxPanel .row button:hover{border-color:var(--lime);color:var(--lime-bright)}
+#mxPanel .row > button{height:30px;padding:0 10px;border-radius:7px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--text);font:600 12px var(--font);cursor:pointer}
+#mxPanel .hint{font-size:11.5px;color:var(--text-dim);line-height:1.5}#mxPanel .hint b{color:var(--lime-bright);font-weight:600}
+#mxPanel .prog{font-size:12px;color:var(--amber)}
+#mxPanel .chart{background:rgba(0,0,0,.28);border-radius:10px;padding:6px 4px 2px;position:relative}
+#mxPanel .chart svg{width:100%;height:auto;display:block;touch-action:none;cursor:crosshair}
+#mxPanel .chart .ax{stroke:rgba(127,178,230,.25);stroke-width:1}
+#mxPanel .chart .tk{fill:#8FA7C4;font-size:9.5px;font-family:var(--font)}
+#mxPanel .chart .ln{fill:none;stroke:#BFE33A;stroke-width:1.6;stroke-linejoin:round}
+#mxPanel .chart .ar{fill:rgba(164,200,28,.22)}
+#mxPanel .chart .hv{stroke:#fff;stroke-width:1;stroke-dasharray:3 3}
+#mxPanel .chart .hvt{fill:#fff;font-size:10.5px;font-weight:700;font-family:var(--font)}
+#mxPanel .legend{display:flex;gap:12px;font-size:11.5px;color:var(--text-dim)}#mxPanel .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+@media (max-width:600px){ #mxPanel{ left:0 !important; right:0 !important; top:auto !important; bottom:calc(var(--mTab, 56px) + var(--mSafeB, 0px)) !important; width:100% !important; max-height:62vh !important; border-radius:16px 16px 0 0; z-index:27 !important } #mxPanel .big b{font-size:20px} }
+@media (max-height:500px) and (min-width:601px) and (max-width:1000px){ #mxPanel{ top:56px !important; right:10px !important; width:330px !important; max-height:calc(100vh - 64px) !important; border-radius:14px } }
+`; document.head.appendChild(css);
+  const P = document.createElement('div'); P.id='mxPanel'; P.className='panel'; P.innerHTML = `<div class="hd"><h2 id="mxTitle">측정<small id="mxSub"></small></h2><button id="mxClose" aria-label="닫기">×</button></div><div class="bd" id="mxBody"></div>`;
+  document.body.appendChild(P);
+  const q = s => P.querySelector(s);
+  function showPanel(title, sub, body){ q('#mxTitle').childNodes[0].textContent = title; q('#mxSub').innerHTML = sub||''; q('#mxBody').innerHTML = body||''; P.classList.add('open'); }
+  function hidePanel(){ P.classList.remove('open'); }
+  q('#mxClose').onclick = ()=>{ $('#mExit').click(); };
+
+  /* ---- 공통 ---- */
+  function pickSurf(pos){ // 3D 모델 → 지형 → 타원체
+    let onModel = false, c = null; const pk = scene.pick(pos);
+    if(C.defined(pk) && scene.pickPositionSupported){ c = scene.pickPosition(pos); onModel = !!(pk.primitive && pk.primitive instanceof C.Cesium3DTileset); }
+    if(!c){ const ray = camera.getPickRay(pos); c = ray && globe.pick(ray, scene); }
+    if(!c) c = camera.pickEllipsoid(pos, globe.ellipsoid);
+    return c ? { cart:c, onModel } : null;
+  }
+  function addPt(cart){ mDS.entities.add({ position: cart, point:{ pixelSize:7, color: LIME, outlineColor: NAVY, outlineWidth:2, disableDepthTestDistance: Number.POSITIVE_INFINITY } }); }
+  function dedupe(M){ while(M.pts.length>1 && C.Cartesian3.distance(M.pts[M.pts.length-1], M.pts[M.pts.length-2]) < 0.5){ M.pts.pop(); const pe = mDS.entities.values.filter(e=>e.point); const last = pe[pe.length-1]; if(last) mDS.entities.remove(last); } }
+  function surfLabel(M){ return M.onModel ? '3D 모델 표면 기준 (DRONE)' : '지형(Esri World Elevation) 기준'; }
+  function enuAt(origin){ const enu = C.Transforms.eastNorthUpToFixedFrame(origin); return { enu, inv: C.Matrix4.inverseTransformation(enu, new C.Matrix4()) }; }
+  function shoelace(loc){ let s=0; for(let i=0;i<loc.length;i++){ const a=loc[i], b=loc[(i+1)%loc.length]; s += a.x*b.y - b.x*a.y; } return Math.abs(s)/2; }
+  function inPoly(x, y, loc){ let inside=false; for(let i=0, j=loc.length-1; i<loc.length; j=i++){ const xi=loc[i].x, yi=loc[i].y, xj=loc[j].x, yj=loc[j].y; if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi)) inside=!inside; } return inside; }
+  // 표고 추출: 3D 모델+지형(sampleHeightMostDetailed) → 이상값·누락은 지형(sampleTerrainMostDetailed)으로 보완
+  async function sampleHeights(cartos, onProg){
+    const n = cartos.length, h = new Array(n).fill(NaN), src = new Array(n).fill(0);
+    let ts = null; try{ ts = await C.sampleTerrainMostDetailed(globe.terrainProvider, cartos.map(c=>c.clone())); }catch(e){ ts = null; }
+    const B = 300;
+    for(let s=0; s<n; s+=B){
+      const chunk = cartos.slice(s, s+B).map(c=>c.clone()); let hs = null;
+      if(scene.sampleHeightSupported){ try{ hs = await scene.sampleHeightMostDetailed(chunk); }catch(e){ hs = null; } }
+      for(let i=0;i<chunk.length;i++){ const k = s+i; const t = ts && ts[k] && isFinite(ts[k].height) ? ts[k].height : (globe.getHeight(cartos[k]) ?? NaN); const v = hs && hs[i] ? hs[i].height : undefined;
+        if(isFinite(v) && v > -500 && (!isFinite(t) || Math.abs(v-t) < 300)){ h[k]=v; src[k]=1; } else if(isFinite(t)){ h[k]=t; src[k]=2; } }
+      if(onProg) onProg(Math.min(n, s+B), n);
+    }
+    // 누락은 이웃값으로 채움
+    for(let i=0;i<n;i++){ if(!isFinite(h[i])){ let j=i-1; while(j>=0 && !isFinite(h[j])) j--; let k=i+1; while(k<n && !isFinite(h[k])) k++; h[i] = isFinite(h[j]) ? h[j] : (isFinite(h[k]) ? h[k] : 0); } }
+    return { h, src, nModel: src.filter(x=>x===1).length, nTerr: src.filter(x=>x===2).length };
+  }
+  function download(name, text){ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff'+text], {type:'text/csv;charset=utf-8'})); a.download = name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 500); }
+  const stamp = ()=>{ const d=new Date(), p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; };
+
+  /* ---- 원래 함수 체인 ---- */
+  const _start = startMeasure, _click = measureClick, _move = measureMove, _finish = finishMeasure, _clear = clearMeasure, _upd = updateMeasureValue;
+  startMeasure = function(type){ if(!NEW.has(type)){ hidePanel(); return _start(type); } startNew(type); };
+  measureClick = function(pos){ const M = STATE.measure; if(M && NEW.has(M.type)) return clickNew(pos); return _click(pos); };
+  measureMove = function(cart, pos){ const M = STATE.measure; if(M && NEW.has(M.type)) return moveNew(cart, pos); return _move(cart, pos); };
+  finishMeasure = function(){ const M = STATE.measure; if(M && NEW.has(M.type)) return finishNew(); return _finish(); };
+  updateMeasureValue = function(){ const M = STATE.measure; if(M && NEW.has(M.type)) return liveNew(); return _upd(); };
+  clearMeasure = function(){ _clear(); clearNew(); };
+  $('#mDone').onclick = ()=>finishMeasure(); // 원래 바인딩은 초기 함수 참조 → 재바인딩
+  function clearNew(){ if(MX.pc){ try{ scene.primitives.remove(MX.pc); }catch(e){} MX.pc = null; } MX.vol = null; MX.prof = null; MX.hoverIdx = -1; hidePanel(); }
+
+  /* ---- 시작 ---- */
+  function startNew(type){
+    clearMeasure(); STATE.measure = { type, pts:[], hover:null, done:false, onModel:false, r:0 };
+    $('#measure').classList.add('open'); $('#mVal').textContent='';
+    $('#mText').textContent = type==='radius' ? '반경: 중심을 클릭 → 마우스를 움직여 반경 → 다시 클릭으로 확정'
+      : type==='volume' ? '체적: 구역 꼭짓점을 클릭 (3개 이상) · 더블클릭 또는 완료로 계산'
+      : '단면: 선 위의 점을 클릭 (2개 이상) · 더블클릭 또는 완료로 단면 추출';
+    scene.canvas.style.cursor = 'crosshair';
+    const M = STATE.measure;
+    if(type==='radius'){
+      mDS.entities.add({ polyline:{ positions: cb(()=>circlePts()), width:3, material: LIME, clampToGround: true, classificationType: C.ClassificationType.BOTH } });
+      mDS.entities.add({ polyline:{ positions: cb(()=>{ const M=STATE.measure; if(!M||!M.pts[0]) return []; const e = M.done ? M.rEnd : M.hover; return e ? [M.pts[0], e] : []; }), width:2, material: new C.PolylineDashMaterialProperty({ color: LIME.withAlpha(.9), dashLength: 10 }), arcType: C.ArcType.NONE } });
+    } else {
+      mDS.entities.add({ polyline:{ positions: cb(()=>{ const M=STATE.measure; if(!M) return []; const p=[...M.pts]; if(M.hover&&!M.done) p.push(M.hover); if(M.type==='volume'&&p.length>2) p.push(p[0]); return p; }), width:3, material: LIME, arcType: C.ArcType.NONE } });
+      if(type==='volume') mDS.entities.add({ polygon:{ hierarchy: cb(()=>{ const M=STATE.measure; if(!M) return new C.PolygonHierarchy([]); const p=[...M.pts]; if(M.hover&&!M.done) p.push(M.hover); return new C.PolygonHierarchy(p.length>2?p:[]); }), material: LIME2.withAlpha(.14), classificationType: C.ClassificationType.BOTH } });
+    }
+    if(type!=='radius' && !PROJECTS.some(p=>p.ts && p.ts.show)) toast('3D 모델이 없는 곳은 지형(Esri World Elevation) 표면으로 계산합니다', 3200);
+  }
+  function radiusOf(M){ if(!M.pts[0]) return 0; const e = M.done ? M.rEnd : M.hover; if(!e) return M.r||0; const a = C.Cartographic.fromCartesian(M.pts[0]), b = C.Cartographic.fromCartesian(e); return new C.EllipsoidGeodesic(a, b).surfaceDistance; }
+  function circlePts(){ const M=STATE.measure; if(!M||M.type!=='radius'||!M.pts[0]) return []; const r = M.done ? M.r : radiusOf(M); if(!(r>0.05)) return []; const { enu } = enuAt(M.pts[0]); const out=[]; const N=96; for(let i=0;i<=N;i++){ const t = i/N*2*Math.PI; out.push(C.Matrix4.multiplyByPoint(enu, new C.Cartesian3(r*Math.cos(t), r*Math.sin(t), 0), new C.Cartesian3())); } return out; }
+
+  /* ---- 클릭 · 이동 ---- */
+  function clickNew(pos){
+    const M = STATE.measure; if(!M || M.done) return; const hit = pickSurf(pos); if(!hit) return; M.onModel = M.onModel || hit.onModel;
+    if(M.type==='radius'){ if(M.pts.length===0){ M.pts.push(hit.cart); addPt(hit.cart); liveNew(); } else { M.hover = hit.cart; finishNew(); } return; }
+    M.pts.push(hit.cart); addPt(hit.cart); liveNew();
+  }
+  function moveNew(cart, pos){ const M = STATE.measure; if(!M || M.done) return; const hit = pos ? pickSurf(pos) : null; M.hover = hit ? hit.cart : (cart||null); liveNew(); }
+  function liveNew(){
+    const M = STATE.measure; if(!M) return; let t = '';
+    if(M.type==='radius'){ const r = M.done ? M.r : radiusOf(M); if(r>0) t = `반경 ${fmtM(r)} · 원 면적 ${fmtArea(Math.PI*r*r)}`; }
+    else if(M.type==='volume'){ const p=[...M.pts]; if(M.hover&&!M.done) p.push(M.hover); if(p.length>2){ const { inv } = enuAt(p[0]); const loc = p.map(x=>C.Matrix4.multiplyByPoint(inv, x, new C.Cartesian3())); t = `꼭짓점 ${M.pts.length} · 면적 ${fmtArea(shoelace(loc))}`; } else t = `꼭짓점 ${M.pts.length} / 3개 이상`; }
+    else { const p=[...M.pts]; if(M.hover&&!M.done) p.push(M.hover); let d=0; for(let i=1;i<p.length;i++) d += new C.EllipsoidGeodesic(C.Cartographic.fromCartesian(p[i-1]), C.Cartographic.fromCartesian(p[i])).surfaceDistance; if(p.length>1) t = `수평 ${fmtM(d)} · 점 ${M.pts.length}`; }
+    $('#mVal').textContent = t;
+  }
+
+  /* ---- 완료 ---- */
+  function finishNew(){
+    const M = STATE.measure; if(!M || M.done) return;
+    if(M.type==='radius'){ if(!M.pts[0] || !M.hover) return; M.rEnd = M.hover; M.r = radiusOf(M); if(!(M.r>0.05)) return; M.done = true; M.hover = null; scene.canvas.style.cursor=''; finishRadius(); return; }
+    dedupe(M);
+    if(M.type==='volume' && M.pts.length<3) return toast('체적: 꼭짓점을 3개 이상 찍어 주세요', 2500);
+    if(M.type==='profile' && M.pts.length<2) return toast('단면: 점을 2개 이상 찍어 주세요', 2500);
+    M.done = true; M.hover = null; scene.canvas.style.cursor=''; liveNew();
+    if(M.type==='volume') computeVolume(); else computeProfile();
+  }
+
+  /* ================= 반경 ================= */
+  function finishRadius(){
+    const M = STATE.measure; const r = M.r; const c = C.Cartographic.fromCartesian(M.pts[0]);
+    mDS.entities.add({ position: M.pts[0], ellipse:{ semiMajorAxis: cb(()=>Math.max(0.1, STATE.measure?.r||0.1)), semiMinorAxis: cb(()=>Math.max(0.1, STATE.measure?.r||0.1)), material: LIME2.withAlpha(.16), classificationType: C.ClassificationType.BOTH } });
+    liveNew(); $('#mText').textContent = '반경 측정 완료 · '+surfLabel(M);
+    renderRadius();
+    function renderRadius(){
+      const r = M.r;
+      showPanel('반경', `중심 ${deg(c.latitude).toFixed(5)}, ${deg(c.longitude).toFixed(5)} · ${surfLabel(M)}`, `
+<div class="big"><div><b>${fmtM(r)}</b><small>반경 (측지선 거리)</small></div><div class="cf"><span>지름 <b>${fmtM(2*r)}</b></span><span>둘레 <b>${fmtM(2*Math.PI*r)}</b></span></div></div>
+<div class="kv"><div class="w">원 면적<b>${fmtArea(Math.PI*r*r)}</b></div><div>반경 (피트)<b>${f0(r*3.28084)} ft</b></div><div>중심 높이<b>${f1(c.height)} m</b></div></div>
+<div class="row"><label>반경 직접 입력</label><input type="number" id="mxR" min="0.1" step="1" value="${Math.round(r*10)/10}"><label>m</label><button id="mxRApply">적용</button><button id="mxRFly">중심으로</button></div>
+<div class="hint">중심을 클릭한 뒤 마우스를 움직여 반경을 정하고 다시 클릭하면 확정됩니다 · 원은 3D 모델·지형 표면에 밀착 표시 · 면적은 평면 원(πr²) 기준</div>`);
+      q('#mxRApply').onclick = ()=>{ const v = +q('#mxR').value; if(!(v>0)) return; M.r = v; const { enu } = enuAt(M.pts[0]); M.rEnd = C.Matrix4.multiplyByPoint(enu, new C.Cartesian3(v, 0, 0), new C.Cartesian3()); liveNew(); renderRadius(); };
+      q('#mxRFly').onclick = ()=>{ camera.flyToBoundingSphere(new C.BoundingSphere(M.pts[0], Math.max(30, M.r*1.6)), { duration: 1.2 }); };
+    }
+  }
+
+  /* ================= 체적 ================= */
+  const RES = [0.25,0.5,1,2,3,5,10,20,50];
+  function niceRes(x){ for(const r of RES) if(r>=x) return r; return 100; }
+  async function computeVolume(){ try{ await _computeVolume(); }catch(e){ MX.err = String(e.stack||e); console.error(e); toast('체적 계산 오류: '+e.message, 4000); } }
+  async function _computeVolume(){
+    const M = STATE.measure; const pts = M.pts.slice(); const origin = pts[0];
+    const { enu, inv } = enuAt(origin);
+    const loc = pts.map(p=>C.Matrix4.multiplyByPoint(inv, p, new C.Cartesian3()));
+    const area = shoelace(loc); if(!(area>0.5)) return toast('구역이 너무 작습니다', 2500);
+    let res = MX.res==='auto' ? niceRes(Math.sqrt(area/3000)) : +MX.res; let capped=false; while(area/(res*res) > 10000){ res = niceRes(res*1.5); capped=true; }
+    const xs = loc.map(p=>p.x), ys = loc.map(p=>p.y); const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const cells = [];
+    for(let y=y0+res/2; y<y1; y+=res) for(let x=x0+res/2; x<x1; x+=res){ if(!inPoly(x,y,loc)) continue; const w = C.Matrix4.multiplyByPoint(enu, new C.Cartesian3(x,y,0), new C.Cartesian3()); const cg = C.Cartographic.fromCartesian(w); cells.push({ x, y, lon: deg(cg.longitude), lat: deg(cg.latitude), carto: C.Cartographic.fromRadians(cg.longitude, cg.latitude, 0) }); }
+    if(!cells.length) return toast('구역 안에 격자 점이 없습니다 · 더 큰 구역을 그려 주세요', 2500);
+    showPanel('체적', `구역 ${pts.length}꼭짓점 · 면적 ${fmtArea(area)} · 격자 ${res} m`, `<div class="prog" id="mxProg">표면 높이 추출 중 … 0 / ${cells.length+pts.length}</div><div class="hint">3D 모델 타일이 가장 세밀한 단계까지 내려받아지면 계산됩니다 (점이 많을수록 오래 걸림)</div>`);
+    $('#mText').textContent = '체적: 표면 높이 추출 중 …';
+    const tok = MX.tok = {}; 
+    const vs = await sampleHeights(pts.map(p=>{ const c = C.Cartographic.fromCartesian(p); return C.Cartographic.fromRadians(c.longitude, c.latitude, 0); }));
+    if(MX.tok!==tok || STATE.measure!==M) return;
+    const gs = await sampleHeights(cells.map(c=>c.carto), (d,n)=>{ const el = q('#mxProg'); if(el) el.textContent = `표면 높이 추출 중 … ${d+pts.length} / ${n+pts.length}`; });
+    if(MX.tok!==tok || STATE.measure!==M) return;
+    cells.forEach((c,i)=>{ c.h = gs.h[i]; c.src = gs.src[i]; });
+    MX.vol = { M, enu, inv, loc, vh: vs.h, area, res, capped, cells, nModel: gs.nModel, nTerr: gs.nTerr };
+    MX.custom = null; applyBase();
+    $('#mText').textContent = '체적 측정 완료 · '+(gs.nModel>gs.nTerr ? '3D 모델 표면 기준 (DRONE)' : '지형(Esri World Elevation) 기준');
+  }
+  function fitPlane(loc, vh){ // z = a x + b y + c (최소제곱) · 퇴화 시 평균
+    let sx=0,sy=0,sz=0,sxx=0,sxy=0,syy=0,sxz=0,syz=0; const n=loc.length;
+    for(let i=0;i<n;i++){ const x=loc[i].x, y=loc[i].y, z=vh[i]; sx+=x; sy+=y; sz+=z; sxx+=x*x; sxy+=x*y; syy+=y*y; sxz+=x*z; syz+=y*z; }
+    const A=[[sxx,sxy,sx],[sxy,syy,sy],[sx,sy,n]], B=[sxz,syz,sz];
+    const det = m => m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1]) - m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0]) + m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0]);
+    const D = det(A); if(Math.abs(D) < 1e-9) return { a:0, b:0, c: sz/n, flat:true };
+    const col = (m, k, v) => m.map((r,i)=>r.map((x,j)=>j===k? v[i] : x));
+    return { a: det(col(A,0,B))/D, b: det(col(A,1,B))/D, c: det(col(A,2,B))/D, flat:false };
+  }
+  function applyBase(){
+    const V = MX.vol; if(!V) return; const { loc, vh, cells, res, area } = V; const cellA = res*res;
+    const vmin = Math.min(...vh), vmean = vh.reduce((a,b)=>a+b,0)/vh.length; const pl = fitPlane(loc, vh);
+    if(MX.custom==null) MX.custom = Math.round(vmin*10)/10;
+    const baseAt = (x,y) => MX.base==='fit' ? pl.a*x + pl.b*y + pl.c : MX.base==='min' ? vmin : MX.base==='mean' ? vmean : MX.custom;
+    let cut=0, fill=0, hmax=-Infinity, hmin=Infinity, dmax=0; 
+    for(const c of cells){ const b = baseAt(c.x, c.y); c.b = b; c.dh = c.h - b; if(c.dh>0) cut += c.dh*cellA; else fill += -c.dh*cellA; hmax = Math.max(hmax, c.h); hmin = Math.min(hmin, c.h); dmax = Math.max(dmax, Math.abs(c.dh)); }
+    const net = cut - fill; const sampledA = cells.length*cellA;
+    // 격자 점 표시 (위 빨강 · 아래 하늘 · ±5 cm 이내 연두)
+    if(MX.pc){ try{ scene.primitives.remove(MX.pc); }catch(e){} }
+    MX.pc = scene.primitives.add(new C.PointPrimitiveCollection());
+    const px = res>=5 ? 7 : res>=1 ? 5 : 4;
+    for(const c of cells){ const a = Math.min(1, 0.35 + 0.65*Math.abs(c.dh)/(dmax||1)); const col = Math.abs(c.dh)<0.05 ? LIME2.withAlpha(.55) : c.dh>0 ? RED.withAlpha(a) : SKY.withAlpha(a); MX.pc.add({ position: C.Cartesian3.fromDegrees(c.lon, c.lat, c.h+0.25), color: col, pixelSize: px }); }
+    const baseTxt = MX.base==='fit' ? (pl.flat ? '꼭짓점 평균 높이(평면 퇴화)' : `꼭짓점 최적 평면 · 기울기 ${(Math.hypot(pl.a, pl.b)*100).toFixed(1)} %`) : MX.base==='min' ? `꼭짓점 최저 ${f1(vmin)} m` : MX.base==='mean' ? `꼭짓점 평균 ${f1(vmean)} m` : `직접 입력 ${f1(MX.custom)} m`;
+    const srcTxt = V.nModel && V.nTerr ? `3D 모델·지형 혼합 (모델 ${V.nModel} · 지형 ${V.nTerr})` : V.nModel ? '3D 모델 표면 (DRONE)' : '지형 (Esri World Elevation)';
+    showPanel('체적', `구역 ${loc.length}꼭짓점 · 면적 ${fmtArea(area)} · ${srcTxt}`, `
+<div class="big"><div><b>${net>=0?'+':'−'}${fmtVol(Math.abs(net))}</b><small>순 체적 (기준면 위 − 아래)</small></div></div>
+<div class="kv"><div class="cut">▲ 기준면 위 (절토·더미)<b>${fmtVol(cut)}</b></div><div class="fill">▼ 기준면 아래 (성토·구덩이)<b>${fmtVol(fill)}</b></div></div>
+<div class="row"><label>기준면</label><div class="seg" id="mxBase">${[['fit','최적 평면'],['min','최저점'],['mean','평균'],['custom','직접 입력']].map(([k,n])=>`<button data-k="${k}" class="${MX.base===k?'on':''}">${n}</button>`).join('')}</div></div>
+<div class="row" id="mxCustomRow" style="${MX.base==='custom'?'':'display:none'}"><label>기준면 높이</label><input type="number" id="mxCustom" step="0.1" value="${MX.custom}"><label>m (타원체고)</label><button id="mxCustomApply">적용</button></div>
+<div class="row"><label>격자</label><div class="seg" id="mxRes">${[['auto','자동'],['0.5','0.5 m'],['1','1 m'],['2','2 m'],['5','5 m']].map(([k,n])=>`<button data-k="${k}" class="${MX.res===k?'on':''}">${n}</button>`).join('')}</div></div>
+<div class="kv"><div>기준면<b>${baseTxt}</b></div><div>격자 간격 · 샘플<b>${res} m · ${cells.length.toLocaleString()}점${V.capped?' (상한)':''}</b></div><div>표면 최고 / 최저<b>${f1(hmax)} / ${f1(hmin)} m</b></div><div>평균 두께 (순/면적)<b>${(net/area).toFixed(2)} m</b></div><div>격자 합산 면적<b>${fmtArea(sampledA)}</b></div><div>최대 높이차<b>${f1(dmax)} m</b></div></div>
+<div class="legend"><span><i style="background:#FF5D5D"></i>기준면 위</span><span><i style="background:#7FB7F5"></i>기준면 아래</span><span><i style="background:#A4C81C"></i>±5 cm</span></div>
+<div class="btns"><button id="mxVolCsv">격자 CSV 내보내기</button><button id="mxVolRedo">다시 그리기</button></div>
+<div class="hint"><b>계산</b> 구역 안을 ${res} m 격자로 나눠 각 점의 표면 높이를 3D 모델(없으면 지형)에서 추출 → (표면 − 기준면) × 격자 면적을 합산 · <b>최적 평면</b>은 꼭짓점 높이에 최소제곱으로 맞춘 평면(경사지 더미 측정에 적합) · 높이는 WGS84 타원체고(차이 계산에는 영향 없음) · 가장자리 격자 오차 약 ±${(res*Math.sqrt(area)*2/area*100).toFixed(1)} %</div>`);
+    q('#mxBase').querySelectorAll('button').forEach(b=>b.onclick=()=>{ MX.base = b.dataset.k; applyBase(); });
+    q('#mxRes').querySelectorAll('button').forEach(b=>b.onclick=()=>{ if(MX.res===b.dataset.k) return; MX.res = b.dataset.k; computeVolume(); });
+    q('#mxCustomApply').onclick = ()=>{ const v = +q('#mxCustom').value; if(isFinite(v)){ MX.custom = v; applyBase(); } };
+    q('#mxCustom').onkeydown = e=>{ if(e.key==='Enter') q('#mxCustomApply').click(); };
+    q('#mxVolCsv').onclick = ()=>{ const rows = ['x_m,y_m,경도,위도,표면높이_m,기준면높이_m,차이_m,출처']; for(const c of cells) rows.push([c.x.toFixed(2), c.y.toFixed(2), c.lon.toFixed(7), c.lat.toFixed(7), c.h.toFixed(3), c.b.toFixed(3), c.dh.toFixed(3), c.src===1?'모델':'지형'].join(',')); rows.push(`# 면적_m2,${area.toFixed(2)},절토_m3,${cut.toFixed(2)},성토_m3,${fill.toFixed(2)},순_m3,${net.toFixed(2)},격자_m,${res},기준면,${baseTxt}`); download(`체적_${stamp()}.csv`, rows.join('\n')); };
+    q('#mxVolRedo').onclick = ()=>$('#mClear').click();
+    $('#mVal').textContent = `순 ${net>=0?'+':'−'}${fmtVol(Math.abs(net))} · 위 ${fmtVol(cut)} · 아래 ${fmtVol(fill)} · 면적 ${fmtArea(area)}`;
+  }
+
+  /* ================= 단면 (종단면) ================= */
+  async function computeProfile(){ try{ await _computeProfile(); }catch(e){ MX.err = String(e.stack||e); console.error(e); toast('단면 계산 오류: '+e.message, 4000); } }
+  async function _computeProfile(){
+    const M = STATE.measure; const pts = M.pts.slice(); const cg = pts.map(p=>C.Cartographic.fromCartesian(p));
+    const segs = []; let L = 0; for(let i=1;i<cg.length;i++){ const g = new C.EllipsoidGeodesic(cg[i-1], cg[i]); segs.push({ g, d: g.surfaceDistance, s0: L }); L += g.surfaceDistance; }
+    if(!(L>0.5)) return toast('선이 너무 짧습니다', 2500);
+    let step = Math.max(0.25, Math.min(10, L/400)); step = niceRes(step);
+    const samples = []; // {s, carto, vtx}
+    for(let i=0;i<segs.length;i++){ const sg = segs[i]; const n = Math.max(1, Math.ceil(sg.d/step)); for(let k=0;k<n;k++){ const t = k/n; const c = sg.g.interpolateUsingSurfaceDistance(t*sg.d); samples.push({ s: sg.s0 + t*sg.d, carto: C.Cartographic.fromRadians(c.longitude, c.latitude, 0), vtx: k===0 }); } }
+    const last = cg[cg.length-1]; samples.push({ s: L, carto: C.Cartographic.fromRadians(last.longitude, last.latitude, 0), vtx: true });
+    showPanel('단면 (종단면)', `수평 ${fmtM(L)} · 간격 ${step} m · ${samples.length}점`, `<div class="prog" id="mxProg">표면 높이 추출 중 … 0 / ${samples.length}</div>`);
+    $('#mText').textContent = '단면: 표면 높이 추출 중 …';
+    const tok = MX.tok = {};
+    const hs = await sampleHeights(samples.map(x=>x.carto), (d,n)=>{ const el = q('#mxProg'); if(el) el.textContent = `표면 높이 추출 중 … ${d} / ${n}`; });
+    if(MX.tok!==tok || STATE.measure!==M) return;
+    samples.forEach((x,i)=>{ x.h = hs.h[i]; x.src = hs.src[i]; x.pos = C.Cartesian3.fromRadians(x.carto.longitude, x.carto.latitude, x.h); });
+    // 통계
+    let hmax=-Infinity, hmin=Infinity, imax=0, imin=0, up=0, down=0, surf=0, gmax=0, gmaxS=0;
+    for(let i=0;i<samples.length;i++){ const x = samples[i]; if(x.h>hmax){ hmax=x.h; imax=i; } if(x.h<hmin){ hmin=x.h; imin=i; } if(i){ const p = samples[i-1]; const dh = x.h-p.h, ds = x.s-p.s; if(dh>0) up+=dh; else down-=dh; surf += Math.hypot(ds, dh); } }
+    // 최대 경사: 수평 5 m 이상 구간(가로수·차량 등 짧은 돌출 완화)
+    const WIN = Math.max(5, step*2); let j=0; for(let i=0;i<samples.length;i++){ while(j<samples.length && samples[j].s - samples[i].s < WIN) j++; if(j>=samples.length) break; const ds = samples[j].s - samples[i].s, dh = samples[j].h - samples[i].h; const g = Math.abs(dh/ds); if(g>gmax){ gmax=g; gmaxS=samples[i].s; } }
+    const h0 = samples[0].h, h1 = samples[samples.length-1].h; const avgG = (h1-h0)/L;
+    MX.prof = { M, samples, L, step, hmax, hmin, imax, imin, up, down, surf, gmax, gmaxS, h0, h1, avgG, nModel: hs.nModel, nTerr: hs.nTerr };
+    // 3D: 표면 선 + 단면 벽 + 마우스 연동 마커
+    const minH = hmin - Math.max(1, (hmax-hmin)*0.15);
+    mDS.entities.add({ wall:{ positions: samples.map(x=>x.pos), minimumHeights: samples.map(()=>minH), material: LIME2.withAlpha(.26), outline:false } });
+    mDS.entities.add({ polyline:{ positions: samples.map(x=>C.Cartesian3.fromRadians(x.carto.longitude, x.carto.latitude, x.h+0.3)), width:3, material: LIME, arcType: C.ArcType.NONE } });
+    mDS.entities.add({ position: cb(()=>{ const Pf = MX.prof; return (Pf && MX.hoverIdx>=0 && Pf.samples[MX.hoverIdx]) ? Pf.samples[MX.hoverIdx].pos : undefined; }), show: cb(()=>MX.hoverIdx>=0), point:{ pixelSize:11, color: C.Color.WHITE, outlineColor: LIME, outlineWidth:3, disableDepthTestDistance: Number.POSITIVE_INFINITY } });
+    renderProfile();
+    $('#mText').textContent = '단면 측정 완료 · '+(hs.nModel>hs.nTerr ? '3D 모델 표면 기준 (DRONE)' : '지형(Esri World Elevation) 기준');
+    $('#mVal').textContent = `수평 ${fmtM(L)} · 고도차 ${f1(hmax-hmin)} m · 평균 경사 ${(avgG*100).toFixed(1)} %`;
+  }
+  function renderProfile(){
+    const Pf = MX.prof; if(!Pf) return; const { samples, L, hmax, hmin } = Pf;
+    const W = 340, H = 180, l = 46, r = 10, t = 12, b = 26; const pw = W-l-r, ph = H-t-b;
+    const span = Math.max(0.5, hmax-hmin); const y0 = hmin - span*0.08, y1 = hmax + span*0.08;
+    const X = s => l + s/L*pw, Y = h => t + (y1-h)/(y1-y0)*ph;
+    const nice = x => { const p = Math.pow(10, Math.floor(Math.log10(x))); const m = x/p; return (m<=1?1:m<=2?2:m<=5?5:10)*p; };
+    const xs = nice(L/5), ys = nice((y1-y0)/4);
+    let ax = ''; for(let v=0; v<=L+1e-6; v+=xs){ ax += `<line class="ax" x1="${X(v).toFixed(1)}" y1="${t}" x2="${X(v).toFixed(1)}" y2="${t+ph}"/><text class="tk" x="${X(v).toFixed(1)}" y="${H-8}" text-anchor="middle">${v>=1000?(v/1000).toFixed(1)+'k':Math.round(v)}</text>`; }
+    for(let v=Math.ceil(y0/ys)*ys; v<=y1+1e-6; v+=ys){ ax += `<line class="ax" x1="${l}" y1="${Y(v).toFixed(1)}" x2="${l+pw}" y2="${Y(v).toFixed(1)}"/><text class="tk" x="${l-5}" y="${(Y(v)+3.5).toFixed(1)}" text-anchor="end">${Math.round(v*10)/10}</text>`; }
+    const pts = samples.map(x=>`${X(x.s).toFixed(1)},${Y(x.h).toFixed(1)}`);
+    const area = `M${X(0).toFixed(1)},${(t+ph).toFixed(1)} L${pts.join(' L')} L${X(L).toFixed(1)},${(t+ph).toFixed(1)} Z`;
+    const vtx = samples.filter(x=>x.vtx).map(x=>`<circle cx="${X(x.s).toFixed(1)}" cy="${Y(x.h).toFixed(1)}" r="2.6" fill="#BFE33A" stroke="#06224A" stroke-width="1"/>`).join('');
+    const ve = (ph/(y1-y0))/(pw/L);
+    const srcTxt = Pf.nModel && Pf.nTerr ? `3D 모델·지형 혼합 (모델 ${Pf.nModel} · 지형 ${Pf.nTerr})` : Pf.nModel ? '3D 모델 표면 (DRONE)' : '지형 (Esri World Elevation)';
+    showPanel('단면 (종단면)', `수평 ${fmtM(L)} · 표면 거리 ${fmtM(Pf.surf)} · 간격 ${Pf.step} m · ${samples.length}점 · ${srcTxt}`, `
+<div class="chart"><svg viewBox="0 0 ${W} ${H}" id="mxSvg" aria-label="종단면 그래프">${ax}<path class="ar" d="${area}"/><polyline class="ln" points="${pts.join(' ')}"/>${vtx}<text class="tk" x="${l+pw}" y="${t+ph+20}" text-anchor="end">거리 m</text><text class="tk" x="${l-5}" y="${t-3}" text-anchor="end">표고 m</text><g id="mxHv" style="display:none"><line class="hv" id="mxHvL" y1="${t}" y2="${t+ph}"/><circle id="mxHvC" r="4" fill="#fff" stroke="#BFE33A" stroke-width="2"/><text class="hvt" id="mxHvT" y="${t+11}"></text></g></svg></div>
+<div class="big"><div><b>${f1(hmax-hmin)} m</b><small>고도차 (최고 − 최저)</small></div><div class="cf"><span>평균 경사 <b>${(Pf.avgG*100).toFixed(1)} % (${(Math.atan(Pf.avgG)*180/Math.PI).toFixed(1)}°)</b></span><span>최대 경사 (5 m 구간) <b>${(Pf.gmax*100).toFixed(0)} % · ${Math.round(Pf.gmaxS)} m 지점</b></span></div></div>
+<div class="kv"><div>시작 → 끝 표고<b>${f1(Pf.h0)} → ${f1(Pf.h1)} m (${Pf.h1-Pf.h0>=0?'+':''}${f1(Pf.h1-Pf.h0)})</b></div><div>최고 / 최저<b>${f1(hmax)} m (${Math.round(samples[Pf.imax].s)} m) / ${f1(hmin)} m (${Math.round(samples[Pf.imin].s)} m)</b></div><div>누적 상승 / 하강<b>+${f1(Pf.up)} / −${f1(Pf.down)} m</b></div><div>수평 / 표면 거리<b>${fmtM(L)} / ${fmtM(Pf.surf)}</b></div></div>
+<div class="btns"><button id="mxPfCsv">단면 CSV 내보내기</button><button id="mxPfFly">단면 전체 보기</button><button id="mxPfRedo">다시 그리기</button></div>
+<div class="hint">그래프 위에 마우스를 올리면 3D 화면에 그 지점이 표시됩니다 · 세로 ${ve>=10?ve.toFixed(0):ve.toFixed(1)}배 과장 · 표고는 WGS84 타원체고(고도차·경사는 영향 없음) · 선을 따라 ${Pf.step} m 간격으로 3D 모델(없으면 지형) 표면 높이를 추출한 종단면</div>`);
+    const svg = q('#mxSvg'), hv = q('#mxHv');
+    const onMove = e => { const rc = svg.getBoundingClientRect(); const cx = (e.clientX - rc.left)/rc.width*W; const s = Math.max(0, Math.min(L, (cx-l)/pw*L)); let bi=0, bd=Infinity; for(let i=0;i<samples.length;i++){ const d = Math.abs(samples[i].s-s); if(d<bd){ bd=d; bi=i; } } MX.hoverIdx = bi; const x = samples[bi]; hv.style.display=''; q('#mxHvL').setAttribute('x1', X(x.s).toFixed(1)); q('#mxHvL').setAttribute('x2', X(x.s).toFixed(1)); q('#mxHvC').setAttribute('cx', X(x.s).toFixed(1)); q('#mxHvC').setAttribute('cy', Y(x.h).toFixed(1)); const tx = q('#mxHvT'); tx.textContent = `${Math.round(x.s)} m · ${f1(x.h)} m`; const anchorRight = X(x.s) > l + pw*0.6; tx.setAttribute('x', (X(x.s) + (anchorRight?-6:6)).toFixed(1)); tx.setAttribute('text-anchor', anchorRight?'end':'start'); };
+    svg.addEventListener('pointermove', onMove); svg.addEventListener('pointerdown', onMove);
+    svg.addEventListener('pointerleave', ()=>{ hv.style.display='none'; MX.hoverIdx = -1; });
+    q('#mxPfCsv').onclick = ()=>{ const rows = ['번호,거리_m,경도,위도,표고_m(타원체고),꼭짓점,출처']; samples.forEach((x,i)=>rows.push([i+1, x.s.toFixed(2), deg(x.carto.longitude).toFixed(7), deg(x.carto.latitude).toFixed(7), x.h.toFixed(3), x.vtx?'Y':'', x.src===1?'모델':'지형'].join(','))); download(`단면_${stamp()}.csv`, rows.join('\n')); };
+    q('#mxPfFly').onclick = ()=>{ const bs = C.BoundingSphere.fromPoints(samples.map(x=>x.pos)); camera.flyToBoundingSphere(bs, { duration: 1.2, offset: new C.HeadingPitchRange(camera.heading, -0.5, Math.max(40, bs.radius*2.6)) }); };
+    q('#mxPfRedo').onclick = ()=>$('#mClear').click();
+  }
+  window.__MX = MX;
+})();
+
 </script>
 
 </body>
