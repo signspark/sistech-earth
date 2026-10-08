@@ -5266,5 +5266,37 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   window.__cad45 = { cadOn, cadOffAll };
 })();
 </script>
+<script>
+/* ---------- 46. 모드 전환 시 메모리 절약: SITE로 가면 EARTH 전용 레이어(지구·위성·날씨·바다·대기·재난) 모두 끔 · EARTH로 가면 SITE 전용 레이어(지역·지적·분석·내비 등) 모두 끔 (2026-10-09) ----------
+   - 공통 유지: imagery(기본 영상) · labels · kolabels(지명) · projects(프로젝트 위치) · tiles(3D 모델 설정)
+   - 양쪽 메뉴에 모두 있는 항목(예: ndvi)은 유지
+   - 페이지를 처음 열 때도 현재 모드 기준으로 한 번 정리
+*/
+(function(){
+  const KEEP = new Set(['imagery','labels','kolabels','projects','tiles']);
+  const idsOf = m => { const s = new Set(); for(const c of (MENUS[m]||[])) for(const i of (c.items||[])) s.add(i.id); return s; };
+  function offFor(mode){
+    const mine = idsOf(mode), other = idsOf(mode==='site' ? 'earth' : 'site');
+    return [...STATE.on].filter(id => !KEEP.has(id) && other.has(id) && !mine.has(id));
+  }
+  let busy = false;
+  async function tidy(mode){
+    if(busy) return; busy = true;
+    try{
+      const ids = offFor(mode);
+      for(const id of ids){ try{ await toggleLayer(id, false); }catch(e){} }
+      if(ids.length){
+        try{ renderCats(); renderSub(); updateSrc(); }catch(e){}
+        try{ toast((mode==='site' ? 'SITE 모드 · EARTH 레이어 ' : 'EARTH 모드 · SITE 레이어 ') + ids.length + '개를 꺼서 메모리를 비웠습니다', 2600); }catch(e){}
+      }
+      window.__tidy46.last = { mode, off: ids, at: Date.now() };
+    } finally { busy = false; }
+  }
+  const _sm46 = setMode;
+  setMode = function(m){ const r = _sm46.apply(this, arguments); setTimeout(()=>tidy(m), 80); return r; };
+  window.__tidy46 = { tidy, offFor, last:null };
+  setTimeout(()=>tidy(STATE.mode), 3000);
+})();
+</script>
 </body>
 </html>
