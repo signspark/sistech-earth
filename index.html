@@ -3751,5 +3751,172 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
 })();
 </script>
 
+<style id="v4-lcctv">
+#lcPanel{position:fixed;right:14px;top:72px;width:380px;max-height:calc(100vh - 120px);z-index:21;display:none;flex-direction:column;overflow:hidden}
+#lcPanel.open{display:flex}
+#lcPanel .hd{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+#lcPanel .hd h2{margin:0;font-size:15px;font-weight:700;flex:1}#lcPanel .hd h2 small{display:block;font-weight:400;color:var(--text-dim);font-size:12px}
+#lcPanel .hd button{color:var(--text-dim);font-size:18px;background:none;border:0;cursor:pointer}
+#lcPanel .bd{padding:10px 12px 12px;display:flex;flex-direction:column;gap:10px;overflow:auto}
+#lcPanel .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+#lcPanel .cam{position:relative;border-radius:10px;overflow:hidden;background:#000;aspect-ratio:16/9;cursor:pointer;border:2px solid transparent}
+#lcPanel .cam.sel{border-color:var(--lime)}
+#lcPanel .cam video{width:100%;height:100%;object-fit:cover;display:block;background:#000}
+#lcPanel .cam .n{position:absolute;left:0;right:0;bottom:0;padding:3px 6px;font-size:10.5px;font-weight:600;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.75));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#lcPanel .cam .st{position:absolute;top:5px;left:6px;width:8px;height:8px;border-radius:50%;background:#777;box-shadow:0 0 0 2px rgba(0,0,0,.4)}
+#lcPanel .cam.live .st{background:#FF4D4D;animation:lcBlink 1.4s infinite}
+#lcPanel .cam.err .st{background:#F2A65A}
+@keyframes lcBlink{0%,100%{opacity:1}50%{opacity:.35}}
+#lcPanel .cam .pl{position:absolute;inset:0;display:grid;place-items:center;color:rgba(255,255,255,.75);font-size:22px;background:rgba(3,18,42,.55)}
+#lcPanel .cam.live .pl{display:none}
+#lcPanel .big{position:relative;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:16/9;display:none}
+#lcPanel .big.on{display:block}
+#lcPanel .big video{width:100%;height:100%;display:block;background:#000}
+#lcPanel .big .cap{position:absolute;left:0;right:0;bottom:0;padding:6px 10px;font-size:12px;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.8))}
+#lcPanel .big .cap b{font-size:13px}
+#lcPanel .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#lcPanel .row button{height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--line);background:rgba(0,0,0,.25);color:#fff;font:600 12px var(--font);cursor:pointer}
+#lcPanel .row button.on{background:var(--lime);border-color:var(--lime);color:#06224A}
+#lcPanel .hint{font-size:11.5px;color:var(--text-dim);line-height:1.5}
+#lcPanel .hint b{color:var(--lime-bright);font-weight:600}
+@media (max-width:600px){
+  #lcPanel{left:0;right:0;top:auto;bottom:0;width:auto;max-height:62vh;border-radius:18px 18px 0 0}
+  #lcPanel .grid{grid-template-columns:1fr 1fr 1fr}
+}
+@media (max-height:500px) and (min-width:601px) and (max-width:1000px){
+  #lcPanel{top:56px !important;right:10px !important;width:330px !important;max-height:calc(100vh - 64px) !important;border-radius:14px}
+}
+</style>
+<script>
+/* ---------- 37. SITE › 분석 › 실시간 CCTV 영상 (경찰청 UTIC · 인천교통정보센터): 인천시청 반경 1.5 km 교차로 9곳 · 공개 HLS 스트림을 3D 위 화면(폴 위 스크린)과 패널 썸네일로 동시 재생 ---------- */
+(function(){
+  const C = Cesium;
+  // 경찰청 도시교통정보센터(UTIC) 공개 CCTV 목록(www.utic.go.kr/map/mapcctv.do)에서 인천시청 1.5 km 이내 9곳 (인천교통정보센터 운영) · 스트림: https://cctv.fitic.go.kr/cctv/{ID}.stream/playlist.m3u8
+  const CAMS = [
+    { id:'L302', name:'석천사거리',    lat:37.457015, lon:126.708788, dist:327 },
+    { id:'L301', name:'길병원사거리',  lat:37.449885, lon:126.707498, dist:738 },
+    { id:'L306', name:'문예회관사거리',lat:37.450224, lon:126.701046, dist:765 },
+    { id:'L303', name:'간석오거리',    lat:37.467019, lon:126.707648, dist:1204 },
+    { id:'L411', name:'벽돌막사거리',  lat:37.468052, lon:126.700169, dist:1373 },
+    { id:'L212', name:'석바위사거리',  lat:37.457675, lon:126.689224, dist:1420 },
+    { id:'L304', name:'간석사거리',    lat:37.461228, lon:126.720076, dist:1423 },
+    { id:'L305', name:'작은구월사거리',lat:37.448971, lon:126.718782, dist:1448 },
+    { id:'L213', name:'승기사거리',    lat:37.450517, lon:126.69016,  dist:1475 },
+  ];
+  const HLS = id => `https://cctv.fitic.go.kr/cctv/${id}.stream/playlist.m3u8`;
+  const CENTER = { lat:37.4563, lon:126.7052 };
+  const mobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+  const reg = MENUS.site.find(c=>c.id==='analysis');
+  if(reg && !reg.items.some(x=>x.id==='lcctv')){ const i = reg.items.findIndex(x=>x.id==='cctv'); reg.items.splice(i<0?reg.items.length:i+1, 0, { id:'lcctv', q:'지금 인천시청 주변 교차로는 어떤가', name:'실시간 CCTV 영상 · 인천시청 1.5 km (경찰청 UTIC)', src:'경찰청 도시교통정보센터(UTIC)·인천교통정보센터 교차로 CCTV 9곳 · 공개 HLS 실시간 스트림 · 3D 폴 위 스크린 + 패널 썸네일 · 실제보다 30초~1분 지연', type:'layer' }); try{ renderCats(); renderSub(); }catch(e){} }
+
+  // ---- 패널 ----
+  const P = document.createElement('div'); P.id='lcPanel'; P.className='panel'; P.innerHTML = `
+<div class="hd"><h2>실시간 CCTV 영상<small>경찰청 UTIC · 인천교통정보센터 · 인천시청 1.5 km 교차로 9곳</small></h2><button id="lcClose" aria-label="닫기">×</button></div>
+<div class="bd">
+  <div class="big" id="lcBig"><video id="lcBigV" muted playsinline autoplay></video><div class="cap"><b id="lcBigN"></b> <span id="lcBigS"></span></div></div>
+  <div class="grid" id="lcGrid"></div>
+  <div class="row"><button id="lcAll">모두 재생</button><button id="lcStop">모두 정지</button><button id="lcFly">전체 보기</button><span class="hint" id="lcCnt"></span></div>
+  <div class="hint">썸네일을 누르면 그 카메라로 이동하고 크게 봅니다 · 3D 지도의 폴 위 스크린에도 같은 영상이 나옵니다 · 영상은 <b>경찰청 UTIC 공개 스트림</b>(960×540, 실제보다 30초~1분 지연) · 모바일은 데이터 사용량 주의(카메라당 약 1 Mbps)</div>
+</div>`;
+  document.body.appendChild(P);
+  const $$ = s => P.querySelector(s);
+  $$('#lcClose').onclick = ()=> toggleLayer('lcctv', false);
+
+  // ---- hls.js 로드 ----
+  let hlsReady = null;
+  function loadHls(){ if(hlsReady) return hlsReady; hlsReady = new Promise((res, rej)=>{ if(window.Hls) return res(); const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js'; s.onload = ()=>res(); s.onerror = ()=>rej(new Error('hls.js 로드 실패')); document.head.appendChild(s); }); return hlsReady; }
+
+  // ---- 상태 ----
+  let DS = null, built = false, sel = null; const V = {}; // id → { video, hls, el(썸네일), screen(entity), label, mat }
+  const POLE = 12, SW = 44, SH = 24.75, SZ = 16; // 폴 높이 · 스크린 폭/높이(16:9) · 스크린 바닥 높이
+  function dest(lat, lon, brg, dist){ const r = brg*Math.PI/180; return [lat + dist*Math.cos(r)/111000, lon + dist*Math.sin(r)/(111000*Math.cos(lat*Math.PI/180))]; }
+  function bearing(aLat, aLon, bLat, bLon){ const y = Math.sin((bLon-aLon)*Math.PI/180)*Math.cos(bLat*Math.PI/180), x = Math.cos(aLat*Math.PI/180)*Math.sin(bLat*Math.PI/180) - Math.sin(aLat*Math.PI/180)*Math.cos(bLat*Math.PI/180)*Math.cos((bLon-aLon)*Math.PI/180); return (Math.atan2(y,x)*180/Math.PI+360)%360; }
+
+  async function build(){
+    if(built) return; built = true;
+    await loadHls().catch(e=>toast(e.message, 4000));
+    DS = new C.CustomDataSource('lcctv'); viewer.dataSources.add(DS);
+    const cartos = CAMS.map(c=>C.Cartographic.fromDegrees(c.lon, c.lat));
+    let hs; try{ hs = await C.sampleTerrainMostDetailed(scene.globe.terrainProvider, cartos.map(x=>x.clone())); }catch(e){ hs = cartos; }
+    let ht = []; try{ ht = await scene.sampleHeightMostDetailed(cartos.map(x=>x.clone())); }catch(e){} // 3D 모델(건물) 포함 표면 높이
+    const grid = $('#lcGrid');
+    CAMS.forEach((c, i)=>{
+      const g = (hs[i] && isFinite(hs[i].height)) ? hs[i].height : 0; c.g = g;
+      const surf = (ht[i] && isFinite(ht[i].height)) ? ht[i].height : g; const SZc = Math.max(g+SZ, surf+6); // 스크린 바닥: 지면+16 m 또는 건물 위+6 m 중 높은 쪽
+      // 썸네일 + 비디오 요소 (텍스처 원본으로도 사용)
+      const el = document.createElement('div'); el.className='cam'; el.dataset.id=c.id; el.innerHTML = `<video muted playsinline></video><span class="st"></span><div class="pl">▶</div><div class="n">${c.name}</div>`; grid.appendChild(el);
+      const video = el.querySelector('video'); video.crossOrigin = 'anonymous';
+      el.onclick = ()=>{ select(c.id); if(!V[c.id].playing) play(c.id); };
+      // 3D: 폴 + 꼭대기 점 + 스크린(시청 쪽을 향하는 세로 사각형)
+      const col = C.Color.fromCssColorString('#FF4D4D');
+      const top = C.Cartesian3.fromDegrees(c.lon, c.lat, Math.max(g+POLE, surf+2)); c.sz = SZc;
+      DS.entities.add({ polyline:{ positions:[C.Cartesian3.fromDegrees(c.lon, c.lat, g), top], width:3, material:C.Color.fromCssColorString('#DDE6F2').withAlpha(.9) } });
+      DS.entities.add({ position:top, point:{ pixelSize:10, color:col, outlineColor:C.Color.fromCssColorString('#03122A'), outlineWidth:2, disableDepthTestDistance:Number.POSITIVE_INFINITY }, name:c.name, description:`<b>${c.name}</b> 교차로 CCTV<br>경찰청 도시교통정보센터(UTIC) · 인천교통정보센터 · ID ${c.id}<br>인천시청에서 ${c.dist} m` , _lc:c.id });
+      const label = DS.entities.add({ position:C.Cartesian3.fromDegrees(c.lon, c.lat, SZc+SH+4), label:{ text:c.name, font:'700 14px '+getComputedStyle(document.body).fontFamily, fillColor:C.Color.WHITE, outlineColor:C.Color.fromCssColorString('#03122A'), outlineWidth:4, style:C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin:C.VerticalOrigin.BOTTOM, disableDepthTestDistance:Number.POSITIVE_INFINITY, scaleByDistance:new C.NearFarScalar(300, 1.0, 3000, 0.5) } });
+      // 스크린: 폴 위 16:9 평면(PlaneGraphics) · 시청 방향(brg)을 정면으로 · 영상 텍스처는 재생 시작 후 교체
+      const brg = bearing(c.lat, c.lon, CENTER.lat, CENTER.lon); c.brg = brg;
+      const spos = C.Cartesian3.fromDegrees(c.lon, c.lat, SZc+SH/2);
+      const screen = DS.entities.add({ position:spos, orientation:C.Transforms.headingPitchRollQuaternion(spos, new C.HeadingPitchRoll(C.Math.toRadians(brg-90), 0, 0)), plane:{ plane:new C.Plane(C.Cartesian3.UNIT_X, 0), dimensions:new C.Cartesian2(SW, SH), material:C.Color.fromCssColorString('#03122A').withAlpha(.85), outline:true, outlineColor:col.withAlpha(.9) }, name:c.name, description:`<b>${c.name}</b> 실시간 영상 스크린`, _lc:c.id });
+      // 스크린과 폴 연결선
+      DS.entities.add({ polyline:{ positions:[top, C.Cartesian3.fromDegrees(c.lon, c.lat, SZc)], width:2, material:C.Color.fromCssColorString('#DDE6F2').withAlpha(.5) } });
+      V[c.id] = { video, el, screen, label, playing:false, hls:null };
+    });
+    // 클릭: 점/스크린 → 선택 + 재생
+    const h = new C.ScreenSpaceEventHandler(scene.canvas);
+    h.setInputAction(ev=>{ if(!DS || !DS.show) return; const p = scene.pick(ev.position); const id = p && p.id && p.id._lc; if(id){ select(id); if(!V[id].playing) play(id); } }, C.ScreenSpaceEventType.LEFT_CLICK);
+    $$('#lcAll').onclick = ()=>{ CAMS.forEach(c=>play(c.id)); };
+    $$('#lcStop').onclick = ()=>{ CAMS.forEach(c=>stop(c.id)); };
+    $$('#lcFly').onclick = flyAll;
+  }
+  function count(){ const n = CAMS.filter(c=>V[c.id] && V[c.id].playing).length; $$('#lcCnt').textContent = n ? `재생 중 ${n} / ${CAMS.length}` : '정지'; }
+  function play(id){
+    const v = V[id]; if(!v || v.playing) return; v.playing = true; v.el.classList.remove('err');
+    const src = HLS(id);
+    const attach = ()=>{ if(v.attached || v.video.readyState < 2 || !v.video.videoWidth) return; v.attached = true; v.screen.plane.material = new C.ImageMaterialProperty({ image: v.video, transparent:false }); };
+    const onPlaying = ()=>{ v.el.classList.add('live'); attach(); count(); };
+    v.attached = false; v.video.addEventListener('playing', onPlaying); v.video.addEventListener('loadeddata', attach); v.video.addEventListener('canplay', attach);
+    if(!v.tick) v.tick = setInterval(()=>{ if(!v.playing) return; attach(); }, 1500);
+    v.video.onerror = ()=>{ v.el.classList.add('err'); };
+    if(v.video.canPlayType('application/vnd.apple.mpegurl')){ v.video.src = src; v.video.play().catch(()=>{}); }
+    else if(window.Hls && Hls.isSupported()){ v.hls = new Hls({ enableWorker:true, lowLatencyMode:false, backBufferLength:10, maxBufferLength:12 }); v.hls.loadSource(src); v.hls.attachMedia(v.video); v.hls.on(Hls.Events.MANIFEST_PARSED, ()=>v.video.play().catch(()=>{})); v.hls.on(Hls.Events.ERROR, (e,d)=>{ if(d.fatal){ v.el.classList.add('err'); v.el.classList.remove('live'); if(d.type===Hls.ErrorTypes.NETWORK_ERROR) v.hls.startLoad(); else if(d.type===Hls.ErrorTypes.MEDIA_ERROR) v.hls.recoverMediaError(); } }); }
+    else { v.el.classList.add('err'); toast('이 브라우저는 HLS 재생을 지원하지 않습니다', 3000); }
+    count();
+  }
+  function stop(id){ const v = V[id]; if(!v || !v.playing) return; v.playing = false; try{ if(v.hls){ v.hls.destroy(); v.hls = null; } v.video.pause(); v.video.removeAttribute('src'); v.video.load(); }catch(e){} v.el.classList.remove('live'); v.attached = false; v.screen.plane.material = C.Color.fromCssColorString('#03122A').withAlpha(.85); if(sel===id){ $$('#lcBig').classList.remove('on'); } count(); }
+  function select(id){
+    sel = id; const c = CAMS.find(x=>x.id===id); const v = V[id];
+    CAMS.forEach(x=>V[x.id].el.classList.toggle('sel', x.id===id));
+    // 큰 화면: 같은 스트림을 두 번 받지 않도록 captureStream으로 복제
+    const big = $$('#lcBigV'); try{ big.srcObject = v.video.captureStream ? v.video.captureStream() : null; big.play().catch(()=>{}); }catch(e){}
+    $$('#lcBigN').textContent = c.name; $$('#lcBigS').textContent = `· 인천시청에서 ${c.dist} m · UTIC ${c.id}`; $$('#lcBig').classList.add('on');
+    // 카메라: 스크린 정면(시청 쪽)에서 바라보기
+    const brg = c.brg; const [la, lo] = dest(c.lat, c.lon, brg, 150);
+    camera.flyTo({ destination:C.Cartesian3.fromDegrees(lo, la, c.sz+SH+75), orientation:{ heading:C.Math.toRadians((brg+180)%360), pitch:C.Math.toRadians(-30), roll:0 }, duration:1.4 });
+  }
+  function flyAll(){ camera.flyTo({ destination:C.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat-0.016, 1150), orientation:{ heading:0, pitch:C.Math.toRadians(-40), roll:0 }, duration:1.8 }); }
+  // 비디오 텍스처 갱신: 재생 중엔 매 프레임 렌더 요청 (requestRenderMode 대비)
+  scene.preRender.addEventListener(()=>{ if(DS && DS.show && scene.requestRenderMode && CAMS.some(c=>V[c.id] && V[c.id].playing)) scene.requestRender(); });
+
+  async function on(){ await build(); DS.show = true; P.classList.add('open'); document.body.classList.add('m-sheet');
+    const far = C.Cartesian3.distance(camera.position, C.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat, 0)) > 4000; if(far) flyAll();
+    // 기본 재생: PC는 9곳 모두, 모바일은 가까운 3곳
+    (mobile ? CAMS.slice(0,3) : CAMS).forEach(c=>play(c.id));
+    toast('실시간 CCTV '+CAMS.length+'곳 (경찰청 UTIC · 인천시청 1.5 km) · 폴 위 스크린과 패널 썸네일에 라이브 영상 · 썸네일을 누르면 그 카메라로 이동 · 실제보다 30초~1분 지연', 6000); }
+  function off(){ if(DS) DS.show = false; P.classList.remove('open'); document.body.classList.remove('m-sheet'); CAMS.forEach(c=>stop(c.id)); }
+  const L6 = { lcctv: { on, off, src:()=> (DS && DS.show) ? '<b>경찰청 UTIC</b> 실시간 CCTV '+CAMS.length+'곳' : '' } };
+  const _toggle6 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(!L6[id]) return _toggle6(id, force);
+    const want = force!==undefined ? force : !STATE.on.has(id);
+    if(want) STATE.on.add(id); else STATE.on.delete(id);
+    try{ if(want) await L6[id].on(); else L6[id].off(); }catch(e){ toast('레이어 오류: '+e.message, 4000); STATE.on.delete(id); }
+    renderCats(); renderSub(); updateSrc();
+  };
+  const _updateSrc6 = updateSrc;
+  updateSrc = function(){ _updateSrc6(); const extra=[]; for(const id of STATE.on){ const s = L6[id]?.src; if(!s) continue; const v = typeof s==='function'? s():s; if(v) extra.push(v); } if(extra.length){ const el = $('#hudSrc'); el.innerHTML = el.innerHTML.replace('지형 없음', extra.join(' · ')+' · 지형 없음').replace('<b>Esri World Elevation</b> 지형', extra.join(' · ')+' · <b>Esri World Elevation</b> 지형'); } };
+  window.__LC = { CAMS, V, play, stop, select, get DS(){ return DS; } };
+})();
+</script>
+
 </body>
 </html>
