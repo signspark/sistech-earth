@@ -2921,7 +2921,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   window.addEventListener('keydown', e=>{ if(e.key==='Escape' && NV.playing) stopSim(); });
 
   window.sistechNav = NV;
-  NV.api = { openNav, closeNav, setPoint, computeRoute, startSim, stopSim, placeAt, setNavMode };
+  NV.api = { openNav, closeNav, setPoint, computeRoute, startSim, stopSim, placeAt, updCamera, updPanel, setNavMode, MODE };
 })();
 
 /* ---------- 27. EARTH 버튼: 전지구 뷰로 줌아웃 + 한국 위성·스타링크 표시 · SITE/EARTH 순서 바꿈 ---------- */
@@ -3915,6 +3915,240 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
   const _updateSrc6 = updateSrc;
   updateSrc = function(){ _updateSrc6(); const extra=[]; for(const id of STATE.on){ const s = L6[id]?.src; if(!s) continue; const v = typeof s==='function'? s():s; if(v) extra.push(v); } if(extra.length){ const el = $('#hudSrc'); el.innerHTML = el.innerHTML.replace('지형 없음', extra.join(' · ')+' · 지형 없음').replace('<b>Esri World Elevation</b> 지형', extra.join(' · ')+' · <b>Esri World Elevation</b> 지형'); } };
   window.__LC = { CAMS, V, play, stop, select, get DS(){ return DS; } };
+})();
+</script>
+
+<style id="v4-nvexp">
+#nvExp{position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;background:rgba(3,18,42,.6);backdrop-filter:blur(3px)}
+#nvExp.open{display:flex}
+#nvExp .box{width:min(460px,94vw);max-height:92vh;overflow:auto;display:flex;flex-direction:column}
+#nvExp .hd{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+#nvExp .hd h2{margin:0;font-size:16px;font-weight:700;flex:1}
+#nvExp .hd h2 small{display:block;font-weight:400;color:var(--text-dim);font-size:12px;margin-top:2px}
+#nvExp .hd button{color:var(--text-dim);font-size:20px;background:none;border:0;cursor:pointer}
+#nvExp .bd{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+#nvExp .lb{font-size:12px;color:var(--text-dim);margin-bottom:6px;display:flex;justify-content:space-between}
+#nvExp .opts{display:flex;gap:6px;background:rgba(0,0,0,.25);padding:4px;border-radius:10px}
+#nvExp .opts button{flex:1;height:44px;border-radius:8px;border:0;background:none;color:var(--text-dim);font:600 13px var(--font);cursor:pointer;line-height:1.2}
+#nvExp .opts button small{display:block;font-weight:400;font-size:11px;opacity:.8}
+#nvExp .opts button.on{background:var(--lime);color:#06224A}
+#nvExp .est{background:rgba(0,0,0,.25);border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.6;color:var(--text)}
+#nvExp .est b{color:var(--lime)}
+#nvExp .note{font-size:11.5px;color:var(--text-dim);line-height:1.55}
+#nvExp .acts{display:flex;gap:8px;justify-content:flex-end;padding-top:2px}
+#nvExp .acts button{height:40px;padding:0 16px;border-radius:9px;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--text);font:600 13px var(--font);cursor:pointer}
+#nvExp .acts button.go{background:var(--lime);color:#06224A;border-color:transparent}
+#nvExp .acts button:disabled{opacity:.45;cursor:default}
+#nvExp .done{display:none;background:rgba(191,227,58,.1);border:1px solid rgba(191,227,58,.35);border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.6}
+#nvExp .done.show{display:block}
+#nvExp .done a{color:var(--lime);font-weight:700}
+#nvExp .warn{display:none;background:rgba(255,93,93,.12);border:1px solid rgba(255,93,93,.4);border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.5}
+#nvExp .warn.show{display:block}
+/* 녹화 중: 캔버스만 16:9 박스로 남기고 나머지 UI 숨김 */
+body.nv-rec{background:#000}
+body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
+#nvRec{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:41;display:none;width:min(560px,94vw);padding:12px 14px;border-radius:12px;background:rgba(3,18,42,.9);border:1px solid var(--line);color:var(--text);font:13px var(--font);box-shadow:0 8px 30px rgba(0,0,0,.5)}
+#nvRec.open{display:block}
+#nvRec .t{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+#nvRec .t b{font-size:14px}
+#nvRec .t i{width:10px;height:10px;border-radius:50%;background:#FF5D5D;animation:nvBlink 1s infinite}
+@keyframes nvBlink{50%{opacity:.25}}
+#nvRec .bar{height:8px;border-radius:4px;background:rgba(255,255,255,.12);overflow:hidden}
+#nvRec .bar span{display:block;height:100%;width:0;background:var(--lime);transition:width .2s}
+#nvRec .st{display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:12px;color:var(--text-dim);flex-wrap:wrap}
+#nvRec .st button{height:30px;padding:0 12px;border-radius:8px;border:1px solid rgba(255,93,93,.5);background:rgba(255,93,93,.15);color:#fff;font:600 12px var(--font);cursor:pointer}
+#navPanel .row.exp button{flex:1;height:38px;font-size:13px}
+#navPanel .row.exp button:disabled{opacity:.45;cursor:default}
+@media (max-width:600px){ #nvExp .opts button{height:48px} }
+</style>
+<script>
+/* ---------- 38. 내비 시뮬레이션 동영상 저장 (WebCodecs H.264 + MP4, 프레임 단위 오프라인 렌더) ---------- */
+(function(){
+  const NV = window.sistechNav; if(!NV || !NV.api) return;
+  const A = NV.api, C = Cesium;
+  const FPS = 30;
+  const RES = {
+    hd:  { w:1280, h:720,  br:10e6, codec:'avc1.640028', label:'HD',  sub:'1280×720' },
+    fhd: { w:1920, h:1080, br:18e6, codec:'avc1.640028', label:'FHD', sub:'1920×1080' },
+    qhd: { w:2560, h:1440, br:30e6, codec:'avc1.640032', label:'QHD', sub:'2560×1440' }
+  };
+  const SPD = [1, 2, 4];
+  const X = { res:'fhd', spd:2, running:false, abort:false, blob:null, name:'' };
+  const MODE_NAME = { car:'차량', walk:'도보', uam:'UAM' };
+  const fmtT = s => { s = Math.max(0, Math.round(s)); const m = Math.floor(s/60), ss = s%60; return (m? m+'분 ':'') + ss + '초'; };
+  const fmtMS = s => { s = Math.max(0, Math.round(s)); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); };
+  const fmtMB = b => (b/1048576).toFixed(b>104857600? 0 : 1) + ' MB';
+
+  /* ---- 내비 패널에 버튼 ---- */
+  const play = document.querySelector('#navPanel .play'); if(!play) return;
+  const row = document.createElement('div'); row.className = 'row exp';
+  row.innerHTML = '<button id="nvExpBtn">⏺ 시뮬레이션 동영상 저장 (MP4)</button>';
+  play.insertAdjacentElement('afterend', row);
+  const expBtn = row.querySelector('#nvExpBtn');
+
+  /* ---- 설정 창 ---- */
+  const D = document.createElement('div'); D.id = 'nvExp';
+  D.innerHTML = `
+<div class="box panel">
+  <div class="hd"><h2>시뮬레이션 동영상 저장<small id="nxSub">현재 경로·시점·시점 높이 그대로 녹화합니다</small></h2><button id="nxClose" aria-label="닫기">×</button></div>
+  <div class="bd">
+    <div class="warn" id="nxWarn"></div>
+    <div><div class="lb"><span>해상도</span><span id="nxCodec"></span></div>
+      <div class="opts" id="nxRes">${Object.entries(RES).map(([k,r])=>`<button data-k="${k}">${r.label}<small>${r.sub}</small></button>`).join('')}</div></div>
+    <div><div class="lb"><span>배속</span><span>30 fps · H.264 MP4</span></div>
+      <div class="opts" id="nxSpd">${SPD.map(s=>`<button data-s="${s}">${s}×<small>${s===1?'실시간':s===2?'기본':'빠르게'}</small></button>`).join('')}</div></div>
+    <div class="est" id="nxEst"></div>
+    <div class="done" id="nxDone"></div>
+    <div class="note">녹화 중에는 화면이 16:9 박스로 바뀌고 지도 조작이 멈춥니다 · 프레임마다 3D 타일을 끝까지 불러온 뒤 캡처하므로 실제 재생보다 오래 걸립니다 · 화면의 패널·HUD는 영상에 들어가지 않고 3D 지도·경로·차량만 녹화됩니다 · 완료되면 자동으로 다운로드됩니다 (Esc 또는 [중단]으로 취소)</div>
+    <div class="acts"><button id="nxCancel">닫기</button><button class="go" id="nxGo">⏺ 녹화 시작</button></div>
+  </div>
+</div>`;
+  document.body.appendChild(D);
+  const q = s => D.querySelector(s);
+
+  /* ---- 녹화 진행 바 ---- */
+  const Rb = document.createElement('div'); Rb.id = 'nvRec';
+  Rb.innerHTML = `<div class="t"><i></i><b id="nrTitle">녹화 중</b><span id="nrSub" style="color:var(--text-dim);font-size:12px"></span></div>
+  <div class="bar"><span id="nrBar"></span></div>
+  <div class="st"><span id="nrFr">-</span><span id="nrTm">-</span><button id="nrStop">■ 중단</button></div>`;
+  document.body.appendChild(Rb);
+
+  function supported(){ return typeof VideoEncoder !== 'undefined' && typeof VideoFrame !== 'undefined'; }
+  function updOpts(){
+    q('#nxRes').querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.k===X.res));
+    q('#nxSpd').querySelectorAll('button').forEach(b=>b.classList.toggle('on', +b.dataset.s===X.spd));
+    const r = NV.route; if(!r){ q('#nxEst').textContent = '경로가 없습니다'; return; }
+    const R = RES[X.res]; const len = r.dur / X.spd; const N = Math.ceil(len*FPS)+1;
+    q('#nxCodec').textContent = R.w+'×'+R.h+' · '+(R.br/1e6)+' Mbps';
+    q('#nxEst').innerHTML = `${MODE_NAME[r.mode]} 시뮬레이션 · 거리 ${(r.total/1000).toFixed(2)} km · 실제 소요 ${fmtT(r.dur)}<br>
+      영상 길이 <b>${fmtMS(len)}</b> (${X.spd}×) · 프레임 <b>${N.toLocaleString()}장</b> @ ${FPS} fps<br>
+      파일 크기 약 <b>${fmtMB(R.br*len/8)}</b> · 렌더 시간 약 <b>${fmtT(N*0.25)}~${fmtT(N*0.6)}</b> <span style="color:var(--text-dim)">(PC 성능·타일 로딩에 따라 다름, 추정)</span>`;
+  }
+  q('#nxRes').onclick = e => { const b = e.target.closest('button'); if(!b) return; X.res = b.dataset.k; updOpts(); };
+  q('#nxSpd').onclick = e => { const b = e.target.closest('button'); if(!b) return; X.spd = +b.dataset.s; updOpts(); };
+  function openDlg(){
+    if(!NV.route){ toast('먼저 출발·도착을 지정해 경로를 만든 뒤 저장하세요', 3000); return; }
+    q('#nxDone').classList.remove('show'); q('#nxWarn').classList.remove('show'); q('#nxGo').disabled = false;
+    if(!supported()){ q('#nxWarn').textContent = '이 브라우저는 WebCodecs(H.264 인코딩)를 지원하지 않습니다. Chrome · Edge · Safari 16.4 이상에서 열어 주세요.'; q('#nxWarn').classList.add('show'); q('#nxGo').disabled = true; }
+    updOpts(); D.classList.add('open');
+  }
+  expBtn.onclick = openDlg;
+  q('#nxClose').onclick = q('#nxCancel').onclick = () => D.classList.remove('open');
+  D.addEventListener('click', e => { if(e.target===D) D.classList.remove('open'); });
+
+  /* ---- mp4 muxer (지연 로드) ---- */
+  let muxP = null;
+  function loadMuxer(){ if(window.Mp4Muxer) return Promise.resolve(); if(muxP) return muxP;
+    muxP = new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.min.js'; s.onload = () => res(); s.onerror = () => { muxP = null; rej(new Error('mp4-muxer 로드 실패')); }; document.head.appendChild(s); });
+    return muxP; }
+
+  /* ---- 타일 로딩 대기 ---- */
+  function eachTileset(col, fn){ for(let i=0;i<col.length;i++){ const x = col.get(i); if(x instanceof C.Cesium3DTileset){ if(x.show) fn(x); } else if(x instanceof C.PrimitiveCollection && x.show) eachTileset(x, fn); } }
+  function tilesReady(){ if(!scene.globe.tilesLoaded) return false; let ok = true; eachTileset(scene.primitives, t => { if(!t.tilesLoaded) ok = false; }); return ok; }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function settle(maxMs, onReady){ const t0 = performance.now(); let n = 0;
+    while(true){ viewer.render(); n++; const ok = tilesReady() && n>=2; if(ok || performance.now()-t0 > maxMs){ onReady(); X.prof.renders += n; return ok; } await sleep(n<4 ? 0 : 16); } }
+
+  /* ---- 녹화 본체 ---- */
+  async function run(){
+    const r = NV.route; if(!r || X.running) return;
+    const R = RES[X.res], spd = X.spd;
+    q('#nxGo').disabled = true; q('#nxWarn').classList.remove('show');
+    try{ await loadMuxer(); }catch(e){ q('#nxWarn').textContent = 'MP4 먹서 라이브러리를 불러오지 못했습니다 (네트워크 확인)'; q('#nxWarn').classList.add('show'); q('#nxGo').disabled = false; return; }
+    let cfg = { codec:R.codec, width:R.w, height:R.h, bitrate:R.br, framerate:FPS, hardwareAcceleration:'prefer-hardware', latencyMode:'realtime', avc:{ format:'avc' } };
+    let sup = null; try{ sup = await VideoEncoder.isConfigSupported(cfg); }catch(e){}
+    if(!sup || !sup.supported){ delete cfg.hardwareAcceleration; try{ sup = await VideoEncoder.isConfigSupported(cfg); }catch(e){} }
+    if(!sup || !sup.supported){ q('#nxWarn').textContent = `이 기기에서 ${R.label}(${R.w}×${R.h}) H.264 인코딩이 지원되지 않습니다. 더 낮은 해상도를 선택해 주세요.`; q('#nxWarn').classList.add('show'); q('#nxGo').disabled = false; return; }
+
+    /* 상태 저장 */
+    A.stopSim();
+    const cv = document.getElementById('cesium');
+    const saved = { t: NV.t, loop: viewer.useDefaultRenderLoop, rs: viewer.resolutionScale, style: cv.getAttribute('style')||'', anim: viewer.clock.shouldAnimate, mul: viewer.clock.multiplier, time: C.JulianDate.clone(viewer.clock.currentTime), prevTarget: NV.prevTarget };
+    X.running = true; X.abort = false; X.blob = null; X.prof = { settle:0, wait:0, renders:0 }; X.enc = null; D.classList.remove('open');
+    document.body.classList.add('nv-rec'); Rb.classList.add('open');
+    q('#nxDone').classList.remove('show');
+
+    /* 16:9 캔버스 박스 + 해상도 스케일 */
+    const Wc = Math.max(320, Math.floor(Math.min(innerWidth, innerHeight*16/9)/16)*16), Hc = Wc*9/16;
+    cv.style.cssText = `position:fixed;inset:auto;left:${Math.round((innerWidth-Wc)/2)}px;top:${Math.round((innerHeight-Hc)/2)}px;width:${Wc}px;height:${Hc}px;background:#000`;
+    viewer.useDefaultRenderLoop = false;
+    viewer.resolutionScale = R.w / Wc;
+    viewer.clock.shouldAnimate = false;
+    viewer.resize();
+
+    const N = Math.ceil(r.dur/spd*FPS)+1, dtR = 1/FPS;
+    const title = `${MODE_NAME[r.mode]} ${R.label} ${spd}×`;
+    Rb.querySelector('#nrTitle').textContent = '녹화 중 · '+title; Rb.querySelector('#nrSub').textContent = `${R.w}×${R.h} · ${FPS} fps · ${fmtMS(r.dur/spd)}`;
+    const t0 = performance.now(); let err = null, encoded = 0;
+    const muxer = new Mp4Muxer.Muxer({ target: new Mp4Muxer.ArrayBufferTarget(), video: { codec:'avc', width:R.w, height:R.h, frameRate:FPS }, fastStart:'in-memory', firstTimestampBehavior:'offset' });
+    const enc = new VideoEncoder({ output: (chunk, meta) => { try{ muxer.addVideoChunk(chunk, meta); encoded++; }catch(e){ err = e; } }, error: e => { err = e; } });
+    enc.configure(cfg); X.enc = enc;
+
+    /* 시뮬레이션 초기화 */
+    NV.playing = false; NV.t = 0; A.placeAt(0, true); NV.camHdg = NV.hdg; NV.prevTarget = null; A.updCamera(0);
+    const clk0 = C.JulianDate.clone(viewer.clock.currentTime);
+    let i = 0, wCanvas = 0, hCanvas = 0;
+    try{
+      for(i=0; i<N; i++){
+        if(X.abort || err) break;
+        NV.t = Math.min(r.dur, i*dtR*spd);
+        A.placeAt(NV.t, i===0, dtR); A.updCamera(dtR);
+        viewer.clock.currentTime = C.JulianDate.addSeconds(clk0, i*dtR*spd, new C.JulianDate());
+        let frame = null; const ta = performance.now(); X.stage = 'settle '+i;
+        await settle(i===0 ? 25000 : 3000, () => {   // 렌더 직후 같은 태스크에서 캡처 (drawing buffer 보존)
+          const canvas = scene.canvas, W = canvas.width, H = canvas.height; wCanvas = W; hCanvas = H;
+          // GPU 캔버스를 직접 VideoFrame으로 넘기면 인코더가 지연 읽기 → 3 fps. readPixels로 즉시 CPU 버퍼화(≈8 fps 이상)
+          const gl = scene.context._gl; if(!X.buf || X.buf.length !== W*H*4){ X.buf = new Uint8Array(W*H*4); X.buf2 = new Uint8Array(W*H*4); }
+          gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, X.buf);
+          const row = W*4; for(let y=0; y<H; y++) X.buf2.set(X.buf.subarray((H-1-y)*row, (H-y)*row), y*row);   // 상하 반전
+          frame = new VideoFrame(X.buf2, { format:'RGBA', codedWidth:W, codedHeight:H, timestamp: Math.round(i*1e6/FPS), duration: Math.round(1e6/FPS) }); });
+        const tb = performance.now(); X.prof.settle += tb-ta; X.stage = 'queue '+i;
+        while(enc.encodeQueueSize > 4 && !err && !X.abort) await sleep(4);
+        const tc = performance.now(); X.prof.wait += tc-tb; X.stage = 'encode '+i;
+        enc.encode(frame, { keyFrame: i % (FPS*2) === 0 }); frame.close();
+        /* 진행 */
+        const el = (performance.now()-t0)/1000, per = el/(i+1), rem = per*(N-i-1);
+        Rb.querySelector('#nrBar').style.width = ((i+1)/N*100).toFixed(1)+'%';
+        Rb.querySelector('#nrFr').textContent = `${(i+1).toLocaleString()} / ${N.toLocaleString()} 프레임 (${Math.round((i+1)/N*100)}%) · 영상 ${fmtMS((i+1)/FPS)}`;
+        Rb.querySelector('#nrTm').textContent = `경과 ${fmtMS(el)} · 남은 약 ${fmtMS(rem)} · ${per.toFixed(2)} s/프레임`;
+      }
+      X.stage = 'flush'; if(!err){ await Promise.race([enc.flush(), sleep(30000)]); } X.stage = 'done';
+    }catch(e){ err = e; }
+    try{ enc.close(); }catch(e){}
+    X.buf = X.buf2 = null;
+
+    /* 복구 */
+    document.body.classList.remove('nv-rec'); Rb.classList.remove('open');
+    cv.style.cssText = saved.style; viewer.resolutionScale = saved.rs; viewer.useDefaultRenderLoop = saved.loop;
+    viewer.clock.currentTime = saved.time; viewer.clock.shouldAnimate = saved.anim; viewer.clock.multiplier = saved.mul;
+    viewer.resize(); camera.lookAtTransform(C.Matrix4.IDENTITY);
+    NV.t = saved.t; NV.prevTarget = null; A.placeAt(NV.t, true);
+    X.running = false;
+
+    if(err){ console.error('[nvexp]', err); D.classList.add('open'); q('#nxWarn').textContent = '녹화 실패: '+(err.message||err); q('#nxWarn').classList.add('show'); q('#nxGo').disabled = false; updOpts(); return; }
+    if(X.abort && i < 2){ toast('녹화를 중단했습니다', 2500); return; }
+    /* 파일 */
+    let blob;
+    try{ muxer.finalize(); blob = new Blob([muxer.target.buffer], { type:'video/mp4' }); }
+    catch(e){ D.classList.add('open'); q('#nxWarn').textContent = 'MP4 생성 실패: '+(e.message||e); q('#nxWarn').classList.add('show'); q('#nxGo').disabled = false; updOpts(); return; }
+    const d = new Date(), pad = n => String(n).padStart(2,'0');
+    const name = `SISTECH_내비_${MODE_NAME[r.mode]}_${spd}x_${R.label}_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${X.abort?'_부분':''}.mp4`;
+    X.blob = blob; X.name = name;
+    if(X.url) URL.revokeObjectURL(X.url); X.url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = X.url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    const el = (performance.now()-t0)/1000;
+    D.classList.add('open'); q('#nxGo').disabled = false; updOpts();
+    q('#nxDone').innerHTML = `${X.abort ? '중단 지점까지 ' : ''}저장 완료 · <b>${name}</b> · ${fmtMB(blob.size)} · ${i.toLocaleString()}프레임 (${fmtMS(i/FPS)}) · ${wCanvas}×${hCanvas} · 렌더 ${fmtMS(el)}<br>다운로드가 시작되지 않으면 → <a href="${X.url}" download="${name}">여기를 눌러 저장</a>`;
+    q('#nxDone').classList.add('show');
+    toast(`동영상 저장 완료 · ${name} (${fmtMB(blob.size)})`, 5000);
+  }
+  q('#nxGo').onclick = run;
+  Rb.querySelector('#nrStop').onclick = () => { X.abort = true; };
+  window.addEventListener('keydown', e => { if(e.key==='Escape' && X.running) X.abort = true; });
+
+  /* 내비 창 닫힐 때 설정 창도 닫기 */
+  const nvCloseBtn = document.getElementById('nvClose'); if(nvCloseBtn) nvCloseBtn.addEventListener('click', ()=>D.classList.remove('open'));
+  window.__NVX = X;
 })();
 </script>
 
