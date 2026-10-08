@@ -4825,6 +4825,233 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   window.__MX = MX;
 })();
 
+
+/* ---------- 43. SITE › 내보내기 › GeoTIFF 정사영상 활성화 ----------
+   정사 투영: 직교(orthographic) 프러스텀 + 연직(pitch −90°) 카메라 → 평행 광선 수직 투영. 화면 1화소 = GSD(지상표본거리)가 되도록 frustum.width = 버퍼폭 × GSD.
+   큰 구역은 화면 버퍼 크기로 타일 분할 캡처 → 한 장으로 합성. 각 타일은 3D 모델 최세밀(SSE 2) 타일 로딩 완료 후 캡처.
+   지오레퍼런스(GeoTIFF 태그): ModelTiepoint(좌상단 모서리) + ModelPixelScale + GeoKeyDirectory.
+     EPSG:4326  Δλ = GSD / (N·cosφ), Δφ = GSD / M   (N = a/√(1−e²sin²φ) 묘유선 곡률반경, M = a(1−e²)/(1−e²sin²φ)^1.5 자오선 곡률반경, GRS80)
+     EPSG:5185/5186/5187 (Korea 2000 TM 서부·중부·동부, 원점 38°N, λ0 125/127/129°E, k0=1, FE 200,000, FN 600,000)
+       Snyder TM 급수식으로 E,N 산출 · 자오선수차(그리드 북 − 진북)만큼 카메라 방위를 돌려 화상 행·열을 TM 그리드축에 정렬 · 축척계수 k 반영
+   출력: GeoTIFF(무압축 RGB, 단일 스트립) + 선택 시 PNG + 월드파일(.pgw)
+*/
+(function(){
+  const C = Cesium;
+  const GT = { open:false, w:300, h:300, gsd:0.1, crs:'4326', png:false, center:null, picking:false, pickA:null, ents:[], running:false, cancel:false, out:null, meta:null };
+  const deg = r=>r*180/Math.PI, rad = d=>d*Math.PI/180;
+  const LIME = C.Color.fromCssColorString('#BFE33A');
+  const f0 = v=>Math.round(v).toLocaleString('ko-KR');
+
+  /* ---- 메뉴 항목 ---- */
+  const ex = (MENUS.site||[]).find(c=>c.id==='export');
+  if(ex){ const it = ex.items.find(x=>x.id==='ortho'); if(it) Object.assign(it, { q:'정사영상으로 내보내기', name:'GeoTIFF 정사영상', src:'구역·GSD·좌표계(EPSG:4326 / 5185·5186·5187 TM) → 연직 직교투영 타일 캡처 → 지오레퍼런스 GeoTIFF (+PNG·pgw)', type:'action', run: openPanel }); }
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  /* ---- 측지 수식 ---- */
+  const a = 6378137, f = 1/298.257222101, e2 = 2*f - f*f, ep2 = e2/(1-e2);
+  const Nrad = φ => a/Math.sqrt(1 - e2*Math.sin(φ)**2);
+  const Mrad = φ => a*(1-e2)/Math.pow(1 - e2*Math.sin(φ)**2, 1.5);
+  const marc = φ => a*((1 - e2/4 - 3*e2*e2/64 - 5*e2**3/256)*φ - (3*e2/8 + 3*e2*e2/32 + 45*e2**3/1024)*Math.sin(2*φ) + (15*e2*e2/256 + 45*e2**3/1024)*Math.sin(4*φ) - (35*e2**3/3072)*Math.sin(6*φ));
+  const TM = { '5185':{ lon0:125, name:'Korea 2000 / West Belt 2010 (서부원점)' }, '5186':{ lon0:127, name:'Korea 2000 / Central Belt 2010 (중부원점)' }, '5187':{ lon0:129, name:'Korea 2000 / East Belt 2010 (동부원점)' } };
+  function tmForward(latD, lonD, lon0D){ // Snyder (1987) Transverse Mercator · GRS80 · k0 = 1 · FE 200000 · FN 600000 · φ0 = 38°
+    const φ = rad(latD), λ = rad(lonD), λ0 = rad(lon0D), k0 = 1, FE = 200000, FN = 600000;
+    const N = Nrad(φ), T = Math.tan(φ)**2, Cc = ep2*Math.cos(φ)**2, A = (λ-λ0)*Math.cos(φ), M = marc(φ), M0 = marc(rad(38));
+    const E = FE + k0*N*(A + (1-T+Cc)*A**3/6 + (5-18*T+T*T+72*Cc-58*ep2)*A**5/120);
+    const Nn = FN + k0*(M - M0 + N*Math.tan(φ)*(A*A/2 + (5-T+9*Cc+4*Cc*Cc)*A**4/24 + (61-58*T+T*T+600*Cc-330*ep2)*A**6/720));
+    return { E, N: Nn };
+  }
+
+  /* ---- 좌표 프레임: 중심 ENU + 화상 회전각 θ(그리드 북 방위) ---- */
+  function frame(){ const enu = C.Transforms.eastNorthUpToFixedFrame(GT.center); return { enu, th: GT.theta||0 }; }
+  function uvToWorld(u, v, z){ const { enu, th } = frame(); const x = u*Math.cos(th) + v*Math.sin(th), y = -u*Math.sin(th) + v*Math.cos(th); return C.Matrix4.multiplyByPoint(enu, new C.Cartesian3(x, y, z||0), new C.Cartesian3()); }
+  function uvToLL(u, v){ const c = C.Cartographic.fromCartesian(uvToWorld(u, v, 0)); return { lat: deg(c.latitude), lon: deg(c.longitude) }; }
+  function computeTheta(){ // TM: 중심에서 진북 100 m 지점의 그리드 방향 → 그리드 북 방위각 (진북 기준 시계방향) = −atan2(ΔE, ΔN)
+    GT.theta = 0; if(!TM[GT.crs] || !GT.center) return;
+    const c0 = C.Cartographic.fromCartesian(GT.center); const lat0 = deg(c0.latitude), lon0 = deg(c0.longitude);
+    const enu = C.Transforms.eastNorthUpToFixedFrame(GT.center); const pN = C.Cartographic.fromCartesian(C.Matrix4.multiplyByPoint(enu, new C.Cartesian3(0,100,0), new C.Cartesian3()));
+    const t0 = tmForward(lat0, lon0, TM[GT.crs].lon0), t1 = tmForward(deg(pN.latitude), deg(pN.longitude), TM[GT.crs].lon0);
+    GT.theta = -Math.atan2(t1.E - t0.E, t1.N - t0.N);
+  }
+  function georef(Wpx, Hpx){ // 좌상단 모서리 기준 ModelTiepoint · ModelPixelScale
+    const halfW = Wpx*GT.gsd/2, halfH = Hpx*GT.gsd/2; const tl = uvToLL(-halfW, halfH);
+    if(TM[GT.crs]){ const lon0 = TM[GT.crs].lon0; const c = C.Cartographic.fromCartesian(GT.center); const cen = tmForward(deg(c.latitude), deg(c.longitude), lon0);
+      const pE = uvToLL(100, 0), pNn = uvToLL(0, 100); const tE = tmForward(pE.lat, pE.lon, lon0), tN = tmForward(pNn.lat, pNn.lon, lon0);
+      const k = (Math.hypot(tE.E-cen.E, tE.N-cen.N) + Math.hypot(tN.E-cen.E, tN.N-cen.N))/200; // 축척계수 (수치 미분)
+      const t = tmForward(tl.lat, tl.lon, lon0);
+      return { projected:true, epsg:+GT.crs, sx: GT.gsd*k, sy: GT.gsd*k, tx: t.E, ty: t.N, k, unit:'m', name: TM[GT.crs].name, theta: GT.theta }; }
+    const c = C.Cartographic.fromCartesian(GT.center); const φ = c.latitude;
+    return { projected:false, epsg:4326, sx: deg(GT.gsd/(Nrad(φ)*Math.cos(φ))), sy: deg(GT.gsd/Mrad(φ)), tx: tl.lon, ty: tl.lat, k:1, unit:'°', name:'WGS 84 (경위도)', theta:0 };
+  }
+
+  /* ---- GeoTIFF 작성 ---- */
+  function buildGeoTiff(rgb, W, H, g){
+    const LE = true; const enc = new TextEncoder();
+    const sh = v => { const b = new ArrayBuffer(2*v.length), d = new DataView(b); v.forEach((x,i)=>d.setUint16(i*2, x, LE)); return new Uint8Array(b); };
+    const lo = v => { const b = new ArrayBuffer(4*v.length), d = new DataView(b); v.forEach((x,i)=>d.setUint32(i*4, x, LE)); return new Uint8Array(b); };
+    const db = v => { const b = new ArrayBuffer(8*v.length), d = new DataView(b); v.forEach((x,i)=>d.setFloat64(i*8, x, LE)); return new Uint8Array(b); };
+    const asc = s => enc.encode(s + '\0');
+    const cit = `SISTECH EARTH orthoimage | EPSG:${g.epsg} ${g.name} | GSD ${GT.gsd} m | ${new Date().toISOString()}`;
+    const keys = g.projected ? [1,1,0,5, 1024,0,1,1, 1025,0,1,1, 1026,34737,cit.length+1,0, 3072,0,1,g.epsg, 3076,0,1,9001]
+                             : [1,1,0,5, 1024,0,1,2, 1025,0,1,1, 1026,34737,cit.length+1,0, 2048,0,1,4326, 2054,0,1,9102];
+    const tags = [ // [tag, type, count, bytes]  type 2=ASCII 3=SHORT 4=LONG 12=DOUBLE
+      [256,4,1,lo([W])], [257,4,1,lo([H])], [258,3,3,sh([8,8,8])], [259,3,1,sh([1])], [262,3,1,sh([2])], [273,4,1,lo([0])], [274,3,1,sh([1])], [277,3,1,sh([3])],
+      [278,4,1,lo([H])], [279,4,1,lo([W*H*3])], [284,3,1,sh([1])], [305,2,0,asc('SISTECH EARTH (Cesium orthographic capture)')],
+      [33550,12,3,db([g.sx, g.sy, 0])], [33922,12,6,db([0,0,0, g.tx, g.ty, 0])], [34735,3,keys.length,sh(keys)], [34737,2,0,asc(cit)] ];
+    for(const t of tags) if(t[1]===2) t[2] = t[3].length;
+    const n = tags.length; const ifdOff = 8, ifdLen = 2 + n*12 + 4; let extraOff = ifdOff + ifdLen; if(extraOff%2) extraOff++;
+    const extras = []; let eo = extraOff;
+    for(const t of tags){ if(t[3].length > 4){ t.off = eo; extras.push(t[3]); eo += t[3].length; if(eo%2) eo++; } }
+    const pixOff = eo; const head = new Uint8Array(pixOff); const dv = new DataView(head.buffer);
+    head.set([0x49,0x49,0x2A,0x00]); dv.setUint32(4, ifdOff, LE); dv.setUint16(ifdOff, n, LE);
+    tags.forEach((t,i)=>{ const o = ifdOff + 2 + i*12; dv.setUint16(o, t[0], LE); dv.setUint16(o+2, t[1], LE); dv.setUint32(o+4, t[2], LE);
+      if(t[0]===273){ dv.setUint32(o+8, pixOff, LE); } else if(t[3].length > 4){ dv.setUint32(o+8, t.off, LE); head.set(t[3], t.off); } else { head.set(t[3], o+8); } });
+    dv.setUint32(ifdOff + 2 + n*12, 0, LE);
+    return new Blob([head, rgb], { type:'image/tiff' });
+  }
+
+  /* ---- UI ---- */
+  const css = document.createElement('style'); css.textContent = `
+#gtPanel{position:fixed;right:14px;top:72px;width:360px;max-height:calc(100vh - 120px);z-index:22;display:none;flex-direction:column;overflow:hidden}
+#gtPanel.open{display:flex}
+#gtPanel .hd{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+#gtPanel .hd h2{margin:0;font-size:15px;font-weight:700;flex:1}#gtPanel .hd h2 small{display:block;font-weight:400;color:var(--text-dim);font-size:12px;line-height:1.4}
+#gtPanel .hd button{color:var(--text-dim);font-size:18px;background:none;border:0;cursor:pointer}
+#gtPanel .bd{padding:12px 14px;display:flex;flex-direction:column;gap:10px;overflow:auto}
+#gtPanel .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}#gtPanel .row label{font-size:12px;color:var(--text-dim);white-space:nowrap}
+#gtPanel .row label.k{width:52px;flex:none}
+#gtPanel .seg{display:flex;gap:3px;background:rgba(3,18,42,.6);border:1px solid var(--line);border-radius:999px;padding:2px;flex-wrap:wrap}
+#gtPanel .seg button{padding:4px 9px;border-radius:999px;font-size:12px;color:var(--text-dim);background:none;border:0;cursor:pointer;font-family:var(--font)}
+#gtPanel .seg button.on{background:var(--lime);color:var(--navy-950);font-weight:700}
+#gtPanel input[type=number]{width:74px;height:30px;border-radius:7px;border:1px solid var(--line);background:rgba(0,0,0,.25);color:var(--text);padding:0 8px;font:13px var(--font)}
+#gtPanel .row > button,#gtPanel .btns button{height:30px;padding:0 10px;border-radius:7px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--text);font:600 12px var(--font);cursor:pointer;white-space:nowrap}
+#gtPanel .row > button:hover,#gtPanel .btns button:hover{border-color:var(--lime);color:var(--lime-bright)}
+#gtPanel .row > button.on{background:var(--lime);color:#06224A;border-color:var(--lime)}
+#gtPanel .btns{display:flex;gap:6px;flex-wrap:wrap}#gtPanel .btns button.pri{background:var(--lime);color:#06224A;border-color:var(--lime);font-weight:800}
+#gtPanel .btns button:disabled{opacity:.4;cursor:default}
+#gtPanel .kv{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;font-size:12px}
+#gtPanel .kv div{color:var(--text-dim);background:rgba(0,0,0,.18);border-radius:8px;padding:7px 9px}#gtPanel .kv div b{display:block;color:var(--text);font-size:13px;margin-top:2px;font-variant-numeric:tabular-nums}
+#gtPanel .kv div.w{grid-column:1 / -1}#gtPanel .warn{color:var(--amber)}
+#gtPanel .hint{font-size:11.5px;color:var(--text-dim);line-height:1.5}#gtPanel .hint b{color:var(--lime-bright);font-weight:600}
+#gtPanel .prog{font-size:12px;color:var(--amber)}#gtPanel .prog.ok{color:var(--lime-bright)}
+#gtPanel .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden}#gtPanel .bar i{display:block;height:100%;background:var(--lime);width:0;transition:width .2s}
+#gtPanel .prev{background:rgba(0,0,0,.3);border-radius:10px;padding:6px;display:none;justify-content:center}#gtPanel .prev.on{display:flex}#gtPanel .prev canvas{max-width:100%;max-height:220px;border-radius:6px}
+#gtPanel .chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim)}#gtPanel .chk input{accent-color:var(--lime)}
+@media (max-width:600px){ #gtPanel{ left:0 !important; right:0 !important; top:auto !important; bottom:calc(var(--mTab, 56px) + var(--mSafeB, 0px)) !important; width:100% !important; max-height:62vh !important; border-radius:16px 16px 0 0; z-index:27 !important } }
+@media (max-height:500px) and (min-width:601px) and (max-width:1000px){ #gtPanel{ top:56px !important; right:10px !important; width:330px !important; max-height:calc(100vh - 64px) !important; border-radius:14px } }
+`; document.head.appendChild(css);
+  const P = document.createElement('div'); P.id = 'gtPanel'; P.className = 'panel'; P.innerHTML = `
+<div class="hd"><h2>GeoTIFF 정사영상<small>연직 직교투영 캡처 · 지오레퍼런스 · 3D 모델 최세밀 타일</small></h2><button id="gtClose" aria-label="닫기">×</button></div>
+<div class="bd">
+  <div class="row"><label class="k">구역</label><label>가로</label><input type="number" id="gtW" min="10" max="5000" step="10"><label>m</label><label>세로</label><input type="number" id="gtH" min="10" max="5000" step="10"><label>m</label></div>
+  <div class="row"><label class="k"></label><button id="gtCenter">화면 중심으로</button><button id="gtPick">▭ 지도에서 두 모서리 클릭</button></div>
+  <div class="row"><label class="k">GSD</label><div class="seg" id="gtGsd">${[[0.05,'5 cm'],[0.1,'10 cm'],[0.2,'20 cm'],[0.5,'50 cm'],[1,'1 m']].map(([v,n])=>`<button data-v="${v}">${n}</button>`).join('')}</div></div>
+  <div class="row"><label class="k">좌표계</label><div class="seg" id="gtCrs">${[['4326','EPSG:4326 경위도'],['5185','5185 서부'],['5186','5186 중부'],['5187','5187 동부']].map(([v,n])=>`<button data-v="${v}">${n}</button>`).join('')}</div></div>
+  <div class="kv" id="gtInfo"></div>
+  <label class="chk"><input type="checkbox" id="gtPng"> PNG + 월드파일(.pgw)도 함께 저장</label>
+  <div class="btns"><button id="gtStart" class="pri">▶ 캡처 시작</button><button id="gtStop" disabled>중지</button><button id="gtDl" disabled>⬇ GeoTIFF 다운로드</button></div>
+  <div class="prog" id="gtProg">구역과 해상도를 정하고 캡처를 시작하세요</div><div class="bar"><i id="gtBar"></i></div>
+  <div class="prev" id="gtPrev"><canvas id="gtPrevCv"></canvas></div>
+  <div class="hint"><b>정사 투영</b> 직교 프러스텀 + 연직 카메라(평행 광선) · frustum.width = 버퍼폭 × GSD → 화소 = GSD · 화면보다 큰 구역은 타일로 나눠 캡처 후 합성 · 각 타일은 3D 모델 최세밀(SSE 2) 로딩 후 캡처<br>
+  <b>지오레퍼런스</b> ModelTiepoint(좌상단) + ModelPixelScale · <b>4326</b>: Δλ = GSD/(N·cosφ), Δφ = GSD/M (N 묘유선·M 자오선 곡률반경, GRS80) · <b>TM</b>: Snyder 급수(원점 38°N, k0 = 1, FE 200,000 · FN 600,000) · 자오선수차각만큼 화면을 회전해 행·열을 그리드 북에 정렬 · 축척계수 k 반영 · 높이 성분은 투영에서 제거(연직 투영)</div>
+</div>`; document.body.appendChild(P);
+  const q = s => P.querySelector(s);
+  function pickGround(pos){ let c = null; const pk = scene.pick(pos); if(C.defined(pk) && scene.pickPositionSupported) c = scene.pickPosition(pos); if(!c){ const ray = camera.getPickRay(pos); c = ray && globe.pick(ray, scene); } if(!c) c = camera.pickEllipsoid(pos, globe.ellipsoid); return c || null; }
+  function setCenterFromView(){ const cv = scene.canvas; const c = pickGround(new C.Cartesian2(cv.clientWidth/2, cv.clientHeight/2)); if(c){ GT.center = c; computeTheta(); draw(); info(); } else toast('화면 중심의 지면을 찾지 못했습니다'); }
+  function openPanel(){ GT.open = true; P.classList.add('open'); q('#gtW').value = GT.w; q('#gtH').value = GT.h; q('#gtPng').checked = GT.png; segs(); if(!GT.center) setCenterFromView(); else { draw(); info(); } }
+  function closePanel(){ GT.open = false; P.classList.remove('open'); GT.picking = false; q('#gtPick').classList.remove('on'); clearEnts(); if(GT.running) GT.cancel = true; }
+  q('#gtClose').onclick = closePanel;
+  function segs(){ q('#gtGsd').querySelectorAll('button').forEach(b=>b.classList.toggle('on', +b.dataset.v===GT.gsd)); q('#gtCrs').querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.v===GT.crs)); }
+  q('#gtGsd').querySelectorAll('button').forEach(b=>b.onclick=()=>{ GT.gsd = +b.dataset.v; segs(); info(); });
+  q('#gtCrs').querySelectorAll('button').forEach(b=>b.onclick=()=>{ GT.crs = b.dataset.v; computeTheta(); segs(); draw(); info(); });
+  q('#gtW').onchange = ()=>{ GT.w = Math.max(10, Math.min(5000, +q('#gtW').value||300)); q('#gtW').value = GT.w; draw(); info(); };
+  q('#gtH').onchange = ()=>{ GT.h = Math.max(10, Math.min(5000, +q('#gtH').value||300)); q('#gtH').value = GT.h; draw(); info(); };
+  q('#gtPng').onchange = ()=>{ GT.png = q('#gtPng').checked; };
+  q('#gtCenter').onclick = setCenterFromView;
+  q('#gtPick').onclick = ()=>{ GT.picking = !GT.picking; GT.pickA = null; q('#gtPick').classList.toggle('on', GT.picking); scene.canvas.style.cursor = GT.picking ? 'crosshair' : ''; if(GT.picking) toast('첫 모서리 클릭 → 반대쪽 모서리 클릭 (진북 기준 사각형)', 3500); };
+  const MAXPX = 30e6;
+  function dims(){ const W = Math.ceil(GT.w/GT.gsd), H = Math.ceil(GT.h/GT.gsd); return { W, H, px: W*H, mb: W*H*3/1048576 }; }
+  function info(){ if(!GT.center) return; const d = dims(); const c = C.Cartographic.fromCartesian(GT.center); const cv = scene.canvas; const nx = Math.ceil(d.W/cv.width), ny = Math.ceil(d.H/cv.height);
+    const g = georef(d.W, d.H); const over = d.px > MAXPX;
+    q('#gtInfo').innerHTML = `<div>출력 화소<b class="${over?'warn':''}">${d.W.toLocaleString()} × ${d.H.toLocaleString()} px${over?' · 상한 초과':''}</b></div><div>예상 용량 (TIFF)<b>${d.mb>=1024?(d.mb/1024).toFixed(2)+' GB':d.mb.toFixed(0)+' MB'}</b></div><div>캡처 타일<b>${nx} × ${ny} = ${nx*ny}장 (버퍼 ${cv.width}×${cv.height})</b></div><div>화상 회전 (그리드 북)<b>${g.projected? (deg(g.theta)).toFixed(3)+'° · k '+g.k.toFixed(6) : '0° (진북)'}</b></div><div class="w">중심 ${deg(c.latitude).toFixed(6)}, ${deg(c.longitude).toFixed(6)} · 좌상단 ${g.projected? 'E '+g.tx.toFixed(2)+' / N '+g.ty.toFixed(2)+' m' : g.tx.toFixed(7)+', '+g.ty.toFixed(7)} · 화소 ${g.projected? g.sx.toFixed(4)+' m' : g.sx.toExponential(3)+'° × '+g.sy.toExponential(3)+'°'}</div>`;
+    q('#gtStart').disabled = over || GT.running; }
+  function clearEnts(){ for(const e of GT.ents) viewer.entities.remove(e); GT.ents = []; }
+  function corners(){ const hw = GT.w/2, hh = GT.h/2; return [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].map(([u,v])=>uvToWorld(u,v,0)); }
+  function draw(){ clearEnts(); if(!GT.center || !GT.open) return; const cs = corners();
+    GT.ents.push(viewer.entities.add({ polyline:{ positions: cs.concat([cs[0]]), width: 2.5, clampToGround: true, classificationType: C.ClassificationType.BOTH, material: new C.PolylineDashMaterialProperty({ color: LIME.withAlpha(.95), dashLength: 14 }) } }));
+    GT.ents.push(viewer.entities.add({ position: GT.center, point:{ pixelSize: 8, color: LIME, outlineColor: C.Color.fromCssColorString('#06224A'), outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY } }));
+    const top = uvToWorld(0, GT.h/2+8, 0); GT.ents.push(viewer.entities.add({ position: top, label:{ text: (TM[GT.crs]?'그리드 북 ↑ EPSG:'+GT.crs:'진북 ↑ EPSG:4326')+' · '+Math.round(GT.w)+' × '+Math.round(GT.h)+' m', font:'12px Inter, "Noto Sans KR", sans-serif', fillColor: C.Color.WHITE, showBackground: true, backgroundColor: C.Color.fromCssColorString('#06224A').withAlpha(.75), backgroundPadding: new C.Cartesian2(5,3), disableDepthTestDistance: Number.POSITIVE_INFINITY, scale: .9 } })); }
+
+  /* ---- 지도에서 두 모서리 ---- */
+  const _gtClick = handler.getInputAction(C.ScreenSpaceEventType.LEFT_CLICK), _gtMove = handler.getInputAction(C.ScreenSpaceEventType.MOUSE_MOVE);
+  function setFromCorners(A, B, final){ const enu = C.Transforms.eastNorthUpToFixedFrame(A); const inv = C.Matrix4.inverseTransformation(enu, new C.Matrix4()); const l = C.Matrix4.multiplyByPoint(inv, B, new C.Cartesian3());
+    const w = Math.max(10, Math.abs(l.x)), h = Math.max(10, Math.abs(l.y)); const mid = C.Matrix4.multiplyByPoint(enu, new C.Cartesian3(l.x/2, l.y/2, 0), new C.Cartesian3());
+    GT.center = mid; GT.w = Math.round(w); GT.h = Math.round(h); q('#gtW').value = GT.w; q('#gtH').value = GT.h; computeTheta(); draw(); if(final) info(); }
+  handler.setInputAction(e=>{ if(!GT.open || !GT.picking) return _gtClick && _gtClick(e); const g = pickGround(e.position); if(!g) return;
+    if(!GT.pickA){ GT.pickA = g; toast('반대쪽 모서리를 클릭하세요', 2000); return; }
+    setFromCorners(GT.pickA, g, true); GT.picking = false; GT.pickA = null; q('#gtPick').classList.remove('on'); scene.canvas.style.cursor=''; }, C.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction(e=>{ if(GT.open && GT.picking && GT.pickA){ const g = pickGround(e.endPosition); if(g) setFromCorners(GT.pickA, g, false); } return _gtMove && _gtMove(e); }, C.ScreenSpaceEventType.MOUSE_MOVE);
+
+  /* ---- 캡처 ---- */
+  const tsets = () => PROJECTS.filter(p=>p.ts && p.ts.show).map(p=>p.ts);
+  const sleep = ms => new Promise(r=>setTimeout(r, ms));
+  function lockSSE(ts, v){ try{ const own = Object.getOwnPropertyDescriptor(ts, 'maximumScreenSpaceError'); ts.__gtSse = own ? own.value : ts.maximumScreenSpaceError; Object.defineProperty(ts, 'maximumScreenSpaceError', { get: ()=>v, set: ()=>{}, configurable: true, enumerable: true }); }catch(e){} }
+  function unlockSSE(ts){ try{ delete ts.maximumScreenSpaceError; ts.maximumScreenSpaceError = ts.__gtSse!=null ? ts.__gtSse : STATE.sse; }catch(e){} }
+  async function waitLoaded(ms){ const t0 = performance.now(); let stable = 0; while(performance.now()-t0 < ms){ if(GT.cancel) return false; scene.render(); const ok = tsets().every(ts=>ts.tilesLoaded) && globe.tilesLoaded; if(ok){ stable++; if(stable>=3) return true; } else stable = 0; await sleep(100); } return false; }
+  async function start(){
+    if(GT.running || !GT.center) return; const d = dims(); if(d.px > MAXPX) return toast('출력 화소가 상한(3천만)을 넘습니다 · 구역을 줄이거나 GSD를 키우세요', 3500);
+    if(!tsets().length && !confirm('표시 중인 3D 모델이 없습니다. 위성영상·지형만으로 캡처할까요?')) return;
+    GT.running = true; GT.cancel = false; GT.out = null; q('#gtStart').disabled = true; q('#gtStop').disabled = false; q('#gtDl').disabled = true; q('#gtPrev').classList.remove('on');
+    const cv = scene.canvas; const TW = cv.width, TH = cv.height; const nx = Math.ceil(d.W/TW), ny = Math.ceil(d.H/TH); const total = nx*ny;
+    const out = document.createElement('canvas'); out.width = d.W; out.height = d.H; const g2 = out.getContext('2d');
+    // 상태 저장
+    const saved = { pos: camera.position.clone(), heading: camera.heading, pitch: camera.pitch, roll: camera.roll, inputs: scene.screenSpaceCameraController.enableInputs, mds: (typeof mDS!=='undefined' ? mDS.show : true), fog: scene.fog.enabled, ortho: camera.frustum instanceof C.OrthographicFrustum };
+    for(const ts of tsets()) lockSSE(ts, 2);
+    for(const e of GT.ents) e.show = false; scene.fog.enabled = false; scene.screenSpaceCameraController.enableInputs = false;
+    // 핀·측정·분석 엔티티, 지명 라벨 영상은 캡처에서 제외
+    const dsShow = []; for(let i=0;i<viewer.dataSources.length;i++){ const ds = viewer.dataSources.get(i); dsShow.push([ds, ds.show]); ds.show = false; }
+    saved.ents = viewer.entities.show; viewer.entities.show = false; saved.labels = (typeof layersImg!=='undefined' && layersImg.labels) ? layersImg.labels.show : null; if(saved.labels!==null) layersImg.labels.show = false;
+    const cen = C.Cartographic.fromCartesian(GT.center); const camZ = 2500; // 중심 지면 + 2.5 km (연직 직교투영이라 고도는 축척에 무관)
+    let done = 0, timeouts = 0;
+    try{
+      camera.switchToOrthographicFrustum();
+      for(let iy=0; iy<ny && !GT.cancel; iy++) for(let ix=0; ix<nx && !GT.cancel; ix++){
+        const u = -d.W*GT.gsd/2 + (ix*TW + TW/2)*GT.gsd, v = d.H*GT.gsd/2 - (iy*TH + TH/2)*GT.gsd;
+        const dest = uvToWorld(u, v, camZ);
+        camera.setView({ destination: dest, orientation:{ heading: GT.theta||0, pitch: -Math.PI/2, roll: 0 } });
+        camera.frustum.aspectRatio = TW/TH; camera.frustum.width = TW*GT.gsd; camera.frustum.near = 1; camera.frustum.far = camZ + 5000;
+        q('#gtProg').textContent = `타일 ${done+1} / ${total} 캡처 중 … 3D 모델 최세밀 타일 로딩`; q('#gtBar').style.width = (done/total*100).toFixed(1)+'%';
+        const ok = await waitLoaded(25000); if(GT.cancel) break; if(!ok) timeouts++;
+        camera.frustum.aspectRatio = TW/TH; camera.frustum.width = TW*GT.gsd; scene.render();
+        g2.drawImage(cv, 0, 0, TW, TH, ix*TW, iy*TH, TW, TH);
+        done++;
+      }
+    }catch(e){ console.error(e); toast('캡처 오류: '+e.message, 4000); }
+    // 복원
+    try{ camera.switchToPerspectiveFrustum(); camera.setView({ destination: saved.pos, orientation:{ heading: saved.heading, pitch: saved.pitch, roll: saved.roll } }); }catch(e){}
+    for(const ts of tsets()) unlockSSE(ts); for(const [ds, s] of dsShow) ds.show = s; viewer.entities.show = saved.ents; if(saved.labels!==null) layersImg.labels.show = saved.labels; for(const e of GT.ents) e.show = true; scene.fog.enabled = saved.fog; scene.screenSpaceCameraController.enableInputs = saved.inputs;
+    GT.running = false; q('#gtStop').disabled = true; q('#gtStart').disabled = false;
+    if(GT.cancel || done < total){ q('#gtProg').textContent = '캡처 중지됨 ('+done+' / '+total+')'; q('#gtBar').style.width = '0'; return; }
+    GT.meta = georef(d.W, d.H); GT.out = out;
+    q('#gtProg').textContent = `캡처 완료 · ${d.W}×${d.H} px · ${total}장 합성${timeouts? ' · 로딩 시간 초과 '+timeouts+'장(세밀도 낮을 수 있음)':''} · GeoTIFF 생성 중 …`; q('#gtBar').style.width = '100%';
+    const pc = q('#gtPrevCv'); const sc = Math.min(1, 320/d.W, 220/d.H); pc.width = Math.round(d.W*sc); pc.height = Math.round(d.H*sc); pc.getContext('2d').drawImage(out, 0, 0, pc.width, pc.height); q('#gtPrev').classList.add('on');
+    await sleep(30);
+    try{ const img = g2.getImageData(0, 0, d.W, d.H).data; const rgb = new Uint8Array(d.W*d.H*3); for(let i=0, j=0; i<img.length; i+=4, j+=3){ rgb[j]=img[i]; rgb[j+1]=img[i+1]; rgb[j+2]=img[i+2]; }
+      GT.blob = buildGeoTiff(rgb, d.W, d.H, GT.meta); q('#gtDl').disabled = false; q('#gtProg').textContent = `완료 · ${d.W}×${d.H} px · EPSG:${GT.meta.epsg} · ${(GT.blob.size/1048576).toFixed(0)} MB`; q('#gtProg').classList.add('ok'); toast('GeoTIFF 준비 완료 · 다운로드 버튼을 누르세요', 3000);
+    }catch(e){ console.error(e); q('#gtProg').textContent = 'GeoTIFF 생성 실패: '+e.message; }
+  }
+  function dl(name, blob){ const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1500); }
+  const stamp = ()=>{ const d=new Date(), p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; };
+  q('#gtStart').onclick = start;
+  q('#gtStop').onclick = ()=>{ GT.cancel = true; };
+  q('#gtDl').onclick = async ()=>{ if(!GT.blob) return; const base = `정사영상_EPSG${GT.meta.epsg}_GSD${Math.round(GT.gsd*100)}cm_${stamp()}`; dl(base+'.tif', GT.blob);
+    if(GT.png && GT.out){ const g = GT.meta; const pgw = [g.sx, 0, 0, -g.sy, g.tx + g.sx/2, g.ty - g.sy/2].map(v=>g.projected? v.toFixed(6) : v.toFixed(12)).join('\n'); await new Promise(res=>GT.out.toBlob(b=>{ setTimeout(()=>{ dl(base+'.png', b); dl(base+'.pgw', new Blob([pgw], {type:'text/plain'})); res(); }, 400); }, 'image/png')); }
+    toast('저장: '+base+'.tif'+(GT.png?' + .png/.pgw':''), 3500); };
+  document.addEventListener('keydown', e=>{ if(e.key==='Escape' && GT.open){ if(GT.picking){ GT.picking=false; GT.pickA=null; q('#gtPick').classList.remove('on'); scene.canvas.style.cursor=''; } } });
+  // EARTH 전환 등 다른 창 닫기와 함께 닫힘
+  try{ const _cap = closeAllPanels; closeAllPanels = function(){ _cap.apply(this, arguments); if(GT.open) closePanel(); }; }catch(e){}
+  window.__GT = GT; window.__GT.tmForward = tmForward;
+})();
+
 </script>
 
 </body>
