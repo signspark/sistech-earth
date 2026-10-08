@@ -5052,6 +5052,183 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   window.__GT = GT; window.__GT.tmForward = tmForward;
 })();
 
+
+/* ---------- 44. SITE › 지적 (인천광역시 공개 지적도): 인천시 지도포털(I-MAP) 공개 WMS/WFS(MapPrime, 인증 없음·CORS 허용) ----------
+   레이어(모두 켜고 끄기 가능):
+     cadLine  연속지적도 · 필지 경계 + 지번   : WFS incheon:por_lsmd_cont_ldreg → 화면 범위 벡터 → 3D 모델·지형 위에 밀착(GroundPolylinePrimitive, classificationType BOTH) · 고도 2 km 이상이면 WMS 영상으로 자동 전환
+     cadJimok 지목별 색 (면)               : 같은 WFS 필지의 지번 끝 글자(지목 부호: 전·답·과·목·임·광·염·대·장·학·차·주·창·도·철·제·천·구·유·양·수·공·체·원·종·사·묘·잡) → 색 채움(GroundPrimitive) · 범례
+     cadEmd   법정동 경계 + 이름            : WFS incheon:tl_scco_emd (156개)
+     cadSig   시군구 경계 + 이름            : WFS incheon:tl_scco_sig (11개)
+     cadWms   연속지적도 WMS (지형용 영상)    : WMS incheon:por_lsmd_cont_ldreg · 지형 위 영상(3D 모델 아래는 가려짐) · 광역 확인용
+   클릭: 필지 레이어가 켜져 있으면 지도 클릭 → 필지 카드(지번·지목·PNU·법정동·면적·둘레)
+   출처: 인천광역시 지도포털 https://imap.incheon.go.kr (연속지적도는 임의 편집되어 측량용으로 사용할 수 없음)
+*/
+(function(){
+  const C = Cesium;
+  const BASE = 'https://imap.incheon.go.kr/MapPrimeServer/map/';
+  const INCHEON = { w:124.5, s:36.9, e:127.05, n:37.98 };
+  const CAD = { feats:new Map(), lineP:null, fillP:null, labels:null, emd:null, sig:null, wmsL:null, loading:false, lastKey:'', wmsAuto:false, legendEl:null, picked:null };
+  const deg = r=>r*180/Math.PI, rad = d=>d*Math.PI/180;
+  const LIME = C.Color.fromCssColorString('#BFE33A');
+  const LINE_COL = C.Color.fromCssColorString('#00C8FF').withAlpha(.95);
+  const JIMOK = { '전':['전',  '#F5E79E'], '답':['답','#CDE8A6'], '과':['과수원','#F8C98F'], '목':['목장용지','#E3D1A1'], '임':['임야','#9ED59B'], '광':['광천지','#DCC3EA'], '염':['염전','#CBEAF6'],
+    '대':['대','#FFD1A8'], '장':['공장용지','#C8B4E6'], '학':['학교용지','#FFE6B3'], '차':['주차장','#D2D2D2'], '주':['주유소용지','#F8CFE0'], '창':['창고용지','#E2C8A4'], '도':['도로','#BEBEBE'], '철':['철도용지','#9C9C9C'],
+    '제':['제방','#B3C6DE'], '천':['하천','#9AD0F5'], '구':['구거','#A5D6F8'], '유':['유지','#B7E3FB'], '양':['양어장','#C9F1F6'], '수':['수도용지','#D5F2FA'], '공':['공원','#B9E6C9'], '체':['체육용지','#C8F1D9'], '원':['유원지','#FFE0F0'],
+    '종':['종교용지','#E7D3F3'], '사':['사적지','#F6E7CD'], '묘':['묘지','#E1E1C2'], '잡':['잡종지','#E9E9E9'] };
+  const jimokOf = jb => { const m = (jb||'').match(/([가-힣])$/); return m ? m[1] : ''; };
+  const EMD_NAME = new Map(); // emd_cd(8) → 이름
+
+  /* ---- 메뉴: SITE › 지적 (지역 다음) ---- */
+  const icon = '<svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 11h8M11 5v14M11 15h10M16 11v8"/></svg>';
+  const cat = { id:'cadastre', name:'지적', icon, items:[
+    { id:'cadLine',  q:'이 땅의 필지 경계와 지번은', name:'연속지적도 · 필지 경계·지번', src:'인천시 지도포털 WFS · 화면 범위 필지를 3D 모델·지형 위에 밀착 표시 · 지번 라벨(가까이) · 클릭하면 필지 카드 · 고도 1.5 km 이상은 WMS 영상', type:'layer' },
+    { id:'cadJimok', q:'땅의 용도(지목)는', name:'지목별 색 (전·답·대·도로 등 28종)', src:'필지 지번 끝 글자(지목 부호) 기준 채움 · 범례 표시', type:'layer' },
+    { id:'cadEmd',   q:'법정동 경계는', name:'법정동 경계·이름', src:'인천시 지도포털 WFS tl_scco_emd · 156개 동', type:'layer' },
+    { id:'cadSig',   q:'구·군 경계는', name:'시군구 경계·이름', src:'인천시 지도포털 WFS tl_scco_sig · 11개 구·군(2026 개편 반영)', type:'layer' },
+    { id:'cadWms',   q:'넓은 범위의 지적도를 영상으로', name:'연속지적도 WMS (지형 위 영상)', src:'인천시 지도포털 WMS · 지형 위 타일 영상 · 3D 모델 아래는 가려짐 · 광역 확인용', type:'layer' },
+  ]};
+  if(!MENUS.site.some(c=>c.id==='cadastre')){ const ri = MENUS.site.findIndex(c=>c.id==='region'); MENUS.site.splice(ri<0?1:ri+1, 0, cat); }
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  /* ---- 공통 ---- */
+  const inIncheon = (w,s,e,n) => !(e < INCHEON.w || w > INCHEON.e || n < INCHEON.s || s > INCHEON.n);
+  async function wfs(type, bbox, count){ const u = BASE + 'wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=' + encodeURIComponent(type) + '&SRSNAME=EPSG:4326&OUTPUTFORMAT=application/json&COUNT=' + (count||5000) + (bbox? '&BBOX=' + bbox.join(',') + ',EPSG:4326' : ''); const r = await fetch(u); if(!r.ok) throw new Error('WFS '+r.status); return r.json(); }
+  function rings(geom){ const out = []; if(!geom) return out; if(geom.type==='Polygon') out.push(...geom.coordinates); else if(geom.type==='MultiPolygon') for(const p of geom.coordinates) out.push(...p); return out; }
+  function centroid(ring){ let a=0, cx=0, cy=0; for(let i=0;i<ring.length-1;i++){ const [x0,y0]=ring[i], [x1,y1]=ring[i+1]; const f = x0*y1 - x1*y0; a += f; cx += (x0+x1)*f; cy += (y0+y1)*f; } if(Math.abs(a)<1e-12){ return ring[0]; } a*=0.5; return [cx/(6*a), cy/(6*a)]; }
+  function inRing(x, y, ring){ let inside=false; for(let i=0, j=ring.length-1; i<ring.length; j=i++){ const xi=ring[i][0], yi=ring[i][1], xj=ring[j][0], yj=ring[j][1]; if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi)) inside=!inside; } return inside; }
+  function geoArea(ring){ const R=6371008.8; let s=0; for(let i=0;i<ring.length-1;i++){ const a=ring[i], b=ring[i+1]; s += (rad(b[0])-rad(a[0]))*(2+Math.sin(rad(a[1]))+Math.sin(rad(b[1]))); } return Math.abs(s*R*R/2); }
+  function geoLen(ring){ let d=0; for(let i=1;i<ring.length;i++) d += new C.EllipsoidGeodesic(C.Cartographic.fromDegrees(ring[i-1][0], ring[i-1][1]), C.Cartographic.fromDegrees(ring[i][0], ring[i][1])).surfaceDistance; return d; }
+  function groundAlt(){ const c = camera.positionCartographic; let g = 0; try{ g = globe.getHeight(c) || 0; }catch(e){} return Math.max(0, c.height - g); }
+  function viewBox(){ const r = camera.computeViewRectangle(globe.ellipsoid); if(!r) return null; return [deg(r.west), deg(r.south), deg(r.east), deg(r.north)]; }
+  const fmtArea = a => a>=1e6? (a/1e6).toFixed(2)+' ㎢' : Math.round(a).toLocaleString()+' ㎡ · '+(a/3.3058).toFixed(0)+' 평';
+
+  /* ---- 1·2. 필지 (선·지번 / 지목 면) ---- */
+  function clearParcels(){ if(CAD.lineP){ scene.groundPrimitives.remove(CAD.lineP); CAD.lineP=null; } if(CAD.fillP){ scene.groundPrimitives.remove(CAD.fillP); CAD.fillP=null; } if(CAD.labels){ scene.primitives.remove(CAD.labels); CAD.labels=null; } CAD.feats.clear(); CAD.lastKey=''; }
+  function wantParcels(){ return STATE.on.has('cadLine') || STATE.on.has('cadJimok'); }
+  async function refreshParcels(force){
+    if(!wantParcels()) return;
+    const alt = groundAlt(); const bb = viewBox(); if(!bb) return;
+    if(alt > 1500){ // 광역: 벡터 대신 WMS 영상
+      if(STATE.on.has('cadLine') && !CAD.wmsAuto){ CAD.wmsAuto = true; showWms(); toast('고도 1.5 km 이상 · 연속지적도를 WMS 영상으로 표시 (확대하면 필지 벡터·지번)', 2600); }
+      if(CAD.lineP) CAD.lineP.show = false; if(CAD.fillP) CAD.fillP.show = false; if(CAD.labels) CAD.labels.show = false; return; }
+    if(CAD.wmsAuto){ CAD.wmsAuto = false; if(!STATE.on.has('cadWms')) hideWms(); }
+    if(CAD.lineP) CAD.lineP.show = STATE.on.has('cadLine'); if(CAD.fillP) CAD.fillP.show = STATE.on.has('cadJimok'); if(CAD.labels) CAD.labels.show = STATE.on.has('cadLine');
+    if(!inIncheon(...bb)){ if(force) toast('인천광역시 밖에서는 지적도가 제공되지 않습니다 (인천시 지도포털 자료)', 3000); return; }
+    // 화면 범위(여유 10%) · 너무 넓으면 중심 2 km 사각으로 제한
+    let [w,s,e,n] = bb; const pw=(e-w)*0.1, ph=(n-s)*0.1; w-=pw; e+=pw; s-=ph; n+=ph;
+    const cx=(w+e)/2, cy=(s+n)/2; const maxLon = 0.016, maxLat = 0.011; // 약 1.4 × 1.2 km if(e-w > maxLon){ w = cx-maxLon/2; e = cx+maxLon/2; } if(n-s > maxLat){ s = cy-maxLat/2; n = cy+maxLat/2; }
+    const key = [w,s,e,n].map(v=>v.toFixed(4)).join(','); if(!force && key===CAD.lastKey) return; if(CAD.loading) { CAD.pending = true; return; }
+    CAD.loading = true; CAD.lastKey = key;
+    try{
+      const j = await wfs('incheon:por_lsmd_cont_ldreg', [w,s,e,n], 5000);
+      let added = 0; for(const f of j.features){ const pnu = f.properties.pnu || f.id; if(!CAD.feats.has(pnu)){ CAD.feats.set(pnu, f); added++; } }
+      // 캐시 상한: 멀리 있는 필지 제거
+      if(CAD.feats.size > 9000){ for(const [k,f] of CAD.feats){ const r0 = rings(f.geometry)[0]; if(!r0) continue; const c = r0[0]; if(c[0]<w-0.02||c[0]>e+0.02||c[1]<s-0.02||c[1]>n+0.02) CAD.feats.delete(k); if(CAD.feats.size <= 7000) break; } }
+      rebuildParcels();
+      if(j.features.length >= 5000) toast('필지가 5,000개를 넘어 일부만 표시됩니다 · 더 확대해 주세요', 3000);
+    }catch(e){ toast('지적도 불러오기 실패: '+e.message, 3500); }
+    CAD.loading = false; if(CAD.pending){ CAD.pending = false; refreshParcels(); }
+  }
+  function rebuildParcels(){
+    if(CAD.lineP){ scene.groundPrimitives.remove(CAD.lineP); CAD.lineP=null; } if(CAD.fillP){ scene.groundPrimitives.remove(CAD.fillP); CAD.fillP=null; } if(CAD.labels){ scene.primitives.remove(CAD.labels); CAD.labels=null; }
+    const lines = [], fills = []; const labels = new C.LabelCollection(); const labelReq = [];
+    for(const [pnu, f] of CAD.feats){
+      const rs = rings(f.geometry); if(!rs.length) continue; const jb = f.properties.jibun || ''; const jm = jimokOf(jb);
+      for(const r of rs){ if(r.length < 4) continue; const pos = C.Cartesian3.fromDegreesArray(r.flat());
+        lines.push(new C.GeometryInstance({ geometry: new C.GroundPolylineGeometry({ positions: pos, width: 1.6 }), attributes:{ color: C.ColorGeometryInstanceAttribute.fromColor(LINE_COL) }, id:'cad:'+pnu }));
+        const col = JIMOK[jm] ? C.Color.fromCssColorString(JIMOK[jm][1]).withAlpha(.45) : C.Color.WHITE.withAlpha(.15);
+        fills.push(new C.GeometryInstance({ geometry: new C.PolygonGeometry({ polygonHierarchy: new C.PolygonHierarchy(pos) }), attributes:{ color: C.ColorGeometryInstanceAttribute.fromColor(col) }, id:'cadf:'+pnu })); }
+      const c = centroid(rs[0]); if(jb && labelReq.length < 3000) labelReq.push({ lon:c[0], lat:c[1], text: jb.replace(/[가-힣]$/, ''), pnu });
+    }
+    if(lines.length){ CAD.lineP = scene.groundPrimitives.add(new C.GroundPolylinePrimitive({ geometryInstances: lines, appearance: new C.PolylineColorAppearance(), classificationType: C.ClassificationType.BOTH, asynchronous: true })); CAD.lineP.show = STATE.on.has('cadLine'); }
+    if(fills.length){ CAD.fillP = scene.groundPrimitives.add(new C.GroundPrimitive({ geometryInstances: fills, appearance: new C.PerInstanceColorAppearance({ flat: true }), classificationType: C.ClassificationType.BOTH, asynchronous: true })); CAD.fillP.show = STATE.on.has('cadJimok'); }
+    CAD.labels = scene.primitives.add(labels); CAD.labels.show = STATE.on.has('cadLine');
+    // 지번 라벨: 지형 높이를 비동기로 한 번에 샘플링(동기 globe.getHeight 반복 호출은 멈춤 유발) → 지면 +1.5 m
+    const myLabels = labels; (async ()=>{ let hs = null; try{ hs = await C.sampleTerrain(globe.terrainProvider, 13, labelReq.map(r=>C.Cartographic.fromDegrees(r.lon, r.lat))); }catch(e){ hs = null; }
+      if(CAD.labels !== myLabels) return; // 그 사이 다시 그려졌으면 폐기
+      labelReq.forEach((r,i)=>{ const h = hs && hs[i] && isFinite(hs[i].height) ? hs[i].height : 0; myLabels.add({ position: C.Cartesian3.fromDegrees(r.lon, r.lat, h + 1.5), text: r.text, font: '11px Inter, "Noto Sans KR", sans-serif', fillColor: C.Color.WHITE, outlineColor: C.Color.fromCssColorString('#03122A'), outlineWidth: 3, style: C.LabelStyle.FILL_AND_OUTLINE, disableDepthTestDistance: Number.POSITIVE_INFINITY, distanceDisplayCondition: new C.DistanceDisplayCondition(0, 700), scale: 0.95, id:'cadl:'+r.pnu }); }); })();
+    updateSrc();
+  }
+  let moveT = null; camera.moveEnd.addEventListener(()=>{ if(!wantParcels()) return; clearTimeout(moveT); moveT = setTimeout(()=>refreshParcels(false), 250); });
+
+  /* ---- 범례 (지목) ---- */
+  function showLegend(){ if(CAD.legendEl) return; const el = document.createElement('div'); el.id='cadLegend'; el.className='panel'; el.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:72px;z-index:21;padding:8px 12px;display:flex;flex-wrap:wrap;gap:4px 10px;max-width:min(92vw,760px);font-size:11px;color:var(--text)';
+    el.innerHTML = '<b style="width:100%;font-size:12px;color:var(--lime-bright)">지목 범례 (지번 끝 글자 기준 · 인천시 연속지적도)</b>' + Object.entries(JIMOK).map(([k,v])=>`<span><i style="display:inline-block;width:11px;height:11px;border-radius:2px;background:${v[1]};vertical-align:-1px;margin-right:4px;border:1px solid rgba(0,0,0,.3)"></i>${v[0]}(${k})</span>`).join(''); document.body.appendChild(el); CAD.legendEl = el; }
+  function hideLegend(){ if(CAD.legendEl){ CAD.legendEl.remove(); CAD.legendEl=null; } }
+
+  /* ---- 3·4. 법정동·시군구 경계 ---- */
+  async function loadAdmin(kind){ // kind: 'emd' | 'sig'
+    const type = kind==='emd' ? 'incheon:tl_scco_emd' : 'incheon:tl_scco_sig'; const nameK = kind==='emd' ? 'emd_kor_nm' : 'sig_kor_nm'; const codeK = kind==='emd' ? 'emd_cd' : 'sig_cd';
+    toast((kind==='emd'?'법정동':'시군구')+' 경계 불러오는 중 (인천시 지도포털) …', 2000);
+    const j = await wfs(type, null, 2000); const col = kind==='emd' ? C.Color.fromCssColorString('#FFB454').withAlpha(.95) : C.Color.fromCssColorString('#FF5D5D').withAlpha(.95);
+    const lines = []; const labels = new C.LabelCollection(); const labelReq = [];
+    for(const f of j.features){ const rs = rings(f.geometry); const nm = f.properties[nameK]; if(kind==='emd' && f.properties[codeK]) EMD_NAME.set(String(f.properties[codeK]), nm);
+      let best = null; for(const r of rs){ if(r.length<4) continue; lines.push(new C.GeometryInstance({ geometry: new C.GroundPolylineGeometry({ positions: C.Cartesian3.fromDegreesArray(r.flat()), width: kind==='emd'?2:3.5 }), attributes:{ color: C.ColorGeometryInstanceAttribute.fromColor(col) } })); const a = geoArea(r); if(!best || a>best.a) best = { a, r }; }
+      if(best && nm){ const cc = centroid(best.r); labelReq.push({ lon: cc[0], lat: cc[1], text: nm }); } }
+    (async ()=>{ let hs = null; try{ hs = await C.sampleTerrain(globe.terrainProvider, 11, labelReq.map(r=>C.Cartographic.fromDegrees(r.lon, r.lat))); }catch(e){ hs = null; }
+      labelReq.forEach((r,i)=>{ const h = hs && hs[i] && isFinite(hs[i].height) ? hs[i].height : 0; labels.add({ position: C.Cartesian3.fromDegrees(r.lon, r.lat, h + 5), text: r.text, font: (kind==='emd'?'13px':'16px')+' Inter, "Noto Sans KR", sans-serif', fillColor: kind==='emd'? C.Color.fromCssColorString('#FFD9A8') : C.Color.fromCssColorString('#FFB3B3'), outlineColor: C.Color.fromCssColorString('#03122A'), outlineWidth: 4, style: C.LabelStyle.FILL_AND_OUTLINE, disableDepthTestDistance: Number.POSITIVE_INFINITY, distanceDisplayCondition: new C.DistanceDisplayCondition(0, kind==='emd'? 25000 : 120000) }); }); })();
+    const P = scene.groundPrimitives.add(new C.GroundPolylinePrimitive({ geometryInstances: lines, appearance: new C.PolylineColorAppearance(), classificationType: C.ClassificationType.BOTH }));
+    const Lc = scene.primitives.add(labels);
+    CAD[kind] = { P, Lc, n: j.features.length };
+    toast((kind==='emd'?'법정동 ':'시군구 ')+j.features.length+'개 경계 표시', 2000);
+  }
+  function unloadAdmin(kind){ const o = CAD[kind]; if(!o) return; scene.groundPrimitives.remove(o.P); scene.primitives.remove(o.Lc); CAD[kind] = null; }
+
+  /* ---- 5. WMS 영상 ---- */
+  function showWms(){ if(CAD.wmsL){ CAD.wmsL.show = true; return; } const prov = new C.WebMapServiceImageryProvider({ url: BASE + 'wms', layers: 'incheon:por_lsmd_cont_ldreg', parameters: { service:'WMS', version:'1.3.0', format:'image/png', transparent:true, styles:'' }, tilingScheme: new C.WebMercatorTilingScheme(), rectangle: C.Rectangle.fromDegrees(INCHEON.w, INCHEON.s, INCHEON.e, INCHEON.n), tileWidth: 512, tileHeight: 512, maximumLevel: 20, credit: new C.Credit('인천광역시 지도포털 연속지적도') });
+    CAD.wmsL = viewer.imageryLayers.addImageryProvider(prov); CAD.wmsL.alpha = 0.9; }
+  function hideWms(){ if(CAD.wmsL) CAD.wmsL.show = false; }
+
+  /* ---- 레이어 등록 (자체 레지스트리 L6 + toggleLayer/updateSrc 체인) ---- */
+  const L6 = {};
+  L6.cadLine = { on: async ()=>{ await refreshParcels(true); if(!CAD.feats.size && groundAlt()<=2000) toast('화면 범위에 필지가 없거나 인천 밖입니다', 2500); }, off: ()=>{ if(CAD.lineP) CAD.lineP.show=false; if(CAD.labels) CAD.labels.show=false; if(CAD.wmsAuto){ CAD.wmsAuto=false; if(!STATE.on.has('cadWms')) hideWms(); } if(!wantParcels()) clearParcels(); closeCard(); },
+    src: ()=> STATE.on.has('cadLine') ? '<b>인천시 지도포털</b> 연속지적도 '+(CAD.wmsAuto?'WMS':CAD.feats.size.toLocaleString()+'필지')+' (OFFICIAL · 측량용 불가)' : '' };
+  L6.cadJimok = { on: async ()=>{ showLegend(); await refreshParcels(true); if(CAD.fillP) CAD.fillP.show = true; }, off: ()=>{ hideLegend(); if(CAD.fillP) CAD.fillP.show=false; if(!wantParcels()) clearParcels(); },
+    src: ()=> STATE.on.has('cadJimok') ? '<b>지목</b> 지번 부호 기준 채움 (DERIVED)' : '' };
+  L6.cadEmd = { on: ()=>loadAdmin('emd'), off: ()=>unloadAdmin('emd'), src: ()=> CAD.emd ? '<b>인천시</b> 법정동 '+CAD.emd.n+'개 (OFFICIAL)' : '' };
+  L6.cadSig = { on: ()=>loadAdmin('sig'), off: ()=>unloadAdmin('sig'), src: ()=> CAD.sig ? '<b>인천시</b> 시군구 '+CAD.sig.n+'개 (OFFICIAL)' : '' };
+  L6.cadWms = { on: ()=>showWms(), off: ()=>{ if(!CAD.wmsAuto) hideWms(); }, src: ()=> STATE.on.has('cadWms') ? '<b>인천시 지도포털</b> 연속지적도 WMS (OFFICIAL)' : '' };
+
+  /* ---- 클릭: 필지 카드 ---- */
+  const CARD = (title, sub, html) => { STATE.point = null; const c = document.getElementById('card'); c.classList.add('open'); document.getElementById('cardTitle').innerHTML = title + '<small>' + (sub||'') + '</small>'; document.getElementById('cardBody').innerHTML = html; };
+  function closeCard(){ if(CAD.picked){ viewer.entities.remove(CAD.picked); CAD.picked = null; } }
+  function pickLL(pos){ let c = null; const pk = scene.pick(pos); if(C.defined(pk) && scene.pickPositionSupported) c = scene.pickPosition(pos); if(!c){ const ray = camera.getPickRay(pos); c = ray && globe.pick(ray, scene); } if(!c) c = camera.pickEllipsoid(pos, globe.ellipsoid); if(!c) return null; const ct = C.Cartographic.fromCartesian(c); return [deg(ct.longitude), deg(ct.latitude)]; }
+  const _cadClick = handler.getInputAction(C.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction(e=>{
+    if(!wantParcels() || STATE.measure || CAD.wmsAuto || (window.__GT && window.__GT.picking)) return _cadClick && _cadClick(e);
+    const ll = pickLL(e.position); if(!ll) return _cadClick && _cadClick(e);
+    let hit = null, hitRing = null; for(const [pnu, f] of CAD.feats){ for(const r of rings(f.geometry)){ if(inRing(ll[0], ll[1], r)){ hit = f; hitRing = r; break; } } if(hit) break; }
+    if(!hit) return _cadClick && _cadClick(e);
+    const p = hit.properties; const jb = p.jibun||''; const jm = jimokOf(jb); const pnu = String(p.pnu||''); const emdCd = pnu.slice(0,8); const emdNm = EMD_NAME.get(emdCd) || ''; const san = pnu.charAt(10)==='2' ? '산 ' : '';
+    const area = rings(hit.geometry).reduce((s,r)=>s+geoArea(r),0); const per = geoLen(hitRing);
+    closeCard(); CAD.picked = viewer.entities.add({ polyline:{ positions: C.Cartesian3.fromDegreesArray(hitRing.flat()), width: 4, clampToGround: true, classificationType: C.ClassificationType.BOTH, material: LIME } });
+    const sigNm = { '28110':'중구','28125':'제물포구','28140':'동구','28155':'영종구','28177':'미추홀구','28185':'연수구','28200':'남동구','28237':'부평구','28245':'계양구','28260':'서구','28275':'서해구','28290':'검단구','28710':'강화군','28720':'옹진군' }[pnu.slice(0,5)] || '';
+    CARD(`${san}${jb.replace(/[가-힣]$/, '')}${jm?' <small style="display:inline;font-size:13px;color:var(--lime-bright)">'+(JIMOK[jm]?JIMOK[jm][0]:jm)+'</small>':''}`, `인천광역시 ${sigNm} ${emdNm}`.trim()+' · 연속지적도 필지', `<div class="sec">
+      <div class="kv"><div>지번<b>${san}${jb.replace(/[가-힣]$/, '')||'-'}</b></div><div>지목<b>${JIMOK[jm]?JIMOK[jm][0]+' ('+jm+')':(jm||'-')}</b></div><div>면적 (도형 계산)<b>${fmtArea(area)}</b></div><div>둘레<b>${Math.round(per).toLocaleString()} m</b></div><div>PNU<b style="font-size:12px;letter-spacing:.02em">${pnu||'-'}</b></div><div>법정동 코드<b>${emdCd||'-'}</b></div></div>
+      <div class="meta"><span class="tag obs">OFFICIAL</span> 인천광역시 지도포털 연속지적도 (WFS) · 면적·둘레는 도형에서 계산한 참고값 · 연속지적도는 임의 편집되어 측량용으로 사용할 수 없습니다</div>
+      <a class="cta ghost" href="https://imap.incheon.go.kr/sgp/bas/main.do" target="_blank" rel="noopener">인천시 지도포털 열기 ↗</a></div>`);
+  }, C.ScreenSpaceEventType.LEFT_CLICK);
+  const _cardClose = document.getElementById('cardClose'); if(_cardClose){ _cardClose.addEventListener('click', closeCard); }
+  // 법정동 이름 표를 미리 (가볍게) 준비: 필지 카드용
+  async function preloadEmdNames(){ if(EMD_NAME.size) return; try{ const r = await fetch(BASE + 'wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=incheon:tl_scco_emd&OUTPUTFORMAT=application/json&COUNT=1000&PROPERTYNAME=emd_cd,emd_kor_nm'); const j = await r.json(); for(const f of j.features) if(f.properties.emd_cd) EMD_NAME.set(String(f.properties.emd_cd), f.properties.emd_kor_nm); }catch(e){} }
+  const _lineOn = L6.cadLine.on; L6.cadLine.on = async ()=>{ preloadEmdNames(); return _lineOn(); };
+  const _toggle6 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(!L6[id]) return _toggle6(id, force);
+    const want = force!==undefined ? force : !STATE.on.has(id);
+    if(want) STATE.on.add(id); else STATE.on.delete(id);
+    try{ if(want) await L6[id].on(); else L6[id].off(); }catch(e){ toast('레이어 오류: '+e.message, 4000); STATE.on.delete(id); }
+    renderCats(); renderSub(); updateSrc();
+  };
+  const _updateSrc6 = updateSrc;
+  updateSrc = function(){ _updateSrc6(); const extra=[]; for(const id of STATE.on){ const s = L6[id]?.src; if(!s) continue; const v = typeof s==='function'? s():s; if(v) extra.push(v); } if(extra.length){ const el = $('#hudSrc'); if(el) el.innerHTML = el.innerHTML.replace('지형 없음', extra.join(' · ')+' · 지형 없음').replace('<b>Esri World Elevation</b> 지형', extra.join(' · ')+' · <b>Esri World Elevation</b> 지형'); } };
+  // 초기 복원 (주소 해시에 켜진 상태로 저장된 경우)
+  for(const id of Object.keys(L6)) if(STATE.on.has(id)) { try{ L6[id].on(); }catch(e){} }
+  // EARTH 전환 등 전체 닫기 시 필지 카드 하이라이트 제거
+  try{ const _cap2 = closeAllPanels; closeAllPanels = function(){ _cap2.apply(this, arguments); closeCard(); }; }catch(e){}
+  window.__CAD = CAD; CAD.fn = { refreshParcels, rebuildParcels, loadAdmin, showWms, hideWms };
+})();
+
 </script>
 
 </body>
