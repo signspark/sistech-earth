@@ -4276,7 +4276,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     const Sx = P.sx, I = P.I; const inl = INL.map(x=>({ ...x }));
     // 5 m 조각별 유출 → 내리막 방향으로 걸어가 만나는 받이에 배정
     const piece = 5, Ap = piece*(ROAD.HW+ROAD.SW)/1e4;   // ha
-    const qp = K.Cr*I*Ap/360/1000;   // m³/s per 5 m piece (합리식 Q = C·I·A/360 [확인], L/s→m³/s)
+    const qp = K.Cr*I*Ap/360;   // m³/s per 5 m piece (합리식 Q = C·I·A/360, A ha·I mm/hr → m³/s [확인])
     inl.forEach(x=>{ x.runoff=0; x.n=0; });
     const gradAt = s => (zAt(s+5)-zAt(s-5))/10;   // +: s 증가 방향으로 오르막
     for(let s=2.5; s<ROAD.len; s+=piece){ let dir = gradAt(s) > 0 ? -1 : 1;   // 내리막 방향
@@ -4364,7 +4364,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   function run(){ compute(); draw(); updPanel(); }
 
   // ---- 기준 케이스 검증 (장석진 외 2006 예제) ----
-  function verify(){ const Sx=0.04, SL=0.02, I=217, A=0.0225; const Q = 0.9*I*A/360/1000; const g = gutter(Q, Sx, SL); const gr = grate(Q, g.T, g.V, Sx); const C0 = c0('curb', Sx, SL, 0.5); const Qa = (1-C0)*gr.Qi;
+  function verify(){ const Sx=0.04, SL=0.02, I=217, A=0.0225; const Q = 0.9*I*A/360; const g = gutter(Q, Sx, SL); const gr = grate(Q, g.T, g.V, Sx); const C0 = c0('curb', Sx, SL, 0.5); const Qa = (1-C0)*gr.Qi;
     $$('#rbVer').innerHTML = `<b>기준 케이스</b> 3차선 9 m · 간격 25 m · 종경사 2% · 횡경사 4% · 40×50 cm · I 217 mm/hr · C 0.9 · A 0.0225 ha<br>
 <table><tr><th>항목</th><th>논문 [확인]</th><th>이 코드</th><th>차이</th></tr>
 <tr><td>유입량 Q</td><td>12.2 L/s</td><td>${L(Q)} L/s</td><td>${((Q*1000/12.2-1)*100).toFixed(1)}%</td></tr>
