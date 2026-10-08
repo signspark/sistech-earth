@@ -4204,12 +4204,12 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   const C = Cesium;
   // ---- 3D 모델에서 추출한 종단 (s m, lon, lat, 연석 방향 방위각°, 도로 중심 표고 m) ----
   const ST = [[0,126.7045351,37.4550242,28.2,36.628],[5,126.7044852,37.4550455,28.2,36.622],[10,126.7044346,37.4550651,6.2,36.586],[15,126.7043783,37.4550699,6.2,36.604],[20,126.704322,37.4550748,6.2,36.61],[25,126.7042657,37.4550796,6.2,36.604],[30,126.7042094,37.4550844,6.2,36.616],[35,126.7041531,37.4550893,6.2,36.616],[40,126.7040967,37.4550941,6.2,36.604],[45,126.7040404,37.455099,6.2,36.616],[50,126.7039841,37.4551038,6.2,36.616],[55,126.7039278,37.4551086,6.2,36.616],[60,126.7038715,37.4551135,6.2,36.616],[65,126.7038152,37.4551183,6.2,36.634],[70,126.7037589,37.4551231,6.2,36.664],[75,126.7037025,37.455128,6.2,36.664],[80,126.7036462,37.4551328,6.2,36.729],[85,126.7035899,37.4551377,6.2,36.669],[90,126.7035336,37.4551425,6.2,36.675],[95,126.7034773,37.4551473,6.2,36.675],[100,126.703421,37.4551522,6.2,36.675],[105,126.7033646,37.455157,6.2,36.693],[110,126.7033083,37.4551618,6.2,36.681],[115,126.703252,37.4551667,6.2,36.681],[120,126.7031957,37.4551715,6.2,36.693],[125,126.7031394,37.4551764,6.2,36.693],[130,126.7030831,37.4551812,6.2,36.681],[135,126.7030268,37.455186,6.2,36.681],[140,126.7029705,37.455191,6.4,36.675],[145,126.7029142,37.455196,6.4,36.681],[150,126.7028579,37.455201,6.4,36.699],[155,126.7028016,37.4552061,6.4,36.687],[160,126.7027453,37.4552111,6.4,36.675],[165,126.702689,37.4552161,6.4,36.669],[170,126.7026327,37.4552211,6.4,36.669],[175,126.7025764,37.4552262,6.4,36.652],[180,126.7025201,37.4552312,6.4,36.634],[185,126.7024638,37.4552362,6.4,36.628],[190,126.7024076,37.4552412,6.4,36.628],[195,126.7023513,37.4552462,6.4,36.628],[200,126.702295,37.4552513,6.4,36.634],[205,126.7022387,37.4552563,6.4,36.616],[210,126.7021824,37.4552613,6.4,36.598],[215,126.7021261,37.4552663,6.4,36.604],[220,126.7020698,37.4552714,6.4,36.604],[225,126.7020148,37.4552654,343.3,36.61],[230,126.7019605,37.4552524,343.3,36.628],[235,126.7019063,37.4552395,343.3,36.711]];
-  const SX_MEAS = [[0,0.005],[10,0.0129],[20,0.019],[30,0.0198],[40,0.0298],[50,0.8564],[60,-1.4251],[70,0.8664],[80,0.9804],[90,0.0139],[100,0.0297],[110,-1.1581],[120,0.0149],[130,0.0218],[140,0.0188],[150,0.0178],[160,0.0259],[170,0.0247],[180,1.1046],[190,0.7742],[200,0.0168],[210,0.0178],[220,0.0119],[230,-0.001]];   // [s, 횡경사(실측, +: 연석 쪽이 낮음)] · 가로수·주차 차량에 걸린 단면은 제외하고 중앙값 사용
-  const ROAD = { name:'정각로 (인천시청 서측, 서행 2차로)', len: ST[ST.length-1][0], HW: 7.0, SW: 3.0, CURB: 0.15 };
+  const SX_MEAS = [[0,0.0017],[10,-0.0057],[130,0.0147],[140,0.0108],[150,0.0125],[160,-0.0034],[200,-0.0073],[230,-0.0006]];   // [s, 횡경사(모델 실측, +: 남측 연석 쪽이 낮음)] · 주차 차량·가로수가 걸린 단면 제외, 교차로 구간은 0
+  const ROAD = { name:'정각로 (인천시청 서측)', len: ST[ST.length-1][0], HW: 11.0, SW: 2.5, CURB: 0.15, CURB_OFF: 7.5 };   // 모델 횡단: 북측 가장자리(+3.5 m)→남측 연석(−7.5 m)으로 한쪽 편경사, 차도 11 m가 남측 측구로 배수 [모델]
   const K = { n:0.015, Cr:0.9, W:0.40, L:0.50, Vo:1.5, SPACING:25, OPEN:0.5, PIPE_Q: 0.0152 };   // n 아스팔트 측구 [통상] · C 도로 0.9 [확인] · 40×50 cm · Vo 튐 한계유속 [추정] · 격자 개구율 50% [추정] · 연결관 150 mm 1% 만관 15.2 L/s [KDS 계산]
   // 막힘계수 C0 (막힘 면적 50%) — 장석진 외 2006 [확인] · 행: 횡경사 4/6/8% · 열: 종경사 2/4/6%
   const C0T = { curb: { 4:[0.257,0.251,0.369], 6:[0.305,0.351,0.542], 8:[0.320,0.413,0.650] }, flow: { 4:[0.078,0.270,0.110], 6:[0.086,0.166,0.129], 8:[0.094,0.212,0.282] } };
-  const sxMed = (()=>{ const v = SX_MEAS.map(x=>x[1]).filter(x=>x>0 && x<0.06).sort((a,b)=>a-b); return v[Math.floor(v.length/2)]; })();
+  const sxMed = (()=>{ const v = SX_MEAS.map(x=>x[1]).filter(x=>x>0.005 && x<0.06).sort((a,b)=>a-b); return v.length ? v[Math.floor(v.length/2)] : 0.02; })();
   const P = { I:100, dur:30, sx: +sxMed.toFixed(4), sxMode:'meas', blockAll:0, type:'curb', ov:{} };   // ov: 받이별 막힘률 재지정
   const BLK = [0, 0.33, 0.5, 0.67, 1];
 
@@ -4252,8 +4252,8 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   const Z = avg3(med3(zRaw));
   const zAt = s => { if(s<=S[0]) return Z[0]; if(s>=S[S.length-1]) return Z[Z.length-1]; let i=1; while(S[i]<s) i++; const f=(s-S[i-1])/(S[i]-S[i-1]); return Z[i-1]+(Z[i]-Z[i-1])*f; };
   const stAt = s => { if(s<=S[0]) return ST[0]; if(s>=S[S.length-1]) return ST[ST.length-1]; let i=1; while(S[i]<s) i++; const f=(s-S[i-1])/(S[i]-S[i-1]); const a=ST[i-1], b=ST[i]; let db = b[3]-a[3]; if(db>180) db-=360; if(db<-180) db+=360; return [s, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f, (a[3]+db*f+360)%360, 0]; };
-  // 측구(연석) 선 위 점: 도로중심에서 연석 방향으로 off m (3.5 = 연석, 3.5-T = 흐름폭 안쪽)
-  const curbPt = (s, off) => { const st = stAt(s); return dest(st[1], st[2], st[3], off); };
+  // 남측 연석에서 도로 안쪽으로 inward m 들어간 점 (0 = 연석, T = 흐름폭 끝, 음수 = 보도 쪽)
+  const curbPt = (s, inward) => { const st = stAt(s); return dest(st[1], st[2], (st[3]+180)%360, ROAD.CURB_OFF - inward); };
 
   // ---- 수리 공식 ----
   const gutter = (Q, Sx, SL) => { if(Q<=0) return { T:0, d:0, V:0 }; const T = Math.pow(Q*K.n/(0.376*Math.pow(Sx,5/3)*Math.sqrt(SL)), 3/8); const d = T*Sx; return { T, d, V: Q/(0.5*T*d) }; };   // HEC-22 삼각형 단면 수정 만닝 [통상]
@@ -4297,8 +4297,20 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
       const Vin = Q*P.dur*60; let H;
       if(dEq!=null && fill(dEq).V <= Vin) H = dEq; else { let lo=0, hi=1.5; for(let k=0;k<40;k++){ const m=(lo+hi)/2; if(fill(m).V < Vin) lo=m; else hi=m; } H = lo; }
       const f = fill(H); x.H = H; x.ext = [f.s1, f.s2]; x.V = f.V; x.Qa = capAt(H); x.Qb = 0; x.over = H > ROAD.CURB; x.dEq = dEq; x.tFill = dEq!=null && Q>0 ? fill(dEq).V/Q : null; }
+    mergePonds(inl, Sx);
     const sum = { Qin: inl.reduce((a,x)=>a+x.runoff,0), Qa: inl.reduce((a,x)=>a+x.Qa,0), Qb: inl.filter(x=>!x.sag).reduce((a,x)=>a+x.Qb,0), lost: inl.reduce((a,x)=>a+(x.lost||0),0), Hmax: Math.max(0,...inl.filter(x=>x.sag).map(x=>x.H)), ext: inl.filter(x=>x.sag).reduce((a,x)=>a+(x.ext[1]-x.ext[0]),0), over: inl.filter(x=>x.over).length };
     RES = { inl, sum, Sx }; return RES; }
+  // 범위가 겹치는 저지대 고임을 하나로 병합: 유입·차집 능력을 합쳐 가장 낮은 점 기준으로 다시 채움 [추정]
+  function mergePonds(inl, Sx){ const sags = inl.filter(x=>x.sag && x.H>0).sort((a,b)=>a.s-b.s); let i=0;
+    while(i<sags.length){ const grp=[sags[i]]; let j=i+1; while(j<sags.length && sags[j].ext[0] <= grp[grp.length-1].ext[1]){ grp.push(sags[j]); j++; }
+      if(grp.length>1){ const low = grp.reduce((m,x)=> zAt(x.s)<zAt(m.s)?x:m, grp[0]); const Q = grp.reduce((a,x)=>a+x.Qin,0); const zl = zAt(low.s);
+        const capAt = d => grp.reduce((a,x)=> a + Math.min(sagCap(Math.max(0, d-(zAt(x.s)-zl)), x.b), K.PIPE_Q), 0);
+        const fill = H => { let V=0, s1=low.s, s2=low.s; for(let s=low.s; s>=0; s-=2.5){ const dep=zl+H-zAt(s); if(dep<=0) break; V+=xsArea(dep,Sx)*2.5; s1=s; } for(let s=low.s+2.5; s<=ROAD.len; s+=2.5){ const dep=zl+H-zAt(s); if(dep<=0) break; V+=xsArea(dep,Sx)*2.5; s2=s; } return { V, s1, s2 }; };
+        let dEq=null; if(capAt(1.0) >= Q){ let lo=0, hi=1.0; for(let k=0;k<40;k++){ const m=(lo+hi)/2; if(capAt(m)<Q) lo=m; else hi=m; } dEq=hi; }
+        const Vin = Q*P.dur*60; let H; if(dEq!=null && fill(dEq).V <= Vin) H=dEq; else { let lo=0, hi=1.5; for(let k=0;k<40;k++){ const m=(lo+hi)/2; if(fill(m).V<Vin) lo=m; else hi=m; } H=lo; }
+        const f = fill(H); for(const x of grp){ const own = Math.max(0, H-(zAt(x.s)-zl)); x.H = own; x.ext = x===low ? [f.s1, f.s2] : [x.s, x.s]; x.Qa = Math.min(sagCap(own, x.b), K.PIPE_Q); x.over = own > ROAD.CURB; x.merged = grp.length; x.dEq = dEq; }
+        low.V = f.V; }
+      i=j; } }
   // 고임 횡단면적: 연석에서 Sx로 올라가는 편경사 단면, 차도폭을 넘으면 사각형, 연석 높이를 넘으면 보도까지 [추정]
   function xsArea(dep, Sx){ const wmax = ROAD.HW; let a; if(dep <= wmax*Sx) a = dep*dep/(2*Sx); else a = wmax*dep - wmax*wmax*Sx/2; if(dep > ROAD.CURB) a += ROAD.SW*(dep-ROAD.CURB); return a; }
   const pondW = (dep, Sx) => Math.min(ROAD.HW, dep/Sx);
@@ -4313,28 +4325,28 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     const poly = (pts, color, extra) => DS.entities.add(Object.assign({ polygon:{ hierarchy: C.Cartesian3.fromDegreesArray(pts.flat()), material: color, classificationType: C.ClassificationType.BOTH } }, extra||{}));
     const line = (pts, color, w) => DS.entities.add({ polyline:{ positions: C.Cartesian3.fromDegreesArray(pts.flat()), width:w, material: color, clampToGround:true, classificationType: C.ClassificationType.BOTH } });
     // 연석선
-    const curb = []; for(let s=0; s<=ROAD.len; s+=5) curb.push(curbPt(Math.min(s,ROAD.len), 3.5)); line(curb, C.Color.fromCssColorString('#FFFFFF').withAlpha(.55), 2);
+    const curb = []; for(let s=0; s<=ROAD.len; s+=5) curb.push(curbPt(Math.min(s,ROAD.len), 0)); line(curb, C.Color.fromCssColorString('#FFFFFF').withAlpha(.55), 2);
     // 경사부 흐름폭 띠: 상류 받이(또는 능선)에서 이 받이까지 Q를 선형으로 키우며 T 계산
     for(let i=0;i<r.inl.length;i++){ const x = r.inl[i]; if(x.sag || x.Qin<=0) continue;
       const up = x.dir===1 ? (r.inl[i-1] ? r.inl[i-1].s : 0) : (r.inl[i+1] ? r.inl[i+1].s : ROAD.len);
       const sA = Math.min(up, x.s), sB = Math.max(up, x.s); const Q0 = x.byp, Q1 = x.Qin; const a=[], b=[];
-      for(let s=sA; s<=sB+0.01; s+=2.5){ const sc=Math.min(s,sB); const f = (sB>sA) ? (x.dir===1 ? (sc-sA)/(sB-sA) : (sB-sc)/(sB-sA)) : 1; const Q = Q0 + (Q1-Q0)*f; const T = Math.min(ROAD.HW, gutter(Q, Sx, x.SL).T); a.push(curbPt(sc, 3.5)); b.push(curbPt(sc, 3.5-T)); }
+      for(let s=sA; s<=sB+0.01; s+=2.5){ const sc=Math.min(s,sB); const f = (sB>sA) ? (x.dir===1 ? (sc-sA)/(sB-sA) : (sB-sc)/(sB-sA)) : 1; const Q = Q0 + (Q1-Q0)*f; const T = Math.min(ROAD.HW, gutter(Q, Sx, x.SL).T); a.push(curbPt(sc, 0)); b.push(curbPt(sc, T)); }
       poly(a.concat(b.reverse()), colD(x.d), { properties:{ rbIdx: x.id } });
       // 흐름 방향 화살표 라벨
-      if(x.Qb > 0.0005){ const sm = (sA+sB)/2; const p = curbPt(sm, 2.2); DS.entities.add({ position: C.Cartesian3.fromDegrees(p[0], p[1], zAt(sm)+0.3), label:{ text: (x.dir===1?'→ ':'← ')+(x.Qb*1000).toFixed(1)+' L/s 우회', font:'600 12px sans-serif', fillColor: C.Color.WHITE, outlineColor: C.Color.fromCssColorString('#06224A'), outlineWidth: 4, style: C.LabelStyle.FILL_AND_OUTLINE, scale:.9, disableDepthTestDistance: Number.POSITIVE_INFINITY, heightReference: C.HeightReference.CLAMP_TO_GROUND, pixelOffset: new C.Cartesian2(0,-6) } }); }
+      if(x.Qb > 0.0005){ const sm = (sA+sB)/2; const p = curbPt(sm, 1.5); DS.entities.add({ position: C.Cartesian3.fromDegrees(p[0], p[1], zAt(sm)+0.3), label:{ text: (x.dir===1?'→ ':'← ')+(x.Qb*1000).toFixed(1)+' L/s 우회', font:'600 12px sans-serif', fillColor: C.Color.WHITE, outlineColor: C.Color.fromCssColorString('#06224A'), outlineWidth: 4, style: C.LabelStyle.FILL_AND_OUTLINE, scale:.9, disableDepthTestDistance: Number.POSITIVE_INFINITY, heightReference: C.HeightReference.CLAMP_TO_GROUND, pixelOffset: new C.Cartesian2(0,-6), distanceDisplayCondition: new C.DistanceDisplayCondition(0, 260) } }); }
     }
     // 저지대 고임
     for(const x of r.inl){ if(!x.sag || !(x.H>0.003)) continue; const zs = zAt(x.s); const a=[], b=[];
-      for(let s=x.ext[0]; s<=x.ext[1]+0.01; s+=2.5){ const sc=Math.min(s,x.ext[1]); const dep = Math.max(0, zs+x.H-zAt(sc)); const w = pondW(dep, Sx); a.push(curbPt(sc, 3.5)); b.push(curbPt(sc, 3.5-w)); if(dep>ROAD.CURB) a[a.length-1] = curbPt(sc, 3.5+ROAD.SW); }
+      for(let s=x.ext[0]; s<=x.ext[1]+0.01; s+=2.5){ const sc=Math.min(s,x.ext[1]); const dep = Math.max(0, zs+x.H-zAt(sc)); const w = pondW(dep, Sx); a.push(curbPt(sc, 0)); b.push(curbPt(sc, w)); if(dep>ROAD.CURB) a[a.length-1] = curbPt(sc, -ROAD.SW); }
       poly(a.concat(b.reverse()), x.H>ROAD.CURB ? col(255,60,60,.6) : x.H>0.05 ? col(255,150,50,.6) : col(70,160,255,.55), { properties:{ rbIdx: x.id } }); }
     // 받이
-    for(const x of r.inl){ const p = curbPt(x.s, 3.3); const z = zAt(x.s);
-      const txt = x.sag ? `#${x.id} 저지대 · 막힘 ${Math.round(x.b*100)}% · 유입 ${(x.Qin*1000).toFixed(1)} → 차집 ${(x.Qa*1000).toFixed(1)} L/s\n고임 ${(x.H*100).toFixed(0)} cm · ${Math.round(x.ext[1]-x.ext[0])} m${x.over?' · 연석 넘침':''}`
-                       : `#${x.id} · 막힘 ${Math.round(x.b*100)}% · 유입 ${(x.Qin*1000).toFixed(1)} → 차집 ${(x.Qa*1000).toFixed(1)} · 우회 ${(x.Qb*1000).toFixed(1)} L/s\n흐름폭 ${x.T.toFixed(2)} m · 수심 ${(x.d*100).toFixed(1)} cm${x.over?' · 연석 넘침':''}`;
+    for(const x of r.inl){ const p = curbPt(x.s, 0.3); const z = zAt(x.s);
+      const txt = x.sag ? `#${x.id} 저지대 · 막힘 ${Math.round(x.b*100)}%\n유입 ${(x.Qin*1000).toFixed(1)} → 차집 ${(x.Qa*1000).toFixed(1)} L/s · 고임 ${(x.H*100).toFixed(0)} cm${x.over?' · 연석 넘침':''}`
+                       : `#${x.id} · 막힘 ${Math.round(x.b*100)}%\n유입 ${(x.Qin*1000).toFixed(1)} → 차집 ${(x.Qa*1000).toFixed(1)} · 우회 ${(x.Qb*1000).toFixed(1)} L/s\n폭 ${x.T.toFixed(1)} m · 수심 ${(x.d*100).toFixed(1)} cm${x.over?' · 연석 넘침':''}`;
       DS.entities.add({ position: C.Cartesian3.fromDegrees(p[0], p[1], z), properties:{ rbIdx: x.id },
         box:{ dimensions: new C.Cartesian3(K.L, K.W, 0.10), material: colB(x.b), outline:true, outlineColor: C.Color.BLACK.withAlpha(.6), heightReference: C.HeightReference.CLAMP_TO_GROUND },
         point:{ pixelSize: x.sag ? 11 : 8, color: colB(x.b), outlineColor: C.Color.WHITE, outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY, heightReference: C.HeightReference.CLAMP_TO_GROUND },
-        label:{ text: txt, font:'600 11px sans-serif', fillColor: C.Color.WHITE, outlineColor: C.Color.fromCssColorString('#06224A'), outlineWidth: 4, style: C.LabelStyle.FILL_AND_OUTLINE, scale:.85, pixelOffset: new C.Cartesian2(0, -16), verticalOrigin: C.VerticalOrigin.BOTTOM, disableDepthTestDistance: Number.POSITIVE_INFINITY, heightReference: C.HeightReference.CLAMP_TO_GROUND, distanceDisplayCondition: new C.DistanceDisplayCondition(0, 420) } });
+        label:{ text: txt, font:'600 11px sans-serif', fillColor: C.Color.WHITE, outlineColor: C.Color.fromCssColorString('#06224A'), outlineWidth: 4, style: C.LabelStyle.FILL_AND_OUTLINE, scale:.85, pixelOffset: new C.Cartesian2(0, -16), verticalOrigin: C.VerticalOrigin.BOTTOM, disableDepthTestDistance: Number.POSITIVE_INFINITY, heightReference: C.HeightReference.CLAMP_TO_GROUND, distanceDisplayCondition: new C.DistanceDisplayCondition(0, 230) } });
     }
     scene.requestRender && scene.requestRender();
   }
@@ -4344,23 +4356,24 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   function updPanel(){ const r = RES; if(!r) return; const s = r.sum;
     $$('#rbIv').textContent = P.I+' mm/hr'; $$('#rbBlkN').textContent = Object.keys(P.ov).length ? `개별 지정 ${Object.keys(P.ov).length}곳` : ''; $$('#rbSxN').textContent = (P.sx*100).toFixed(1)+'% · 종경사 모델 추출';
     $$('#rbCards').innerHTML = [
-      ['총 유출', L(s.Qin)+' L/s', ''], ['차집(관로 유입)', L(s.Qa)+' L/s', ''], ['우회·지표 잔류', L(Math.max(0,s.Qin-s.Qa))+' L/s', s.Qin-s.Qa > s.Qin*0.3 ? 'amber':''],
+      ['총 유출', L(s.Qin)+' L/s', ''], ['차집(관로 유입)', L(s.Qa)+' L/s', ''], ['저지대 초과(고임)', L(Math.max(0,s.Qin-s.Qa))+' L/s', s.Qin-s.Qa > s.Qin*0.3 ? 'amber':''],
       ['최대 고임 깊이', (s.Hmax*100).toFixed(0)+' cm', s.Hmax>ROAD.CURB?'red':s.Hmax>0.05?'amber':''], ['고임 연장', Math.round(s.ext)+' m', ''], ['연석 넘침', s.over+' 곳', s.over?'red':'']
     ].map(([k,v,c])=>`<div class="card"><small>${k}</small><b class="${c}">${v}</b></div>`).join('');
     $$('#rbTbl').innerHTML = `<table><tr><th>받이</th><th>위치</th><th>종경사</th><th>막힘</th><th>유입</th><th>차집</th><th>우회/고임</th></tr>` + r.inl.map(x=>`<tr data-id="${x.id}"><td>#${x.id}${x.sag?' <span class="sag">저지대</span>':''}</td><td>${Math.round(x.s)} m</td><td>${x.sag?'-':(x.SLraw*100).toFixed(2)+'%'+(x.flat?'<span class="tag est">평탄</span>':'')}</td><td><span class="pill b${Math.round(x.b*100)}">${Math.round(x.b*100)}%</span></td><td>${L(x.Qin)}</td><td>${L(x.Qa)}${x.pipeCap?'<span class="tag est">관</span>':''}</td><td>${x.sag ? `<b style="color:${x.over?'#FF7B7B':x.H>0.05?'#F2A65A':'#7FD1FF'}">${(x.H*100).toFixed(0)} cm</b>` : L(x.Qb)+' L/s'}${x.over?' ⚠':''}</td></tr>`).join('') + `</table>`;
     $$('#rbTbl').querySelectorAll('tr[data-id]').forEach(tr=>{ tr.onclick = ()=>{ const id=+tr.dataset.id; cycle(id); flyTo(id); }; });
     const sags = r.inl.filter(x=>x.sag);
     $$('#rbNote').innerHTML = `
-<b>구간</b> ${ROAD.name} · 종단 ${ST.length}점(5 m)·횡단 ${SX_MEAS.length}개(10 m)를 3D 모델에서 추출 <span class="tag ok">모델</span> · 종단 고저차 ${((Math.max(...Z)-Math.min(...Z))*100).toFixed(0)} cm (거의 평탄, 종경사 0.05~0.2%) · 저지대 ${sags.map(x=>'#'+x.id+'('+Math.round(x.s)+' m)').join(', ')}<br>
+<b>구간</b> ${ROAD.name} · 종단 ${ST.length}점(5 m)·횡단 24개(10 m, 폭 ±16 m)를 3D 모델에서 추출 <span class="tag ok">모델</span> · 종단 고저차 ${((Math.max(...Z)-Math.min(...Z))*100).toFixed(0)} cm (거의 평탄, 종경사 0.02~0.3%) · 저지대 ${sags.map(x=>'#'+x.id+'('+Math.round(x.s)+' m)').join(', ')}<br>
+<b>횡단</b> 북측 가장자리가 높고 남측 연석(중심선 남쪽 7.5 m)으로 한쪽 편경사 · 주차 차량·가로수 없는 단면 3개에서 1.1~1.5% <span class="tag ok">모델</span> → 차도 11 m가 남측 측구로 배수, 동쪽 구간 연석 위치 7.5 m는 추정 <span class="tag est">추정</span><br>
 <b>받이</b> 25 m 간격 40×50 cm, 저지대에 1곳씩 배치 <span class="tag est">가정</span>(KDS 61 40 00 간격 10~30 m <span class="tag lit">확인</span>) · 연결관 150 mm 1% 만관 15.2 L/s를 차집 상한으로 <span class="tag lit">KDS</span><br>
 <b>식</b> 합리식 C 0.9 <span class="tag lit">확인</span> · 측구 Q=0.376/n·Sx^(5/3)·SL^(1/2)·T^(8/3), 격자 차집 E=Rf·Eo+Rs(1−Eo), 저지대 위어/오리피스 <span class="tag lit">HEC-22 통상</span> · 막힘계수 C0 = 장석진 외 2006 표(50%) × 막힘률/50% <span class="tag est">보간</span>, 표 범위 밖(Sx 2%, SL &lt;2%)은 가장 가까운 칸 <span class="tag est">추정</span><br>
-<b>집수면적</b> 받이당 차도 7 m + 보도 3 m × 분담 길이 · 유출은 내리막 방향으로 흘러 처음 만나는 받이에 배정 · 종경사 0.1% 미만은 0.1%로 <span class="tag est">추정</span><br>
-<b>고임</b> 저지대는 평형 수심(차집 = 유입)과 지속시간 동안 채운 부피 중 작은 쪽 · 편경사 단면 채움(2D 흐름 아님) <span class="tag est">채움 방식</span> · 연석 15 cm 넘으면 보도 범람 표시<br>
+<b>집수면적</b> 받이당 차도 11 m + 보도 2.5 m × 분담 길이 · 유출은 내리막 방향으로 흘러 처음 만나는 받이에 배정 · 종경사 0.1% 미만은 0.1%로 <span class="tag est">추정</span><br>
+<b>고임</b> 저지대는 평형 수심(차집 = 유입)과 지속시간 동안 채운 부피 중 작은 쪽 · 편경사 단면 채움(2D 흐름 아님), 범위가 겹치는 저지대는 한 못으로 병합 <span class="tag est">채움 방식</span> · 연석 15 cm 넘으면 보도 범람 표시<br>
 <b>한계</b> 측구 수심 2~5 cm는 모델 오차(2~3 cm)와 같은 크기 → 종경사는 25 m 구간 평균 사용 · 실제 받이 위치·막힘 상태·지하 관로는 대장·현장 확인 필요`;
   }
   function cycle(id){ const x = INL.find(v=>v.id===id); if(!x) return; const cur = P.ov[id]!=null ? P.ov[id] : P.blockAll; const i = BLK.findIndex(b=>Math.abs(b-cur)<0.01); P.ov[id] = BLK[(i+1)%BLK.length]; run(); toast(`받이 #${id} 막힘률 ${Math.round(P.ov[id]*100)}%`, 1500); }
-  function flyTo(id){ const x = INL.find(v=>v.id===id); if(!x) return; const p = curbPt(x.s, 3.5); camera.flyTo({ destination: C.Cartesian3.fromDegrees(p[0], p[1]-0.00055, zAt(x.s)+70), orientation:{ heading:0, pitch:C.Math.toRadians(-50), roll:0 }, duration:1.2 }); }
-  function flyAll(){ const a = curbPt(0,0), b = curbPt(ROAD.len,0); const mid = [(a[0]+b[0])/2, (a[1]+b[1])/2]; camera.flyTo({ destination: C.Cartesian3.fromDegrees(mid[0], mid[1]-0.0016, zAt(ROAD.len/2)+170), orientation:{ heading:0, pitch:C.Math.toRadians(-45), roll:0 }, duration:1.6 }); }
+  function flyTo(id){ const x = INL.find(v=>v.id===id); if(!x) return; const p = curbPt(x.s, 0); camera.flyTo({ destination: C.Cartesian3.fromDegrees(p[0], p[1]+0.00050, zAt(x.s)+60), orientation:{ heading:Math.PI, pitch:C.Math.toRadians(-50), roll:0 }, duration:1.2 }); }
+  function flyAll(){ const a = curbPt(0,0), b = curbPt(ROAD.len,0); const mid = [(a[0]+b[0])/2, (a[1]+b[1])/2]; camera.flyTo({ destination: C.Cartesian3.fromDegrees(mid[0], mid[1]+0.0012, zAt(ROAD.len/2)+150), orientation:{ heading:Math.PI, pitch:C.Math.toRadians(-50), roll:0 }, duration:1.6 }); }
   function run(){ compute(); draw(); updPanel(); }
 
   // ---- 기준 케이스 검증 (장석진 외 2006 예제) ----
