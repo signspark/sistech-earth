@@ -3816,7 +3816,7 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
   <div class="big" id="lcBig"><video id="lcBigV" muted playsinline autoplay></video><div class="cap"><b id="lcBigN"></b> <span id="lcBigS"></span></div></div>
   <div class="grid" id="lcGrid"></div>
   <div class="row"><button id="lcAll">모두 재생</button><button id="lcStop">모두 정지</button><button id="lcFly">전체 보기</button><span class="hint" id="lcCnt"></span></div>
-  <div class="hint">썸네일을 누르면 그 카메라로 이동하고 크게 봅니다 · 3D 지도의 폴 위 스크린에도 같은 영상이 나옵니다 · 영상은 <b>경찰청 UTIC 공개 스트림</b>(960×540, 실제보다 30초~1분 지연) · 모바일은 데이터 사용량 주의(카메라당 약 1 Mbps)</div>
+  <div class="hint">가까운 4곳(모바일 3곳)은 자동 재생, 나머지는 썸네일(▶)을 누르면 재생 · 썸네일을 누르면 그 카메라로 이동하고 크게 봅니다 · 3D 지도의 폴 위 스크린에도 같은 영상이 나옵니다 · 영상은 <b>경찰청 UTIC 공개 스트림</b>(960×540, 실제보다 30초~1분 지연) · 모바일은 데이터 사용량 주의(카메라당 약 1 Mbps)</div>
 </div>`;
   document.body.appendChild(P);
   const $$ = s => P.querySelector(s);
@@ -3864,7 +3864,7 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
     // 클릭: 점/스크린 → 선택 + 재생
     const h = new C.ScreenSpaceEventHandler(scene.canvas);
     h.setInputAction(ev=>{ if(!DS || !DS.show) return; const p = scene.pick(ev.position); const id = p && p.id && p.id._lc; if(id){ select(id); if(!V[id].playing) play(id); } }, C.ScreenSpaceEventType.LEFT_CLICK);
-    $$('#lcAll').onclick = ()=>{ CAMS.forEach(c=>play(c.id)); };
+    $('#lcAll').onclick = ()=>{ CAMS.forEach(c=>play(c.id)); toast('9곳 동시 재생: 약 9 Mbps · PC 성능에 따라 느려질 수 있습니다', 3500); };
     $$('#lcStop').onclick = ()=>{ CAMS.forEach(c=>stop(c.id)); };
     $$('#lcFly').onclick = flyAll;
   }
@@ -3877,8 +3877,8 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
     v.attached = false; v.video.addEventListener('playing', onPlaying); v.video.addEventListener('loadeddata', attach); v.video.addEventListener('canplay', attach);
     if(!v.tick) v.tick = setInterval(()=>{ if(!v.playing) return; attach(); }, 1500);
     v.video.onerror = ()=>{ v.el.classList.add('err'); };
-    if(v.video.canPlayType('application/vnd.apple.mpegurl')){ v.video.src = src; v.video.play().catch(()=>{}); }
-    else if(window.Hls && Hls.isSupported()){ v.hls = new Hls({ enableWorker:true, lowLatencyMode:false, backBufferLength:10, maxBufferLength:12 }); v.hls.loadSource(src); v.hls.attachMedia(v.video); v.hls.on(Hls.Events.MANIFEST_PARSED, ()=>v.video.play().catch(()=>{})); v.hls.on(Hls.Events.ERROR, (e,d)=>{ if(d.fatal){ v.el.classList.add('err'); v.el.classList.remove('live'); if(d.type===Hls.ErrorTypes.NETWORK_ERROR) v.hls.startLoad(); else if(d.type===Hls.ErrorTypes.MEDIA_ERROR) v.hls.recoverMediaError(); } }); }
+    if(window.Hls && Hls.isSupported()){ v.hls = new Hls({ enableWorker:true, lowLatencyMode:false, backBufferLength:10, maxBufferLength:12 }); v.hls.loadSource(src); v.hls.attachMedia(v.video); v.hls.on(Hls.Events.MANIFEST_PARSED, ()=>v.video.play().catch(()=>{})); v.hls.on(Hls.Events.ERROR, (e,d)=>{ if(d.fatal){ v.el.classList.add('err'); v.el.classList.remove('live'); if(d.type===Hls.ErrorTypes.NETWORK_ERROR) v.hls.startLoad(); else if(d.type===Hls.ErrorTypes.MEDIA_ERROR) v.hls.recoverMediaError(); } }); }
+    else if(v.video.canPlayType('application/vnd.apple.mpegurl')){ v.video.src = src; v.video.play().catch(()=>{}); } // iOS Safari 등 MSE 없는 브라우저: 네이티브 HLS
     else { v.el.classList.add('err'); toast('이 브라우저는 HLS 재생을 지원하지 않습니다', 3000); }
     count();
   }
@@ -3900,8 +3900,8 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
   async function on(){ await build(); DS.show = true; P.classList.add('open'); document.body.classList.add('m-sheet');
     const far = C.Cartesian3.distance(camera.position, C.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat, 0)) > 4000; if(far) flyAll();
     // 기본 재생: PC는 9곳 모두, 모바일은 가까운 3곳
-    (mobile ? CAMS.slice(0,3) : CAMS).forEach(c=>play(c.id));
-    toast('실시간 CCTV '+CAMS.length+'곳 (경찰청 UTIC · 인천시청 1.5 km) · 폴 위 스크린과 패널 썸네일에 라이브 영상 · 썸네일을 누르면 그 카메라로 이동 · 실제보다 30초~1분 지연', 6000); }
+    CAMS.slice(0, mobile ? 3 : 4).forEach(c=>play(c.id));
+    toast('실시간 CCTV '+CAMS.length+'곳 (경찰청 UTIC · 인천시청 1.5 km) · 가까운 '+(mobile?3:4)+'곳 자동 재생, 나머지는 썸네일을 눌러 재생 · 폴 위 스크린에도 같은 영상 · 실제보다 30초~1분 지연', 6000); }
   function off(){ if(DS) DS.show = false; P.classList.remove('open'); document.body.classList.remove('m-sheet'); CAMS.forEach(c=>stop(c.id)); }
   const L6 = { lcctv: { on, off, src:()=> (DS && DS.show) ? '<b>경찰청 UTIC</b> 실시간 CCTV '+CAMS.length+'곳' : '' } };
   const _toggle6 = toggleLayer;
