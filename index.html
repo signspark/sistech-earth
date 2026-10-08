@@ -4490,5 +4490,28 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
 })();
 </script>
 
+
+<script>
+/* ---------- 41. 분석 항목 단일 활성: 분석 메뉴에서 다른 항목을 켜면 켜져 있던 분석 창·레이어는 자동으로 닫힘 (일조·그림자 / 가시권 / 수평 단면 / 공개 CCTV / 실시간 CCTV / 하천 범람 / 빗물받이) ---------- */
+(function(){
+  const _t41 = toggleLayer;
+  toggleLayer = async function(id, force){
+    try{
+      const an = (MENUS.site||[]).find(c=>c.id==='analysis');
+      if(an && an.items.some(x=>x.id===id)){
+        const want = force!==undefined ? force : !STATE.on.has(id);
+        if(want){
+          const others = an.items.filter(x=>x.id!==id && STATE.on.has(x.id));
+          for(const o of others){ try{ await _t41(o.id, false); }catch(e){} }
+          if(others.length){ try{ toast('이전 분석 닫힘: '+others.map(o=>(o.name||o.id).replace(/\s*\(.*$/,'')).join(', '), 1800); }catch(e){} }
+        }
+      }
+    }catch(e){}
+    return _t41.apply(this, arguments);
+  };
+  window.__ANALYSIS_EXCLUSIVE = true;
+})();
+</script>
+
 </body>
 </html>
