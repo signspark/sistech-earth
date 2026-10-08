@@ -5298,5 +5298,81 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   setTimeout(()=>tidy(STATE.mode), 3000);
 })();
 </script>
+<script>
+/* ---------- 47. SITE 2D/3D 보기 전환: 2D = 3D 메시를 그대로 둔 채 연직(탑뷰) 직교투영 → 건물 측면이 보이지 않는 정사영상(올소모자익) 형태 (2026-10-09) ----------
+   - 상단 SITE/EARTH 옆 [3D | 2D] 버튼 (SITE 모드에서만 표시)
+   - 2D: 화면 중심 위로 카메라 이동 · pitch −90° 고정 · camera.switchToOrthographicFrustum() · 기울이기(틸트)/둘러보기 끔 · 이동·확대·축소는 그대로
+   - 3D: 원근 투영 복귀 · 2D 들어가기 전 기울기·방위로 같은 지점을 다시 바라봄
+   - EARTH로 가면 자동으로 3D 복귀 · 비행/내비 재생 중에는 고정 잠시 해제 · GeoTIFF 내보내기 후에도 2D 유지
+*/
+(function(){
+  const C = Cesium, ssc = scene.screenSpaceCameraController;
+  const D2 = { on:false, savedPitch:-0.6, flags:null };
+  // 버튼
+  const css = document.createElement('style');
+  css.textContent = '#dimToggle{margin-left:6px}#dimToggle button{min-width:44px}#dimToggle.hide{display:none}';
+  document.head.appendChild(css);
+  const box = document.createElement('div');
+  box.className = 'modes'; box.id = 'dimToggle'; box.setAttribute('role','tablist'); box.setAttribute('aria-label','보기 2D/3D');
+  box.innerHTML = '<button data-dim="3d" class="on" title="3D 보기 (원근·기울기)">3D</button><button data-dim="2d" title="2D 보기: 3D 모델을 연직으로 내려다본 정사영상 형태 (건물 측면 안 보임)">2D</button>';
+  const modes = document.querySelector('#topbar .modes');
+  if(modes && modes.parentNode) modes.parentNode.insertBefore(box, modes.nextSibling);
+  box.querySelectorAll('button').forEach(b=> b.onclick = ()=> set(b.dataset.dim==='2d'));
+  function syncBtn(){
+    box.querySelectorAll('button').forEach(b=> b.classList.toggle('on', (b.dataset.dim==='2d')===D2.on));
+    box.classList.toggle('hide', STATE.mode!=='site');
+  }
+  function centerPos(){
+    const cv = scene.canvas, p = new C.Cartesian2(cv.clientWidth/2, cv.clientHeight/2);
+    let c; try{ if(scene.pickPositionSupported) c = scene.pickPosition(p); }catch(e){}
+    if(!c){ try{ c = scene.globe.pick(camera.getPickRay(p), scene); }catch(e){} }
+    if(!c) c = camera.pickEllipsoid(p);
+    return c;
+  }
+  function enter(){
+    if(D2.on) return;
+    const c = centerPos(); if(!c){ toast('화면 중심을 찾을 수 없어 2D로 바꾸지 못했습니다'); return; }
+    const g = C.Cartographic.fromCartesian(c);
+    const dist = Math.max(150, C.Cartesian3.distance(camera.positionWC, c));
+    D2.savedPitch = camera.pitch;
+    D2.flags = { tilt: ssc.enableTilt, look: ssc.enableLook };
+    camera.setView({ destination: C.Cartesian3.fromRadians(g.longitude, g.latitude, g.height + dist), orientation:{ heading: camera.heading, pitch: -C.Math.PI_OVER_TWO, roll: 0 } });
+    camera.switchToOrthographicFrustum();
+    ssc.enableTilt = false; ssc.enableLook = false;
+    D2.on = true; syncBtn();
+    toast('2D 보기 · 3D 모델을 연직으로 내려다본 정사영상 형태 (끌어서 이동 · 휠로 확대/축소)', 3000);
+  }
+  function exit(silent){
+    if(!D2.on) return;
+    D2.on = false;
+    const c = centerPos();
+    const dist = c ? C.Cartesian3.distance(camera.positionWC, c) : camera.positionCartographic.height;
+    camera.switchToPerspectiveFrustum();
+    if(D2.flags){ ssc.enableTilt = D2.flags.tilt; ssc.enableLook = D2.flags.look; } else { ssc.enableTilt = true; ssc.enableLook = true; }
+    if(c){
+      const pitch = Math.min(-0.35, D2.savedPitch||-0.6);
+      try{ camera.lookAt(c, new C.HeadingPitchRange(camera.heading, pitch, Math.max(150, dist))); camera.lookAtTransform(C.Matrix4.IDENTITY); }catch(e){}
+    }
+    syncBtn();
+    if(!silent) toast('3D 보기', 1500);
+  }
+  function set(want){ if(want){ if(STATE.mode!=='site') return toast('2D 보기는 SITE 모드에서 쓸 수 있습니다'); enter(); } else exit(); }
+  // 매 프레임: 2D면 연직·직교 유지 (비행/내비 재생 중에는 건드리지 않음)
+  scene.preRender.addEventListener(()=>{
+    if(!D2.on) return;
+    if(camera._currentFlight) return;
+    try{ if(window.sistechNav && window.sistechNav.playing) return; }catch(e){}
+    if(!(camera.frustum instanceof C.OrthographicFrustum)) camera.switchToOrthographicFrustum();
+    if(Math.abs(camera.pitch + C.Math.PI_OVER_TWO) > 1e-3 || Math.abs(camera.roll) > 1e-3){
+      const g = camera.positionCartographic;
+      camera.setView({ destination: C.Cartesian3.fromRadians(g.longitude, g.latitude, g.height), orientation:{ heading: camera.heading, pitch: -C.Math.PI_OVER_TWO, roll: 0 } });
+    }
+  });
+  const _sm47 = setMode;
+  setMode = function(m){ if(m!=='site' && D2.on) exit(true); const r = _sm47.apply(this, arguments); setTimeout(syncBtn, 60); return r; };
+  syncBtn();
+  window.sistech2D = { enter, exit, get on(){ return D2.on; } };
+})();
+</script>
 </body>
 </html>
