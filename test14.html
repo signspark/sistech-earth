@@ -4096,8 +4096,12 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
         viewer.clock.currentTime = C.JulianDate.addSeconds(clk0, i*dtR*spd, new C.JulianDate());
         let frame = null; const ta = performance.now(); X.stage = 'settle '+i;
         await settle(i===0 ? 25000 : 3000, () => {   // 렌더 직후 같은 태스크에서 캡처 (drawing buffer 보존)
-          const canvas = scene.canvas; wCanvas = canvas.width; hCanvas = canvas.height;
-          frame = new VideoFrame(canvas, { timestamp: Math.round(i*1e6/FPS), duration: Math.round(1e6/FPS) }); });
+          const canvas = scene.canvas, W = canvas.width, H = canvas.height; wCanvas = W; hCanvas = H;
+          // GPU 캔버스를 직접 VideoFrame으로 넘기면 인코더가 지연 읽기 → 3 fps. readPixels로 즉시 CPU 버퍼화(≈8 fps 이상)
+          const gl = scene.context._gl; if(!X.buf || X.buf.length !== W*H*4){ X.buf = new Uint8Array(W*H*4); X.buf2 = new Uint8Array(W*H*4); }
+          gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, X.buf);
+          const row = W*4; for(let y=0; y<H; y++) X.buf2.set(X.buf.subarray((H-1-y)*row, (H-y)*row), y*row);   // 상하 반전
+          frame = new VideoFrame(X.buf2, { format:'RGBA', codedWidth:W, codedHeight:H, timestamp: Math.round(i*1e6/FPS), duration: Math.round(1e6/FPS) }); });
         const tb = performance.now(); X.prof.settle += tb-ta; X.stage = 'queue '+i;
         while(enc.encodeQueueSize > 4 && !err && !X.abort) await sleep(4);
         const tc = performance.now(); X.prof.wait += tc-tb; X.stage = 'encode '+i;
@@ -4111,6 +4115,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
       X.stage = 'flush'; if(!err){ await Promise.race([enc.flush(), sleep(30000)]); } X.stage = 'done';
     }catch(e){ err = e; }
     try{ enc.close(); }catch(e){}
+    X.buf = X.buf2 = null;
 
     /* 복구 */
     document.body.classList.remove('nv-rec'); Rb.classList.remove('open');
