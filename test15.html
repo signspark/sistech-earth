@@ -4206,7 +4206,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   const ST = [[0,126.7045351,37.4550242,28.2,36.628],[5,126.7044852,37.4550455,28.2,36.622],[10,126.7044346,37.4550651,6.2,36.586],[15,126.7043783,37.4550699,6.2,36.604],[20,126.704322,37.4550748,6.2,36.61],[25,126.7042657,37.4550796,6.2,36.604],[30,126.7042094,37.4550844,6.2,36.616],[35,126.7041531,37.4550893,6.2,36.616],[40,126.7040967,37.4550941,6.2,36.604],[45,126.7040404,37.455099,6.2,36.616],[50,126.7039841,37.4551038,6.2,36.616],[55,126.7039278,37.4551086,6.2,36.616],[60,126.7038715,37.4551135,6.2,36.616],[65,126.7038152,37.4551183,6.2,36.634],[70,126.7037589,37.4551231,6.2,36.664],[75,126.7037025,37.455128,6.2,36.664],[80,126.7036462,37.4551328,6.2,36.729],[85,126.7035899,37.4551377,6.2,36.669],[90,126.7035336,37.4551425,6.2,36.675],[95,126.7034773,37.4551473,6.2,36.675],[100,126.703421,37.4551522,6.2,36.675],[105,126.7033646,37.455157,6.2,36.693],[110,126.7033083,37.4551618,6.2,36.681],[115,126.703252,37.4551667,6.2,36.681],[120,126.7031957,37.4551715,6.2,36.693],[125,126.7031394,37.4551764,6.2,36.693],[130,126.7030831,37.4551812,6.2,36.681],[135,126.7030268,37.455186,6.2,36.681],[140,126.7029705,37.455191,6.4,36.675],[145,126.7029142,37.455196,6.4,36.681],[150,126.7028579,37.455201,6.4,36.699],[155,126.7028016,37.4552061,6.4,36.687],[160,126.7027453,37.4552111,6.4,36.675],[165,126.702689,37.4552161,6.4,36.669],[170,126.7026327,37.4552211,6.4,36.669],[175,126.7025764,37.4552262,6.4,36.652],[180,126.7025201,37.4552312,6.4,36.634],[185,126.7024638,37.4552362,6.4,36.628],[190,126.7024076,37.4552412,6.4,36.628],[195,126.7023513,37.4552462,6.4,36.628],[200,126.702295,37.4552513,6.4,36.634],[205,126.7022387,37.4552563,6.4,36.616],[210,126.7021824,37.4552613,6.4,36.598],[215,126.7021261,37.4552663,6.4,36.604],[220,126.7020698,37.4552714,6.4,36.604],[225,126.7020148,37.4552654,343.3,36.61],[230,126.7019605,37.4552524,343.3,36.628],[235,126.7019063,37.4552395,343.3,36.711]];
   const SX_MEAS = [[0,0.0017],[10,-0.0057],[130,0.0147],[140,0.0108],[150,0.0125],[160,-0.0034],[200,-0.0073],[230,-0.0006]];   // [s, 횡경사(모델 실측, +: 남측 연석 쪽이 낮음)] · 주차 차량·가로수가 걸린 단면 제외, 교차로 구간은 0
   const ROAD = { name:'정각로 (인천시청 서측)', len: ST[ST.length-1][0], HW: 11.0, SW: 2.5, CURB: 0.15, CURB_OFF: 7.5 };   // 모델 횡단: 북측 가장자리(+3.5 m)→남측 연석(−7.5 m)으로 한쪽 편경사, 차도 11 m가 남측 측구로 배수 [모델]
-  const K = { n:0.015, Cr:0.9, W:0.40, L:0.50, Vo:1.5, SPACING:25, OPEN:0.5, PIPE_Q: 0.0152 };   // n 아스팔트 측구 [통상] · C 도로 0.9 [확인] · 40×50 cm · Vo 튐 한계유속 [추정] · 격자 개구율 50% [추정] · 연결관 150 mm 1% 만관 15.2 L/s [KDS 계산]
+  const K = { n:0.015, Cr:0.9, W:0.40, L:0.50, Vo:1.5, SPACING:25, OPEN:0.5, PIPE_Q: 0.0152, PIPE_SAG: 0.0595 };   // n 아스팔트 측구 [통상] · C 도로 0.9 [확인] · 40×50 cm · Vo 튐 한계유속 [추정] · 격자 개구율 50% [추정] · 연결관 만관(만닝 n 0.013, 경사 1%): 경사부 150 mm 15.2 L/s [KDS 최소], 저지대 250 mm 59.5 L/s [추정]
   // 막힘계수 C0 (막힘 면적 50%) — 장석진 외 2006 [확인] · 행: 횡경사 4/6/8% · 열: 종경사 2/4/6%
   const C0T = { curb: { 4:[0.257,0.251,0.369], 6:[0.305,0.351,0.542], 8:[0.320,0.413,0.650] }, flow: { 4:[0.078,0.270,0.110], 6:[0.086,0.166,0.129], 8:[0.094,0.212,0.282] } };
   const sxMed = (()=>{ const v = SX_MEAS.map(x=>x[1]).filter(x=>x>0.005 && x<0.06).sort((a,b)=>a-b); return v.length ? v[Math.floor(v.length/2)] : 0.02; })();
@@ -4291,12 +4291,12 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     for(let i=inl.length-1;i>=0;i--){ const x=inl[i]; if(x.dir!==-1) continue; solveGrade(x); const pv = inl[i-1]; if(pv) pv.byp += x.Qb; else x.lost = x.Qb; }
     // 저지대 받이: 유입 = 조각 유출 + 양쪽 우회 → 평형 수심 또는 지속시간 내 채움
     for(const x of inl){ if(!x.sag) continue; const Q = x.runoff + x.byp; x.Qin = Q; const b = x.b;
-      const capAt = d => Math.min(sagCap(d, b), K.PIPE_Q);
+      const capAt = d => Math.min(sagCap(d, b), K.PIPE_SAG);
       let dEq = null; if(capAt(1.0) >= Q){ let lo=0, hi=1.0; for(let k=0;k<40;k++){ const m=(lo+hi)/2; if(capAt(m) < Q) lo=m; else hi=m; } dEq = hi; } 
       const fill = H => { let V=0, s1=x.s, s2=x.s; const zs = zAt(x.s); for(let s=x.s; s>=0; s-=2.5){ const dep = zs+H-zAt(s); if(dep<=0) break; V += xsArea(dep, Sx)*2.5; s1=s; } for(let s=x.s+2.5; s<=ROAD.len; s+=2.5){ const dep = zs+H-zAt(s); if(dep<=0) break; V += xsArea(dep, Sx)*2.5; s2=s; } return { V, s1, s2 }; };
-      const Vin = Q*P.dur*60; let H;
-      if(dEq!=null && fill(dEq).V <= Vin) H = dEq; else { let lo=0, hi=1.5; for(let k=0;k<40;k++){ const m=(lo+hi)/2; if(fill(m).V < Vin) lo=m; else hi=m; } H = lo; }
-      const f = fill(H); x.H = H; x.ext = [f.s1, f.s2]; x.V = f.V; x.Qa = capAt(H); x.Qb = 0; x.over = H > ROAD.CURB; x.dEq = dEq; x.tFill = dEq!=null && Q>0 ? fill(dEq).V/Q : null; }
+      // 지속시간 동안 '유입 − 그 수심에서의 차집' 만큼만 고임 (수심이 오르면 차집도 늘어 평형 수심에서 멈춤)
+      const dur = P.dur*60; let lo=0, hi=1.5; for(let k=0;k<40;k++){ const m=(lo+hi)/2; if(fill(m).V < Math.max(0, Q-capAt(m))*dur) lo=m; else hi=m; } const H = lo;
+      const f = fill(H); x.H = H; x.ext = [f.s1, f.s2]; x.V = f.V; x.Qa = capAt(H); x.Qb = 0; x.over = H > ROAD.CURB; x.dEq = dEq; x.tFill = dEq!=null && Q>capAt(0)+1e-9 ? fill(dEq).V/Math.max(1e-6, Q-capAt(dEq*0.5)) : null; }
     mergePonds(inl, Sx);
     const sum = { Qin: inl.reduce((a,x)=>a+x.runoff,0), Qa: inl.reduce((a,x)=>a+x.Qa,0), Qb: inl.filter(x=>!x.sag).reduce((a,x)=>a+x.Qb,0), lost: inl.reduce((a,x)=>a+(x.lost||0),0), Hmax: Math.max(0,...inl.filter(x=>x.sag).map(x=>x.H)), ext: inl.filter(x=>x.sag).reduce((a,x)=>a+(x.ext[1]-x.ext[0]),0), over: inl.filter(x=>x.over).length };
     RES = { inl, sum, Sx }; return RES; }
@@ -4304,11 +4304,11 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   function mergePonds(inl, Sx){ const sags = inl.filter(x=>x.sag && x.H>0).sort((a,b)=>a.s-b.s); let i=0;
     while(i<sags.length){ const grp=[sags[i]]; let j=i+1; while(j<sags.length && sags[j].ext[0] <= grp[grp.length-1].ext[1]){ grp.push(sags[j]); j++; }
       if(grp.length>1){ const low = grp.reduce((m,x)=> zAt(x.s)<zAt(m.s)?x:m, grp[0]); const Q = grp.reduce((a,x)=>a+x.Qin,0); const zl = zAt(low.s);
-        const capAt = d => grp.reduce((a,x)=> a + Math.min(sagCap(Math.max(0, d-(zAt(x.s)-zl)), x.b), K.PIPE_Q), 0);
+        const capAt = d => grp.reduce((a,x)=> a + Math.min(sagCap(Math.max(0, d-(zAt(x.s)-zl)), x.b), K.PIPE_SAG), 0);
         const fill = H => { let V=0, s1=low.s, s2=low.s; for(let s=low.s; s>=0; s-=2.5){ const dep=zl+H-zAt(s); if(dep<=0) break; V+=xsArea(dep,Sx)*2.5; s1=s; } for(let s=low.s+2.5; s<=ROAD.len; s+=2.5){ const dep=zl+H-zAt(s); if(dep<=0) break; V+=xsArea(dep,Sx)*2.5; s2=s; } return { V, s1, s2 }; };
         let dEq=null; if(capAt(1.0) >= Q){ let lo=0, hi=1.0; for(let k=0;k<40;k++){ const m=(lo+hi)/2; if(capAt(m)<Q) lo=m; else hi=m; } dEq=hi; }
-        const Vin = Q*P.dur*60; let H; if(dEq!=null && fill(dEq).V <= Vin) H=dEq; else { let lo=0, hi=1.5; for(let k=0;k<40;k++){ const m=(lo+hi)/2; if(fill(m).V<Vin) lo=m; else hi=m; } H=lo; }
-        const f = fill(H); for(const x of grp){ const own = Math.max(0, H-(zAt(x.s)-zl)); x.H = own; x.ext = x===low ? [f.s1, f.s2] : [x.s, x.s]; x.Qa = Math.min(sagCap(own, x.b), K.PIPE_Q); x.over = own > ROAD.CURB; x.merged = grp.length; x.dEq = dEq; }
+        const dur = P.dur*60; let lo=0, hi=1.5; for(let k=0;k<40;k++){ const m=(lo+hi)/2; if(fill(m).V < Math.max(0, Q-capAt(m))*dur) lo=m; else hi=m; } const H=lo;
+        const f = fill(H); for(const x of grp){ const own = Math.max(0, H-(zAt(x.s)-zl)); x.H = own; x.ext = x===low ? [f.s1, f.s2] : [x.s, x.s]; x.Qa = Math.min(sagCap(own, x.b), K.PIPE_SAG); x.over = own > ROAD.CURB; x.merged = grp.length; x.dEq = dEq; }
         low.V = f.V; }
       i=j; } }
   // 고임 횡단면적: 연석에서 Sx로 올라가는 편경사 단면, 차도폭을 넘으면 사각형, 연석 높이를 넘으면 보도까지 [추정]
@@ -4365,7 +4365,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     $$('#rbNote').innerHTML = `
 <b>구간</b> ${ROAD.name} · 종단 ${ST.length}점(5 m)·횡단 24개(10 m, 폭 ±16 m)를 3D 모델에서 추출 <span class="tag ok">모델</span> · 종단 고저차 ${((Math.max(...Z)-Math.min(...Z))*100).toFixed(0)} cm (거의 평탄, 종경사 0.02~0.3%) · 저지대 ${sags.map(x=>'#'+x.id+'('+Math.round(x.s)+' m)').join(', ')}<br>
 <b>횡단</b> 북측 가장자리가 높고 남측 연석(중심선 남쪽 7.5 m)으로 한쪽 편경사 · 주차 차량·가로수 없는 단면 3개에서 1.1~1.5% <span class="tag ok">모델</span> → 차도 11 m가 남측 측구로 배수, 동쪽 구간 연석 위치 7.5 m는 추정 <span class="tag est">추정</span><br>
-<b>받이</b> 25 m 간격 40×50 cm, 저지대에 1곳씩 배치 <span class="tag est">가정</span>(KDS 61 40 00 간격 10~30 m <span class="tag lit">확인</span>) · 연결관 150 mm 1% 만관 15.2 L/s를 차집 상한으로 <span class="tag lit">KDS</span><br>
+<b>받이</b> 25 m 간격 40×50 cm, 저지대에 1곳씩 배치 <span class="tag est">가정</span>(KDS 61 40 00 간격 10~30 m <span class="tag lit">확인</span>) · 연결관 만관을 차집 상한으로: 경사부 150 mm 1% 15.2 L/s <span class="tag lit">KDS 최소</span>, 저지대 250 mm 59.5 L/s <span class="tag est">추정</span><br>
 <b>식</b> 합리식 C 0.9 <span class="tag lit">확인</span> · 측구 Q=0.376/n·Sx^(5/3)·SL^(1/2)·T^(8/3), 격자 차집 E=Rf·Eo+Rs(1−Eo), 저지대 위어/오리피스 <span class="tag lit">HEC-22 통상</span> · 막힘계수 C0 = 장석진 외 2006 표(50%) × 막힘률/50% <span class="tag est">보간</span>, 표 범위 밖(Sx 2%, SL &lt;2%)은 가장 가까운 칸 <span class="tag est">추정</span><br>
 <b>집수면적</b> 받이당 차도 11 m + 보도 2.5 m × 분담 길이 · 유출은 내리막 방향으로 흘러 처음 만나는 받이에 배정 · 종경사 0.1% 미만은 0.1%로 <span class="tag est">추정</span><br>
 <b>고임</b> 저지대는 평형 수심(차집 = 유입)과 지속시간 동안 채운 부피 중 작은 쪽 · 편경사 단면 채움(2D 흐름 아님), 범위가 겹치는 저지대는 한 못으로 병합 <span class="tag est">채움 방식</span> · 연석 15 cm 넘으면 보도 범람 표시<br>
