@@ -4043,11 +4043,11 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     return muxP; }
 
   /* ---- 타일 로딩 대기 ---- */
-  function tilesReady(){ if(!scene.globe.tilesLoaded) return false; const p = scene.primitives;
-    for(let i=0;i<p.length;i++){ const x = p.get(i); if(x instanceof C.Cesium3DTileset && x.show && !x.tilesLoaded) return false; } return true; }
+  function eachTileset(col, fn){ for(let i=0;i<col.length;i++){ const x = col.get(i); if(x instanceof C.Cesium3DTileset){ if(x.show) fn(x); } else if(x instanceof C.PrimitiveCollection && x.show) eachTileset(x, fn); } }
+  function tilesReady(){ if(!scene.globe.tilesLoaded) return false; let ok = true; eachTileset(scene.primitives, t => { if(!t.tilesLoaded) ok = false; }); return ok; }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  async function settle(maxMs){ const t0 = performance.now(); let n = 0;
-    while(true){ viewer.render(); n++; if(tilesReady() && n>=2) return true; if(performance.now()-t0 > maxMs) return false; await sleep(n<4 ? 0 : 16); } }
+  async function settle(maxMs, onReady){ const t0 = performance.now(); let n = 0;
+    while(true){ viewer.render(); n++; const ok = tilesReady() && n>=2; if(ok || performance.now()-t0 > maxMs){ onReady(); X.prof.renders += n; return ok; } await sleep(n<4 ? 0 : 16); } }
 
   /* ---- 녹화 본체 ---- */
   async function run(){
@@ -4055,7 +4055,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     const R = RES[X.res], spd = X.spd;
     q('#nxGo').disabled = true; q('#nxWarn').classList.remove('show');
     try{ await loadMuxer(); }catch(e){ q('#nxWarn').textContent = 'MP4 먹서 라이브러리를 불러오지 못했습니다 (네트워크 확인)'; q('#nxWarn').classList.add('show'); q('#nxGo').disabled = false; return; }
-    let cfg = { codec:R.codec, width:R.w, height:R.h, bitrate:R.br, framerate:FPS, hardwareAcceleration:'prefer-hardware', latencyMode:'quality', avc:{ format:'avc' } };
+    let cfg = { codec:R.codec, width:R.w, height:R.h, bitrate:R.br, framerate:FPS, hardwareAcceleration:'prefer-hardware', latencyMode:'realtime', avc:{ format:'avc' } };
     let sup = null; try{ sup = await VideoEncoder.isConfigSupported(cfg); }catch(e){}
     if(!sup || !sup.supported){ delete cfg.hardwareAcceleration; try{ sup = await VideoEncoder.isConfigSupported(cfg); }catch(e){} }
     if(!sup || !sup.supported){ q('#nxWarn').textContent = `이 기기에서 ${R.label}(${R.w}×${R.h}) H.264 인코딩이 지원되지 않습니다. 더 낮은 해상도를 선택해 주세요.`; q('#nxWarn').classList.add('show'); q('#nxGo').disabled = false; return; }
@@ -4064,7 +4064,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     A.stopSim();
     const cv = document.getElementById('cesium');
     const saved = { t: NV.t, loop: viewer.useDefaultRenderLoop, rs: viewer.resolutionScale, style: cv.getAttribute('style')||'', anim: viewer.clock.shouldAnimate, mul: viewer.clock.multiplier, time: C.JulianDate.clone(viewer.clock.currentTime), prevTarget: NV.prevTarget };
-    X.running = true; X.abort = false; X.blob = null; D.classList.remove('open');
+    X.running = true; X.abort = false; X.blob = null; X.prof = { settle:0, wait:0, renders:0 }; X.enc = null; D.classList.remove('open');
     document.body.classList.add('nv-rec'); Rb.classList.add('open');
     q('#nxDone').classList.remove('show');
 
@@ -4082,7 +4082,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     const t0 = performance.now(); let err = null, encoded = 0;
     const muxer = new Mp4Muxer.Muxer({ target: new Mp4Muxer.ArrayBufferTarget(), video: { codec:'avc', width:R.w, height:R.h, frameRate:FPS }, fastStart:'in-memory', firstTimestampBehavior:'offset' });
     const enc = new VideoEncoder({ output: (chunk, meta) => { try{ muxer.addVideoChunk(chunk, meta); encoded++; }catch(e){ err = e; } }, error: e => { err = e; } });
-    enc.configure(cfg);
+    enc.configure(cfg); X.enc = enc;
 
     /* 시뮬레이션 초기화 */
     NV.playing = false; NV.t = 0; A.placeAt(0, true); NV.camHdg = NV.hdg; NV.prevTarget = null; A.updCamera(0);
@@ -4094,11 +4094,13 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
         NV.t = Math.min(r.dur, i*dtR*spd);
         A.placeAt(NV.t, i===0, dtR); A.updCamera(dtR);
         viewer.clock.currentTime = C.JulianDate.addSeconds(clk0, i*dtR*spd, new C.JulianDate());
-        await settle(i===0 ? 25000 : 3000);
-        viewer.render();                       // 캡처 직전 동기 렌더 (drawing buffer 보존)
-        const canvas = scene.canvas; wCanvas = canvas.width; hCanvas = canvas.height;
-        const frame = new VideoFrame(canvas, { timestamp: Math.round(i*1e6/FPS), duration: Math.round(1e6/FPS) });
-        while(enc.encodeQueueSize > 6 && !err) await sleep(4);
+        let frame = null; const ta = performance.now(); X.stage = 'settle '+i;
+        await settle(i===0 ? 25000 : 3000, () => {   // 렌더 직후 같은 태스크에서 캡처 (drawing buffer 보존)
+          const canvas = scene.canvas; wCanvas = canvas.width; hCanvas = canvas.height;
+          frame = new VideoFrame(canvas, { timestamp: Math.round(i*1e6/FPS), duration: Math.round(1e6/FPS) }); });
+        const tb = performance.now(); X.prof.settle += tb-ta; X.stage = 'queue '+i;
+        while(enc.encodeQueueSize > 4 && !err && !X.abort) await sleep(4);
+        const tc = performance.now(); X.prof.wait += tc-tb; X.stage = 'encode '+i;
         enc.encode(frame, { keyFrame: i % (FPS*2) === 0 }); frame.close();
         /* 진행 */
         const el = (performance.now()-t0)/1000, per = el/(i+1), rem = per*(N-i-1);
@@ -4106,7 +4108,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
         Rb.querySelector('#nrFr').textContent = `${(i+1).toLocaleString()} / ${N.toLocaleString()} 프레임 (${Math.round((i+1)/N*100)}%) · 영상 ${fmtMS((i+1)/FPS)}`;
         Rb.querySelector('#nrTm').textContent = `경과 ${fmtMS(el)} · 남은 약 ${fmtMS(rem)} · ${per.toFixed(2)} s/프레임`;
       }
-      if(!err){ await enc.flush(); }
+      X.stage = 'flush'; if(!err){ await Promise.race([enc.flush(), sleep(30000)]); } X.stage = 'done';
     }catch(e){ err = e; }
     try{ enc.close(); }catch(e){}
 
