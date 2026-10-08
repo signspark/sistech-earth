@@ -3533,7 +3533,7 @@ console.log('SISTECH EARTH ext v3 (한국 위성·천리안 2A) loaded', KSAT.le
   const PURP = [ {n:'생활방범', c:'#A4C81C'}, {n:'어린이보호', c:'#F2A65A'}, {n:'쓰레기단속', c:'#5AC8FA'} ];
   const CENTER = { lat:37.4563, lon:126.7052 };
   const reg = MENUS.site.find(c=>c.id==='analysis');
-  if(reg && !reg.items.some(x=>x.id==='cctv')){ const i = reg.items.findIndex(x=>x.id==='view'); reg.items.splice(i<0?reg.items.length:i+1, 0, { id:'cctv', q:'인천시청 주변 공개 CCTV는 어디를 보나', name:'공개 CCTV · 인천시청 1 km (방향 추정)', src:'행정안전부 CCTV 표준데이터(남동구청) '+CAMS.length+'대 · 위치 실측 · 촬영 방향은 도로 방향 기준 추정', type:'layer' }); try{ renderCats(); renderSub(); }catch(e){} }
+  if(reg && !reg.items.some(x=>x.id==='cctv')){ let i = reg.items.findIndex(x=>x.id==='xsec'); if(i<0) i = reg.items.findIndex(x=>x.id==='view'); reg.items.splice(i<0?reg.items.length:i+1, 0, { id:'cctv', q:'인천시청 주변 공개 CCTV는 어디를 보나', name:'공개 CCTV · 인천시청 1 km (방향 추정)', src:'행정안전부 CCTV 표준데이터(남동구청) '+CAMS.length+'대 · 위치 실측 · 촬영 방향은 도로 방향 기준 추정', type:'layer' }); try{ renderCats(); renderSub(); }catch(e){} }
   let DS = null, built = false;
   const POLE = 6, REACH = 30, TOPH = 9; // 지주 높이 6 m · 부채꼴 길이 30 m · 끝 높이 9 m
   function dest(lat, lon, brg, dist){ const r = brg*Math.PI/180; const dlat = dist*Math.cos(r)/111000, dlon = dist*Math.sin(r)/(111000*Math.cos(lat*Math.PI/180)); return [lat+dlat, lon+dlon]; }
