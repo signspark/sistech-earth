@@ -938,7 +938,7 @@ function savePng(){ scene.render(); const a=document.createElement('a'); a.downl
   renderCats(); updateSrc(); setT(0);
   // 해시 복원
   const h = new URLSearchParams(location.hash.slice(1));
-  if(h.get('on')){ for(const id of h.get('on').split(',')) if(id && !STATE.on.has(id)) toggleLayer(id, true); }
+  if(h.get('on')){ for(const id of h.get('on').split(',')) if(id && !STATE.on.has(id) && !/^cad[A-Z]/.test(id)) toggleLayer(id, true); } /* 45: 지적 레이어는 주소(해시)로 복원하지 않음 */
   if(h.get('at') && !h.has('v')){ const [la,lo,alt,hd,pt]=h.get('at').split(',').map(Number); camera.setView({destination:Cesium.Cartesian3.fromDegrees(lo,la,alt),orientation:{heading:Cesium.Math.toRadians(hd||0),pitch:(pt!=null && isFinite(pt))?Cesium.Math.toRadians(pt):-Cesium.Math.PI_OVER_TWO,roll:0}}); updateHud(); }
   else { /* 초기 화면: 송도 현장 뷰 (2026-10-08 설정) */ const IV = { lat:37.38177, lon:126.63829, alt:573.4, heading:11.77, pitch:-25.58 }; camera.setView({destination:Cesium.Cartesian3.fromDegrees(IV.lon, IV.lat, IV.alt), orientation:{ heading:Cesium.Math.toRadians(IV.heading), pitch:Cesium.Math.toRadians(IV.pitch), roll:0 }}); updateHud(); setMode('site'); }
   setTimeout(()=>toast('SISTECH EARTH 데모 · 지도를 클릭하면 지점 카드, 왼쪽 메뉴에서 레이어를 켜세요'), 1200);
@@ -5231,5 +5231,40 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
 
 </script>
 
+<script>
+/* ---------- 45. 지적 레이어는 SITE › 지적에서 직접 켰을 때만 적용 · EARTH 모드에서는 지적도·3D 모델을 올리지 않음 (2026-10-09) ----------
+   - 주소(#on=…)에 cad* 레이어가 있어도 복원하지 않음 (v1 init 패치)
+   - SITE 모드가 아닐 때 cad* 레이어 켜기 요청은 무시
+   - EARTH로 전환하면 켜져 있던 지적 레이어를 모두 끄고 메모리 해제 (SITE로 돌아와도 자동으로 다시 켜지 않음)
+   - EARTH에서는 3D 모델(타일셋)을 로드하지 않음 (22번 처리 재확인)
+*/
+(function(){
+  const isCad = id => /^cad[A-Z]/.test(id||'');
+  const cadOn = () => [...STATE.on].filter(isCad);
+  const _t45 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(isCad(id)){
+      const want = force!==undefined ? !!force : !STATE.on.has(id);
+      if(want && STATE.mode!=='site'){ try{ toast('지적도는 SITE › 지적 메뉴에서 켤 수 있습니다'); }catch(e){} return; }
+    }
+    return _t45.apply(this, arguments);
+  };
+  async function cadOffAll(){
+    const ids = cadOn(); if(!ids.length) return;
+    for(const id of ids){ try{ await _t45(id, false); }catch(e){} }
+    try{ renderCats(); renderSub(); updateSrc(); }catch(e){}
+  }
+  const _sm45 = setMode;
+  setMode = function(m){ const r = _sm45.apply(this, arguments); if(m!=='site') cadOffAll(); return r; };
+  const _al45 = autoLoadTileset;
+  autoLoadTileset = function(){
+    if(STATE.mode!=='site'){ for(const p of PROJECTS) if(p.ts){ try{ scene.primitives.remove(p.ts); }catch(e){} p.ts = null; } return; }
+    return _al45.apply(this, arguments);
+  };
+  if(STATE.mode!=='site') cadOffAll();
+  setTimeout(()=>{ if(STATE.mode!=='site') cadOffAll(); }, 2500);
+  window.__cad45 = { cadOn, cadOffAll };
+})();
+</script>
 </body>
 </html>
