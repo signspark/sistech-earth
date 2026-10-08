@@ -683,7 +683,7 @@ function updateHud(){
   autoLoadTileset();
   // 해시 딥링크
   const c = camera.positionCartographic;
-  const hash = `at=${Cesium.Math.toDegrees(c.latitude).toFixed(4)},${Cesium.Math.toDegrees(c.longitude).toFixed(4)},${Math.round(h)},${Math.round(Cesium.Math.toDegrees(camera.heading))}&on=${[...STATE.on].join(',')}`;
+  const hash = `at=${Cesium.Math.toDegrees(c.latitude).toFixed(4)},${Cesium.Math.toDegrees(c.longitude).toFixed(4)},${Math.round(h)},${Math.round(Cesium.Math.toDegrees(camera.heading))},${Math.round(Cesium.Math.toDegrees(camera.pitch))}&on=${[...STATE.on].join(',')}`;
   history.replaceState(null,'','#'+hash);
 }
 camera.changed.addEventListener(updateHud); camera.percentageChanged = 0.01;
@@ -939,9 +939,8 @@ function savePng(){ scene.render(); const a=document.createElement('a'); a.downl
   // 해시 복원
   const h = new URLSearchParams(location.hash.slice(1));
   if(h.get('on')){ for(const id of h.get('on').split(',')) if(id && !STATE.on.has(id)) toggleLayer(id, true); }
-  if(h.get('at') && !h.has('v')){ const [la,lo,alt,hd]=h.get('at').split(',').map(Number); camera.setView({destination:Cesium.Cartesian3.fromDegrees(lo,la,alt),orientation:{heading:Cesium.Math.toRadians(hd||0),pitch:-Cesium.Math.PI_OVER_TWO,roll:0}}); }
-  else { camera.setView({destination:Cesium.Cartesian3.fromDegrees(127.5, 36.5, 2.4e7)}); setTimeout(flyHome, 400); }
-  updateHud();
+  if(h.get('at') && !h.has('v')){ const [la,lo,alt,hd,pt]=h.get('at').split(',').map(Number); camera.setView({destination:Cesium.Cartesian3.fromDegrees(lo,la,alt),orientation:{heading:Cesium.Math.toRadians(hd||0),pitch:(pt!=null && isFinite(pt))?Cesium.Math.toRadians(pt):-Cesium.Math.PI_OVER_TWO,roll:0}}); updateHud(); }
+  else { /* 초기 화면: 송도 현장 뷰 (2026-10-08 설정) */ const IV = { lat:37.38177, lon:126.63829, alt:573.4, heading:11.77, pitch:-25.58 }; camera.setView({destination:Cesium.Cartesian3.fromDegrees(IV.lon, IV.lat, IV.alt), orientation:{ heading:Cesium.Math.toRadians(IV.heading), pitch:Cesium.Math.toRadians(IV.pitch), roll:0 }}); updateHud(); setMode('site'); }
   setTimeout(()=>toast('SISTECH EARTH 데모 · 지도를 클릭하면 지점 카드, 왼쪽 메뉴에서 레이어를 켜세요'), 1200);
 })();
 </script>
