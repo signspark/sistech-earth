@@ -94,7 +94,7 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 .lb.bld{color:rgba(225,232,240,.92);font-weight:500;font-size:12px;text-shadow:0 0 3px #000,0 1px 2px #000,0 0 6px rgba(0,0,0,.9)}
 .lb.bld::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#cfd8e3;margin-right:5px;vertical-align:1px;box-shadow:0 0 2px #000}
 .lb.bld.land{font-weight:600;font-size:13px;color:#fff}
-#curRoad{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:5;pointer-events:none;padding:7px 14px;border-radius:999px;background:rgba(8,12,20,.72);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(8px);font-size:15px;font-weight:700;color:#fff;display:none;white-space:nowrap;transition:bottom .25s}
+#curRoad{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:5;pointer-events:none;padding:7px 14px;border-radius:999px;background:rgba(8,12,20,.72);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(8px);font-size:15px;font-weight:700;color:#fff;display:none;white-space:nowrap}
 #curRoad.show{display:block}
 #curRoad.up{bottom:86px}
 #attr{position:fixed;right:68px;bottom:6px;font-size:10px;color:rgba(220,232,245,.42);z-index:4;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.7);white-space:nowrap}
@@ -721,7 +721,7 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
       if(seenP.has(e.type+e.id)) continue; seenP.add(e.type+e.id);
       const lv=parseFloat(tg['building:levels'])||0; let hgt=parseFloat(tg.height)||0; if(!hgt && lv) hgt=lv*3.2;
       const land = !!(tg.tourism||tg.amenity||tg.shop||tg.office||/타워|센터|컨벤시아|호텔|병원|대학교|시청|구청|청사|스퀘어|몰|백화점|도서관|경찰청|해양경찰/.test(tg.name));
-      const generic = /^[A-Za-z]?\d+(동|호)?$/.test(tg.name) || /(동|호)$/.test(tg.name) && /\d/.test(tg.name) || /상가$|주차장|경비실|관리사무소|매점|주유소|편의점|맥도날드|스타벅스|버거킹|코노트리에/.test(tg.name);
+      const generic = /^[A-Za-z]?\d*(동|호)?$/.test(tg.name) || /^[A-Za-z0-9\-]+(동|호|관|타입)$/.test(tg.name) || /경비/.test(tg.name) || /(동|호)$/.test(tg.name) && /\d/.test(tg.name) || /상가$|주차장|경비실|관리사무소|매점|주유소|편의점|맥도날드|스타벅스|버거킹|코노트리에/.test(tg.name);
       if(!land && lv<CL.minLevels && !hgt) continue;
       if(generic) continue;
       const imp = (land?60:0) + Math.min(hgt,300)/5 + (lv?Math.min(lv,70)*0.6:0);
