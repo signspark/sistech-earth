@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SISTECH EARTH · 드라이브 (Tesla)</title>
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.126/Build/Cesium/Cesium.js"></script>
+<link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.126/Build/Cesium/Widgets/widgets.css">
+<style>
+:root{
+  --navy-950:#03122A; --navy-900:#06224A; --navy:#003A80; --navy-700:#0B4FA3;
+  --panel:rgba(6,34,74,.86); --line:rgba(127,178,230,.22); --line-strong:rgba(127,178,230,.45);
+  --text:#DCE8F5; --text-dim:#8FA7C4; --lime:#A4C81C; --lime-bright:#BFE33A;
+  --amber:#F2A65A; --red:#FF5D5D; --cyan:#3FC7C0;
+  --font:Inter,"Noto Sans KR","Segoe UI","Malgun Gothic",sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--navy-950);color:var(--text);font-family:var(--font);font-size:14px;overflow:hidden;touch-action:none}
+#cesium{position:fixed;inset:0}
+#cesium .cesium-viewer-bottom,#cesium .cesium-widget-credits{display:none!important}
+#credit{display:none}
+button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer}
+/* 상단 좌측: 로고 + 상태 배지 */
+#top{position:fixed;left:14px;top:12px;display:flex;align-items:center;gap:12px;z-index:5;pointer-events:none}
+.brand{display:flex;align-items:baseline;gap:8px;user-select:none;text-shadow:0 1px 3px rgba(0,0,0,.6)}
+.brand .word{font-weight:800;font-size:19px;letter-spacing:.06em;color:#fff}
+.brand .word b{color:var(--lime);font-weight:900}
+.brand .sub{font-weight:300;font-size:13px;letter-spacing:.32em;color:var(--text-dim)}
+#badge{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;background:rgba(3,18,42,.72);border:1px solid var(--line);font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;backdrop-filter:blur(4px);transition:background .3s}
+#badge.warn{border-color:rgba(242,166,90,.6);color:var(--amber)}
+#badge.rec{border-color:rgba(255,93,93,.5)}
+#badge.ok{border-color:rgba(164,200,28,.6);color:var(--lime-bright)}
+#speed{position:fixed;right:14px;top:12px;z-index:5;pointer-events:none;text-align:right;text-shadow:0 1px 3px rgba(0,0,0,.6)}
+#speed b{font-size:30px;font-weight:800;color:#fff;letter-spacing:-.02em}
+#speed span{font-size:12px;color:var(--text-dim);margin-left:3px}
+/* 탭 시 제어막대 */
+#bar{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%) translateY(8px);display:flex;gap:8px;padding:8px;border-radius:16px;background:var(--panel);border:1px solid var(--line);backdrop-filter:blur(8px);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:6;max-width:calc(100vw - 20px);flex-wrap:wrap;justify-content:center}
+#bar.show{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
+#bar button{min-width:56px;min-height:56px;padding:0 16px;border-radius:12px;background:rgba(255,255,255,.06);font-size:15px;font-weight:600;color:var(--text);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;line-height:1.1}
+#bar button small{font-size:11px;color:var(--text-dim);font-weight:500}
+#bar button.on{background:var(--navy);box-shadow:inset 0 0 0 1px var(--line-strong);color:#fff}
+#bar button.on small{color:var(--lime-bright)}
+#bar button:active{background:rgba(255,255,255,.14)}
+/* 출처(연한 표기) */
+#attr{position:fixed;right:10px;bottom:6px;font-size:10px;color:rgba(220,232,245,.42);z-index:4;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.7);white-space:nowrap}
+/* 디버그 */
+#dbg{position:fixed;left:14px;bottom:10px;z-index:5;font:11px/1.45 ui-monospace,Consolas,monospace;color:#cfe;background:rgba(3,18,42,.72);padding:8px 10px;border-radius:8px;border:1px solid var(--line);white-space:pre;display:none;pointer-events:none}
+#dbg.show{display:block}
+/* 내보내기 모달 */
+#modal{position:fixed;inset:0;background:rgba(3,18,42,.65);display:none;align-items:center;justify-content:center;z-index:9}
+#modal.show{display:flex}
+#modal .box{width:min(560px,calc(100vw - 24px));max-height:calc(100vh - 40px);overflow:auto;background:var(--navy-900);border:1px solid var(--line-strong);border-radius:16px;padding:16px}
+#modal h2{margin:0 0 10px;font-size:17px;font-weight:700;display:flex;justify-content:space-between;align-items:center}
+#modal h2 button{min-width:56px;min-height:56px;font-size:20px;color:var(--text-dim)}
+.trip{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+.trip .info{flex:1;min-width:0}
+.trip .info b{display:block;font-size:14px}
+.trip .info span{font-size:12px;color:var(--text-dim)}
+.trip button{min-width:56px;min-height:56px;padding:0 10px;border-radius:10px;background:rgba(255,255,255,.07);font-size:13px;font-weight:600}
+.trip button.del{color:var(--red)}
+#toast{position:fixed;left:50%;top:60px;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 14px;font-size:13px;opacity:0;transition:opacity .3s;z-index:8;pointer-events:none;max-width:90vw;text-align:center}
+#toast.show{opacity:1}
+.empty{padding:24px 0;text-align:center;color:var(--text-dim)}
+</style>
+</head>
+<body>
+<div id="cesium"></div>
+<div id="credit"></div>
+<div id="top">
+  <div class="brand"><span class="word">SI<b>S</b>TECH</span><span class="sub">DRIVE</span></div>
+  <div id="badge">시작 중…</div>
+</div>
+<div id="speed"><b id="spdV">0</b><span>km/h</span></div>
+<div id="bar">
+  <button id="bFollow">따라가기<small>재개</small></button>
+  <button id="bDim">3D<small>2D 전환</small></button>
+  <button id="bQ">화질<small>자동</small></button>
+  <button id="bExp">기록<small>내보내기</small></button>
+  <button id="bExit">종료<small>EARTH로</small></button>
+</div>
+<div id="attr">브이월드(국토교통부) · Esri · SISTECH 3D · © OpenStreetMap contributors</div>
+<div id="dbg"></div>
+<div id="toast"></div>
+<div id="modal"><div class="box"><h2>주행 기록 <button id="mClose" aria-label="닫기">✕</button></h2><div id="trips"></div></div></div>
+
+<script>
+/* =====================================================================================
+   SISTECH EARTH · Tesla 드라이브 모드 (tesla.html) · 2026-10-09
+   - 테슬라 모델 Y 차내 브라우저용 최소 UI 지도 (헤딩업, 차량 고정 위치 = 가로 50% / 위에서 66.67%)
+   - 위치: navigator.geolocation / ?sim=1 (송도 가상 주행) / ?replay=<tripId>
+   - OSM(Overpass) 도로 지도정합(클라이언트), 차선 우측 오프셋, 자동 주행기록(IndexedDB)
+   ===================================================================================== */
+/* ---------- 차내 측정 후 조정할 상수 (한 곳에 모음) ---------- */
+const CONFIG = {
+  // 차량 화면 고정 위치 (가로 비율, 세로 비율 - 위에서부터)
+  anchorX: 0.5, anchorY: 2/3,
+  // 속도(km/h) 기반 시점 보간 테이블 [속도, 거리 m, 피치 deg]
+  view: [ [0,150,-50], [10,150,-50], [30,250,-45], [60,450,-40], [100,800,-35], [160,1100,-33] ],
+  viewEase: 2.5,            // 시점 변경 완화 시간 (초)
+  view2D: { rangeMul: 1.15, pitch: -89.5 },   // 2D 모드(연직) 거리 배율·피치
+  headingLP: 0.25,          // 헤딩 저역통과 계수 (속도 > 5 km/h 일 때, 픽스당)
+  headingMinSpeed: 5,       // 이 속도(km/h) 미만이면 GPS 헤딩 무시
+  camHeadingRate: 2.2,      // 카메라 헤딩 추종 속도 (1/s)
+  blendSec: 0.4,            // 새 픽스로 수렴하는 시간 (0.3~0.5 s)
+  gpsWeakSec: 3,            // 이 시간 이상 픽스 없으면 'GPS 신호 약함' + 추측항법 정지
+  // 지도정합
+  match: { minR: 30, wHeading: 0.35, sameWay: -15, connected: -8, layerPenalty: 20, switchFixes: 2, fetchR: 1500, refetchMargin: 500, minFetchGap: 15000 },
+  // 차선 오프셋 (OSM 폭 기준, index.html laneOffsets 와 동일 규칙)
+  lane: { oneway: 0, minOff: 1.6, maxOff: 6, divisor: 4, default: 3.2 },
+  // 3D Tiles 로드/해제 거리 (m) · 최대 동시 활성
+  tiles: { loadKm: 20, unloadKm: 40, maxActive: 2, cacheBytes: 512*1024*1024 },
+  // 화질 단계 [라벨, 타일 SSE, 지형 SSE, 해상도 배율]
+  quality: [ ['저',32,4,0.75], ['중',16,2.5,1], ['고',8,1.6,1] ],
+  autoFpsMin: 24, autoFpsSec: 5,
+  speedSseGain: 0.012,      // 속도(km/h)당 SSE 가산 비율
+  barSec: 3, autoResumeSec: 20,
+  // 기록
+  log: { startKmh: 5, startSec: 5, flushMs: 10000, endIdleMin: 10 },
+  // 시뮬레이션
+  sim: { noiseSigma: 4, hdgSigma: 4, hz: 1 },
+};
+const R = 6371008.8, rad = d=>d*Math.PI/180, deg = r=>r*180/Math.PI, clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const q = s=>document.querySelector(s);
+const QS = new URLSearchParams(location.search);
+const SIM = QS.get('sim')==='1', REPLAY = QS.get('replay'), DEBUG = QS.get('debug')==='1';
+const PROJECTS = [
+  { id:'incheon1', name:'인천', lat:37.4561, lon:126.7052, tsId:'incheon_01' },
+  { id:'busan1', name:'부산', lat:35.1565, lon:129.1455, tsId:'busan_01' },
+  { id:'bundang1', name:'분당', lat:37.3826, lon:127.1189, tsId:'bundang_01' },
+  { id:'goyang1', name:'고양', lat:37.6584, lon:126.8320, tsId:'goyang_01' },
+];
+const TILESET_BASE = 'https://3dview.sistech3d.com/api/tileset/project/';
+const OVERPASS = ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.private.coffee/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+let toastT; function toast(m, ms=2200){ const t=q('#toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'), ms); }
+function angDiff(a,b){ let d=(b-a)%360; if(d>180)d-=360; if(d<-180)d+=360; return d; }   // a→b 최단 회전각 (359→1 처리)
+function bearing(a,b){ const la1=rad(a[1]), la2=rad(b[1]), dl=rad(b[0]-a[0]); return (deg(Math.atan2(Math.sin(dl)*Math.cos(la2), Math.cos(la1)*Math.sin(la2)-Math.sin(la1)*Math.cos(la2)*Math.cos(dl)))+360)%360; }
+function hav(a,b){ const la1=rad(a[1]), la2=rad(b[1]), dphi=la2-la1, dl=rad(b[0]-a[0]); const h=Math.sin(dphi/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dl/2)**2; return 2*R*Math.asin(Math.sqrt(h)); }
+function move(lon,lat,hdg,d){ const b=rad(hdg); const lat2=lat+deg(d*Math.cos(b)/R); const lon2=lon+deg(d*Math.sin(b)/(R*Math.cos(rad(lat)))); return [lon2,lat2]; }
+function gauss(){ let u=0,v=0; while(u===0)u=Math.random(); while(v===0)v=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+const hhmm = d=>{ d=new Date(d); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); };
+
+/* ---------- Cesium 초기화 (위젯·크레딧 UI 모두 숨김) ---------- */
+Cesium.Ion.defaultAccessToken = undefined;
+const C = Cesium;
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const viewer = new C.Viewer('cesium', {
+  baseLayer: new C.ImageryLayer(new C.UrlTemplateImageryProvider({ url: ESRI, maximumLevel: 19, credit: 'Esri' })),
+  animation:false, timeline:false, baseLayerPicker:false, geocoder:false, homeButton:false, sceneModePicker:false, navigationHelpButton:false, fullscreenButton:false, infoBox:false, selectionIndicator:false, vrButton:false,
+  creditContainer: q('#credit'), requestRenderMode:false, msaaSamples: 1, shadows:false, skyAtmosphere: new C.SkyAtmosphere(), contextOptions:{ webgl:{ powerPreference:'high-performance', antialias:false } }
+});
+const scene = viewer.scene, camera = scene.camera, globe = scene.globe;
+viewer.resolutionScale = 1;   // useBrowserRecommendedResolution 기본값(true) 유지
+scene.globe.enableLighting = false; scene.highDynamicRange = false; scene.postProcessStages.fxaa.enabled = false;
+scene.fog.enabled = true; scene.fog.density = 0.0012; scene.fog.screenSpaceErrorFactor = 4; scene.fog.minimumBrightness = 0.1;
+globe.preloadSiblings = true; globe.preloadAncestors = true; globe.tileCacheSize = 400; globe.maximumScreenSpaceError = 2.5;
+globe.depthTestAgainstTerrain = false; globe.showGroundAtmosphere = false; scene.skyBox && (scene.skyBox.show = false); scene.sun && (scene.sun.show=false); scene.moon && (scene.moon.show=false);
+scene.screenSpaceCameraController.enableTilt = false; scene.screenSpaceCameraController.enableLook = false;
+// 브이월드 (국내 3개 영역만, 직접 로드 · 프록시 금지) — Esri 위에 겹침
+const VW_URL = 'https://api.vworld.kr/req/wmts/1.0.0/57C7018D-1A36-4873-99CD-A2272BD3040E/Satellite/{z}/{y}/{x}.jpeg';
+[[124.5,33.9,130.0,38.7],[126.0,33.0,127.0,33.9],[130.0,37.0,132.0,38.0]].forEach(r=>{
+  viewer.imageryLayers.addImageryProvider(new C.UrlTemplateImageryProvider({ url: VW_URL, minimumLevel: 6, maximumLevel: 19, rectangle: C.Rectangle.fromDegrees(r[0],r[1],r[2],r[3]), credit:'브이월드(국토교통부)' }), 1);
+});
+// 지형
+C.ArcGISTiledElevationTerrainProvider.fromUrl('https://elevation3d.arcgis.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer').then(tp=>{ viewer.terrainProvider = tp; }).catch(e=>console.warn('terrain', e));
+
+/* ---------- 차량 모델 (절차적 glTF, 네이비·라임 테슬라풍 SUV) · 전방 = +Z ---------- */
+function makeCarGlb(){
+  const mats = [ [0.02,0.13,0.29,1], [0.09,0.10,0.12,1], [0.45,0.65,0.85,1], [0.75,0.89,0.23,1], [0.95,0.95,0.95,1] ]; // 차체 네이비, 타이어, 유리, 라임, 램프
+  const prims = mats.map((_,k)=>({ mat:k, P:[], N:[], I:[] }));
+  function quad(pr,a,b,c,d){ const ux=b[0]-a[0],uy=b[1]-a[1],uz=b[2]-a[2],vx=d[0]-a[0],vy=d[1]-a[1],vz=d[2]-a[2]; let nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx; const l=Math.hypot(nx,ny,nz)||1; nx/=l;ny/=l;nz/=l; const o=pr.P.length/3; for(const p of [a,b,c,d]){ pr.P.push(p[0],p[1],p[2]); pr.N.push(nx,ny,nz);} pr.I.push(o,o+1,o+2,o,o+2,o+3); }
+  function hexa(k,c){ const pr=prims[k], f=(i,j,l,n)=>quad(pr,c[i],c[j],c[l],c[n]); f(0,1,2,3); f(4,7,6,5); f(0,4,5,1); f(1,5,6,2); f(2,6,7,3); f(3,7,4,0); }
+  function box(k,cx,cy,cz,sx,sy,sz){ const x0=cx-sx/2,x1=cx+sx/2,y0=cy-sy/2,y1=cy+sy/2,z0=cz-sz/2,z1=cz+sz/2; hexa(k,[[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1],[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]); }
+  // 차체 (길이 4.75 m, 폭 1.92 m): 하부 + 경사진 캐빈
+  box(0, 0,0.55,0, 1.92,0.62,4.75);
+  hexa(0, [[-0.9,0.86,-2.0],[0.9,0.86,-2.0],[0.9,0.86,1.9],[-0.9,0.86,1.9],[-0.8,1.62,-1.6],[0.8,1.62,-1.6],[0.8,1.55,0.9],[-0.8,1.55,0.9]]);  // 캐빈(네이비 필러)
+  hexa(2, [[-0.86,0.9,-1.95],[0.86,0.9,-1.95],[0.86,0.9,1.85],[-0.86,0.9,1.85],[-0.78,1.6,-1.58],[0.78,1.6,-1.58],[0.78,1.53,0.88],[-0.78,1.53,0.88]]); // 유리(살짝 안쪽)
+  box(3, 0,1.64,-0.3, 1.3,0.03,1.1);  // 라임 루프 스트라이프
+  box(4, 0,0.6,2.37, 1.5,0.12,0.05); box(4, 0,0.7,-2.37, 1.6,0.1,0.05);  // 램프
+  for(const x of [-0.85,0.85]) for(const z of [1.45,-1.45]) box(1, x,0.36,z, 0.26,0.72,0.72);  // 바퀴
+  // glTF 직렬화
+  const bin=[]; let off=0; const bufferViews=[], accessors=[];
+  function addArr(arr,type,comp,target,minmax){ const ta = comp===5126? new Float32Array(arr) : new Uint16Array(arr); const pad=(4-(ta.byteLength%4))%4; bufferViews.push({buffer:0,byteOffset:off,byteLength:ta.byteLength,target}); bin.push(new Uint8Array(ta.buffer)); if(pad) bin.push(new Uint8Array(pad)); off+=ta.byteLength+pad; const acc={bufferView:bufferViews.length-1,componentType:comp,count:type==='VEC3'?arr.length/3:arr.length,type}; if(minmax){ const mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9]; for(let i=0;i<arr.length;i+=3) for(let k=0;k<3;k++){ mn[k]=Math.min(mn[k],arr[i+k]); mx[k]=Math.max(mx[k],arr[i+k]); } acc.min=mn; acc.max=mx; } accessors.push(acc); return accessors.length-1; }
+  const mesh = { primitives: prims.filter(p=>p.I.length).map(p=>({ attributes:{ POSITION:addArr(p.P,'VEC3',5126,34962,true), NORMAL:addArr(p.N,'VEC3',5126,34962) }, indices:addArr(p.I,'SCALAR',5123,34963), material:p.mat })) };
+  const gltf = { asset:{version:'2.0',generator:'SISTECH'}, scene:0, scenes:[{nodes:[0]}], nodes:[{mesh:0}], meshes:[mesh], materials: mats.map((m,i)=>({ pbrMetallicRoughness:{ baseColorFactor:m, metallicFactor: i===0?0.6:0.1, roughnessFactor: i===2?0.15:0.6 }, doubleSided:false })), buffers:[{byteLength:off}], bufferViews, accessors };
+  const js = new TextEncoder().encode(JSON.stringify(gltf)); const jpad=(4-(js.length%4))%4;
+  const total = 12 + 8 + js.length + jpad + 8 + off; const out = new ArrayBuffer(total); const dv = new DataView(out); const u8 = new Uint8Array(out);
+  dv.setUint32(0,0x46546C67,true); dv.setUint32(4,2,true); dv.setUint32(8,total,true); dv.setUint32(12,js.length+jpad,true); dv.setUint32(16,0x4E4F534A,true); u8.set(js,20); for(let i=0;i<jpad;i++) u8[20+js.length+i]=0x20;
+  let p = 20+js.length+jpad; dv.setUint32(p,off,true); dv.setUint32(p+4,0x004E4942,true); p+=8; for(const b of bin){ u8.set(b,p); p+=b.length; }
+  return URL.createObjectURL(new Blob([out],{type:'model/gltf-binary'}));
+}
+function ringImg(col){ const c=document.createElement('canvas'); c.width=c.height=128; const g=c.getContext('2d'); g.beginPath(); g.arc(64,64,52,0,Math.PI*2); g.fillStyle='rgba(0,0,0,0.0)'; g.lineWidth=8; g.strokeStyle=col; g.globalAlpha=.85; g.stroke(); g.beginPath(); g.arc(64,64,38,0,Math.PI*2); g.fillStyle=col; g.globalAlpha=.18; g.fill(); return c; }
+const RINGS = { ok: ringImg('#BFE33A'), raw: ringImg('#F2A65A'), weak: ringImg('#FF5D5D') };
+
+/* ---------- 상태 ---------- */
+const S = {
+  // 추정 위치 (화면에 그리는 위치)
+  lon:null, lat:null, h:0, hdg:0, camHdg:null, spd:0 /* m/s */, hs:null,
+  dr:{lon:0,lat:0}, corr:{x:0,y:0,t:0},    // 추측항법 기준점 + 수렴 보정(미터, 동/북)
+  lastFix:0, fixGap:0, acc:0, fixes:0,
+  matched:false, way:null, wayCand:null, candN:0, matchedLL:null, segI:0, laneOff:0, rawLL:null, matchDist:0,
+  follow:true, dim:'3D', qIdx:1, qAuto:true, viewRange:150, viewPitch:-50, tgtRange:150, tgtPitch:-50,
+  weak:false, lastUser:0, started:false,
+  stat:{ n:0, matched:0, sumD:0 },
+};
+S.carUri = makeCarGlb();
+const carEnt = viewer.entities.add({ show:false, position: new C.CallbackProperty(()=>S.pos, false), orientation: new C.CallbackProperty(()=> S.pos ? C.Transforms.headingPitchRollQuaternion(S.pos, new C.HeadingPitchRoll(rad(S.hdg-90),0,0)) : undefined, false),
+  model:{ uri:S.carUri, scale:1, minimumPixelSize:48, maximumScale:30 } });
+const ringEnt = viewer.entities.add({ show:false, position: new C.CallbackProperty(()=>S.pos, false), billboard:{ image: new C.CallbackProperty(()=> S.weak? RINGS.weak : S.matched? RINGS.ok : RINGS.raw, false), width:56, height:56, disableDepthTestDistance:Number.POSITIVE_INFINITY, eyeOffset:new C.Cartesian3(0,0,-2) } });
+
+/* ---------- 지도정합: Overpass 도로 로드 ---------- */
+const ROADS = { ways:new Map(), nodeWays:new Map(), bbox:null, fetching:false, lastFetch:0, origin:null, kx:1, ky:1, fails:0 };
+const HW = ['motorway','trunk','primary','secondary','tertiary','unclassified','residential','motorway_link','trunk_link','primary_link','secondary_link','tertiary_link','living_street','service','road'];
+const DEFW = { motorway:22, trunk:20, primary:18, secondary:14, tertiary:10, unclassified:7, residential:6, living_street:5, service:4, motorway_link:7, trunk_link:7, primary_link:7, secondary_link:7, tertiary_link:6, road:6 };
+function setOrigin(lon,lat){ ROADS.origin=[lon,lat]; ROADS.kx=Math.cos(rad(lat))*R*Math.PI/180; ROADS.ky=R*Math.PI/180; }
+const L = p => [(p[0]-ROADS.origin[0])*ROADS.kx, (p[1]-ROADS.origin[1])*ROADS.ky];
+const UL = m => [ROADS.origin[0]+m[0]/ROADS.kx, ROADS.origin[1]+m[1]/ROADS.ky];
+async function fetchRoads(lon,lat){
+  const now=performance.now(); if(ROADS.fetching || now-ROADS.lastFetch < CONFIG.match.minFetchGap*(1+ROADS.fails)) return;
+  ROADS.fetching=true; ROADS.lastFetch=now;
+  const r=CONFIG.match.fetchR, dlat=deg(r/R), dlon=deg(r/(R*Math.cos(rad(lat))));
+  const bb=[lat-dlat, lon-dlon, lat+dlat, lon+dlon];
+  const ql=`[out:json][timeout:20];way["highway"~"^(${HW.join('|')})$"](${bb.map(v=>v.toFixed(5)).join(',')});out tags geom;`;
+  if(!ROADS.origin) setOrigin(lon,lat);
+  let j=null;
+  for(const u of OVERPASS){ try{ const ac=new AbortController(); const tm=setTimeout(()=>ac.abort(),25000); const res=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(ql),headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ac.signal}); clearTimeout(tm); if(!res.ok) throw new Error(res.status); j=await res.json(); if(j && j.elements) break; j=null; }catch(e){ console.warn('overpass', u, e.message); } }
+  ROADS.fetching=false;
+  if(!j){ ROADS.fails=Math.min(ROADS.fails+1,4); return; }
+  ROADS.fails=0;
+  for(const e of j.elements){ if(e.type!=='way'||!e.geometry||ROADS.ways.has(e.id)) continue; const tg=e.tags||{};
+    let w=parseFloat(tg.width); const lanes=parseFloat(tg.lanes); if(!(w>0)) w = lanes>0? lanes*3.25 : (DEFW[tg.highway]||6);
+    const one = ['yes','1','true'].includes(tg.oneway) || tg.highway==='motorway' || tg.junction==='roundabout';
+    const g = e.geometry.map(p=>L([p.lon,p.lat]));
+    if(tg.oneway==='-1'){ g.reverse(); e.nodes && e.nodes.reverse(); }
+    const way={ id:e.id, hw:tg.highway, name:tg.name||tg.ref||'', w, one: one || tg.oneway==='-1', layer: parseInt(tg.layer||'0')||0, bridge: tg.bridge==='yes', tunnel: tg.tunnel==='yes', g, nodes:e.nodes||[], segs:[] };
+    for(let k=1;k<g.length;k++){ const a=g[k-1],b=g[k]; const dx=b[0]-a[0],dy=b[1]-a[1]; const len=Math.hypot(dx,dy)||1e-9; way.segs.push({ a,b,dx,dy,len, br:(deg(Math.atan2(dx,dy))+360)%360 }); }
+    way.len = way.segs.reduce((s,x)=>s+x.len,0);
+    ROADS.ways.set(e.id, way);
+    for(const n of way.nodes){ if(!ROADS.nodeWays.has(n)) ROADS.nodeWays.set(n,new Set()); ROADS.nodeWays.get(n).add(e.id); }
+  }
+  // bbox 갱신 (여러 bbox 합집합 대신 마지막 요청 영역 + 기존 영역 중 가까운 것으로 단순화: 중심·반경 리스트)
+  ROADS.areas = ROADS.areas||[]; ROADS.areas.push({ c:L([lon,lat]), r });
+  if(ROADS.ways.size>6000){ // 메모리 보호: 멀리 떨어진 도로 삭제
+    const here=L([lon,lat]); for(const [id,w] of ROADS.ways){ if(Math.hypot(w.g[0][0]-here[0], w.g[0][1]-here[1])>6000) ROADS.ways.delete(id); } }
+}
+function coveredMargin(lon,lat){ if(!ROADS.areas||!ROADS.areas.length) return -1; const p=L([lon,lat]); let best=-1e9; for(const a of ROADS.areas){ const m=a.r-Math.max(Math.abs(p[0]-a.c[0]),Math.abs(p[1]-a.c[1])); if(m>best) best=m; } return best; }
+function connected(wa,wb){ if(!wa||!wb) return false; for(const n of wa.nodes) if(ROADS.nodeWays.has(n) && ROADS.nodeWays.get(n).has(wb.id)) return true; return false; }
+// 한 픽스를 도로에 정합 → { way, segI, pt(m), d, hd(도로 진행방향 deg) } 또는 null
+function matchFix(lon,lat,hdg,acc,spdKmh){
+  if(!ROADS.origin || !ROADS.ways.size) return null;
+  const p=L([lon,lat]); const maxR=Math.max(CONFIG.match.minR, acc||0); const useHdg = spdKmh>CONFIG.headingMinSpeed;
+  let best=null;
+  for(const w of ROADS.ways.values()){
+    // 빠른 배제: 첫 점 기준 거리 > 길이+maxR
+    const d0=Math.hypot(w.g[0][0]-p[0], w.g[0][1]-p[1]); if(d0>w.len+maxR) continue;
+    for(let i=0;i<w.segs.length;i++){ const s=w.segs[i]; let u=((p[0]-s.a[0])*s.dx+(p[1]-s.a[1])*s.dy)/(s.len*s.len); u=clamp(u,0,1); const px=s.a[0]+s.dx*u, py=s.a[1]+s.dy*u; const d=Math.hypot(px-p[0],py-p[1]); if(d>maxR) continue;
+      let hd=s.br, hdPen=0;
+      if(useHdg){ const df=Math.abs(angDiff(hdg,s.br)); if(w.one){ hdPen=df; } else { const dr=Math.abs(angDiff(hdg,(s.br+180)%360)); if(dr<df){ hd=(s.br+180)%360; hdPen=dr; } else hdPen=df; } if(hdPen>100) continue; }
+      let sc = d + CONFIG.match.wHeading*hdPen;
+      if(S.way){ if(S.way.id===w.id) sc+=CONFIG.match.sameWay; else if(connected(S.way,w)) sc+=CONFIG.match.connected; if(S.way.layer!==w.layer || S.way.bridge!==w.bridge || S.way.tunnel!==w.tunnel) sc+=CONFIG.match.layerPenalty; }
+      if(!best||sc<best.sc) best={ sc, way:w, segI:i, u, pt:[px,py], d, hd, rev: hd!==s.br };
+    }
+  }
+  return best;
+}
+function laneOffsetFor(w){ if(!w) return CONFIG.lane.default; return w.one ? CONFIG.lane.oneway : clamp(w.w/CONFIG.lane.divisor, CONFIG.lane.minOff, CONFIG.lane.maxOff); }
+// 정합점을 도로를 따라 d(m) 전진 (추측항법용). 끝에 닿으면 연결된 도로로 이어감(헤딩 유사 우선)
+function advanceAlong(m, d){
+  let { way, segI, pt, rev } = m; let left=d, guard=0;
+  while(left>0 && guard++<20){ const s=way.segs[segI]; const dir = rev? -1:1; const end = dir>0? s.b : s.a; const rem=Math.hypot(end[0]-pt[0], end[1]-pt[1]);
+    if(rem>=left){ const ux=(end[0]-pt[0])/(rem||1), uy=(end[1]-pt[1])/(rem||1); pt=[pt[0]+ux*left, pt[1]+uy*left]; left=0; break; }
+    left-=rem; pt=end; const ni=segI+dir;
+    if(ni>=0 && ni<way.segs.length){ segI=ni; continue; }
+    // 다음 도로 찾기: 끝 노드 공유 + 진행방향 유사
+    const nodeId = dir>0? way.nodes[way.nodes.length-1] : way.nodes[0]; const curHd = rev? (s.br+180)%360 : s.br; let nb=null;
+    if(nodeId!=null && ROADS.nodeWays.has(nodeId)) for(const id of ROADS.nodeWays.get(nodeId)){ if(id===way.id) continue; const w2=ROADS.ways.get(id); if(!w2) continue; const k=w2.nodes.indexOf(nodeId);
+      const opts=[]; if(k<w2.segs.length) opts.push({segI:k, rev:false, hd:w2.segs[k].br}); if(k>0 && !w2.one) opts.push({segI:k-1, rev:true, hd:(w2.segs[k-1].br+180)%360});
+      for(const o of opts){ const df=Math.abs(angDiff(curHd,o.hd)); if(df<60 && (!nb||df<nb.df)) nb={ way:w2, segI:o.segI, rev:o.rev, df }; } }
+    if(!nb) break; way=nb.way; segI=nb.segI; rev=nb.rev; pt = rev? way.segs[segI].b : way.segs[segI].a;
+  }
+  const s=way.segs[segI]; return { way, segI, pt, rev, hd: rev? (s.br+180)%360 : s.br };
+}
+
+/* ---------- 위치 픽스 처리 ---------- */
+function onFix(f){ // f: {ts, lon, lat, spd(m/s|null), hdg(deg|null), acc(m)}
+  const now=performance.now();
+  if(S.lastFix) S.fixGap = now-S.lastFix; S.lastFix=now; S.fixes++; S.weak=false; S.acc=f.acc||0;
+  if(S.lon==null){ S.lon=f.lon; S.lat=f.lat; S.dr={lon:f.lon,lat:f.lat}; S.hdg=f.hdg||0; setOrigin(f.lon,f.lat); fetchRoads(f.lon,f.lat); }
+  // 속도: GPS 속도 없으면 이전 위치로 계산
+  let spd = f.spd; if(spd==null||isNaN(spd)){ if(S.prevRaw && S.fixGap>0) spd = hav(S.prevRaw,[f.lon,f.lat])/(S.fixGap/1000); else spd=0; }
+  S.prevRaw=[f.lon,f.lat]; S.spd = spd; const kmh=spd*3.6;
+  // 헤딩 (속도 > 5 km/h 일 때만, 저역통과 + 랩어라운드)
+  if(kmh>CONFIG.headingMinSpeed && f.hdg!=null && !isNaN(f.hdg)) S.hdg = (S.hdg + angDiff(S.hdg, f.hdg)*CONFIG.headingLP + 360)%360;
+  // 도로 로드 (처음 또는 가장자리 500 m 이내)
+  if(coveredMargin(f.lon,f.lat) < CONFIG.match.refetchMargin) fetchRoads(f.lon,f.lat);
+  // 지도정합
+  const m = matchFix(f.lon,f.lat,S.hdg,f.acc,kmh); S.rawLL=[f.lon,f.lat];
+  let tgt=[f.lon,f.lat];
+  if(m){
+    if(S.way && m.way.id!==S.way.id){ // 도로 전환은 2~3회 연속 일치 후
+      if(S.wayCand===m.way.id) S.candN++; else { S.wayCand=m.way.id; S.candN=1; }
+      if(S.candN<CONFIG.match.switchFixes){ // 기존 도로에 투영 유지
+        const keep = matchOnWay(S.way, f.lon,f.lat, S.hdg, kmh); if(keep && keep.d<Math.max(CONFIG.match.minR,f.acc||0)*1.5) applyMatch(keep, f); else applyMatch(m,f);
+      } else applyMatch(m,f);
+    } else applyMatch(m,f);
+    tgt = S.matchedLL;
+  } else { S.matched=false; S.matchedLL=null; S.match=null; }
+  if(m && kmh>CONFIG.headingMinSpeed && S.matched) S.hdg = (S.hdg + angDiff(S.hdg, S.match.hd)*0.5 + 360)%360; // 도로 방향으로 추가 수렴
+  // 수렴: 현재 추정 위치와 목표 차이를 보정값에 넣고 0.4 s 동안 0으로 감쇠 (점프 없음)
+  if(S.lon!=null){ const d=L([S.lon,S.lat]), t=L(tgt); S.corr={ x:d[0]-t[0], y:d[1]-t[1], t:now }; }
+  S.dr={ lon:tgt[0], lat:tgt[1] };
+  S.stat.n++; if(S.matched){ S.stat.matched++; S.stat.sumD+=S.matchDist; }
+  LOG.onFix(f, kmh); S.started=true;
+  if(!carEnt.show){ carEnt.show=ringEnt.show=true; }
+}
+function matchOnWay(w, lon,lat,hdg,kmh){ const p=L([lon,lat]); let best=null; for(let i=0;i<w.segs.length;i++){ const s=w.segs[i]; let u=((p[0]-s.a[0])*s.dx+(p[1]-s.a[1])*s.dy)/(s.len*s.len); u=clamp(u,0,1); const px=s.a[0]+s.dx*u, py=s.a[1]+s.dy*u; const d=Math.hypot(px-p[0],py-p[1]); let hd=s.br, rev=false; if(!w.one && Math.abs(angDiff(hdg,(s.br+180)%360))<Math.abs(angDiff(hdg,s.br))){ hd=(s.br+180)%360; rev=true; } if(!best||d<best.d) best={ way:w, segI:i, u, pt:[px,py], d, hd, rev, sc:d }; } return best; }
+function applyMatch(m,f){ S.way=m.way; S.wayCand=null; S.candN=0; S.match=m; S.matched=true; S.matchDist=m.d; S.laneOff=laneOffsetFor(m.way);
+  // 우측 차선 오프셋 (대한민국 우측통행): 진행방향 +90°
+  const off=[Math.cos(rad(m.hd))*S.laneOff, -Math.sin(rad(m.hd))*S.laneOff]; // 동=x 북=y → 우측 벡터 (sin(h+90), cos(h+90)) = (cos h, -sin h)
+  S.matchedLL = UL([m.pt[0]+off[0], m.pt[1]+off[1]]); S.matchedCenter=m.pt; }
+
+/* ---------- 프레임 업데이트: 추측항법 + 수렴 + 카메라 ---------- */
+let lastT=performance.now(), fpsAcc=0, fpsN=0, fps=60, lowSince=0;
+function frame(){ const now=performance.now(); const dt=Math.min(0.1,(now-lastT)/1000); lastT=now;
+  fpsAcc+=dt; fpsN++; if(fpsAcc>=1){ fps=fpsN/fpsAcc; fpsAcc=0; fpsN=0; autoQuality(); }
+  if(S.lon==null) return;
+  const since=(now-S.lastFix)/1000;
+  if(since>CONFIG.gpsWeakSec && !S.weak){ S.weak=true; }
+  // 추측항법: 신호 끊긴 뒤 3 s 까지만 전진
+  if(S.started && since<=CONFIG.gpsWeakSec && S.spd>0.3){
+    const d=S.spd*dt;
+    if(S.matched && S.match){ const adv=advanceAlong(S.match, d); S.match=adv; S.way=adv.way; const off=[Math.cos(rad(adv.hd))*S.laneOff, -Math.sin(rad(adv.hd))*S.laneOff]; const ll=UL([adv.pt[0]+off[0], adv.pt[1]+off[1]]); S.dr={lon:ll[0],lat:ll[1]}; if(S.spd*3.6>CONFIG.headingMinSpeed) S.hdg=(S.hdg+angDiff(S.hdg,adv.hd)*Math.min(1,dt*3)+360)%360; }
+    else { const ll=move(S.dr.lon,S.dr.lat,S.hdg,d); S.dr={lon:ll[0],lat:ll[1]}; }
+  }
+  // 보정 감쇠 (선형, blendSec)
+  const k = clamp(1-(now-S.corr.t)/(CONFIG.blendSec*1000),0,1); const base=L([S.dr.lon,S.dr.lat]); const est=UL([base[0]+S.corr.x*k, base[1]+S.corr.y*k]);
+  S.lon=est[0]; S.lat=est[1];
+  // 높이 (0.5 s 마다 샘플, 완화)
+  if(!S.hT || now-S.hT>500){ S.hT=now; let g; const carto=C.Cartographic.fromDegrees(S.lon,S.lat); try{ if(scene.sampleHeightSupported && TILES.active.length) g=scene.sampleHeight(carto,[carEnt,ringEnt]); }catch(e){} if(g==null||isNaN(g)) g=globe.getHeight(carto); if(g!=null&&!isNaN(g)) S.gVal=g; }
+  const g = S.gVal!=null? S.gVal : 0; if(S.hs==null) S.hs=g; else S.hs += clamp(g-S.hs, -Math.max(0.3,S.spd*dt*0.2), Math.max(0.3,S.spd*dt*0.2));
+  S.h=S.hs+0.05; S.pos=C.Cartesian3.fromDegrees(S.lon,S.lat,S.h);
+  // 속도 기반 시점 (2.5 s 완화)
+  const kmh=S.spd*3.6; const V=CONFIG.view; let tr=V[V.length-1][1], tp=V[V.length-1][2]; for(let i=1;i<V.length;i++){ if(kmh<=V[i][0]){ const f=(kmh-V[i-1][0])/(V[i][0]-V[i-1][0]||1); tr=V[i-1][1]+(V[i][1]-V[i-1][1])*f; tp=V[i-1][2]+(V[i][2]-V[i-1][2])*f; break; } }
+  if(S.dim==='2D'){ tr*=CONFIG.view2D.rangeMul; tp=CONFIG.view2D.pitch; }
+  const ke=Math.min(1, dt/CONFIG.viewEase*2.2); S.viewRange+= (tr-S.viewRange)*ke; S.viewPitch+=(tp-S.viewPitch)*ke;
+  // 카메라 헤딩 추종
+  if(S.camHdg==null) S.camHdg=S.hdg; else S.camHdg=(S.camHdg+angDiff(S.camHdg,S.hdg)*Math.min(1,dt*CONFIG.camHeadingRate)+360)%360;
+  if(!S.follow && now-S.lastUser>CONFIG.autoResumeSec*1000) S.follow=true;
+  if(S.follow) placeCamera();
+  TILES.tick(now); updHud(kmh); if(DEBUG) updDbg();
+}
+// 차량이 (anchorX·W, anchorY·H) 에 오도록: lookAt 후 피치 상향 α = atan( tan(fovy/2) · (2·anchorY−1) )
+function placeCamera(){
+  const hpr=new C.HeadingPitchRange(rad(S.camHdg), rad(S.viewPitch), S.viewRange);
+  camera.lookAt(S.pos, hpr);
+  const fovy=camera.frustum.fovy; const ny = (CONFIG.anchorY-0.5)*2; // NDC 아래쪽 양수 → 화면 아래로 보내려면 카메라를 위로 회전
+  const alpha=Math.atan(Math.tan(fovy/2)*ny); camera.lookUp(alpha);
+  // 가로 앵커 (기본 0.5 → 0): 필요 시 좌우 회전
+  const nx=(CONFIG.anchorX-0.5)*2; if(nx){ const fovx=2*Math.atan(Math.tan(fovy/2)*camera.frustum.aspectRatio); camera.lookRight(-Math.atan(Math.tan(fovx/2)*nx)); }
+  camera.lookAtTransform(C.Matrix4.IDENTITY);
+}
+viewer.clock.onTick.addEventListener(frame);
+
+/* ---------- 3D Tiles (SISTECH 드론 모델) 거리 기반 로드/해제 ---------- */
+const TILES = { active:[], lastT:0, loading:new Set(),
+  tick(now){ if(now-this.lastT<2000 || S.lon==null) return; this.lastT=now;
+    const here=[S.lon,S.lat]; const ds=PROJECTS.map(p=>({p, d:hav(here,[p.lon,p.lat])})).sort((a,b)=>a.d-b.d);
+    for(const {p,d} of ds){ if(p.ts && d>CONFIG.tiles.unloadKm*1000){ scene.primitives.remove(p.ts); p.ts=null; this.active=this.active.filter(x=>x!==p); } }
+    for(const {p,d} of ds){ if(!p.ts && !this.loading.has(p.id) && d<CONFIG.tiles.loadKm*1000 && this.active.length+this.loading.size<CONFIG.tiles.maxActive) this.load(p); }
+    const kmh=S.spd*3.6; const sse=CONFIG.quality[S.qIdx][1]*(1+kmh*CONFIG.speedSseGain); for(const p of this.active) if(p.ts) p.ts.maximumScreenSpaceError=sse;
+  },
+  async load(p){ this.loading.add(p.id); try{ const ts=await C.Cesium3DTileset.fromUrl(`${TILESET_BASE}${p.tsId}/tileset.json`, { maximumScreenSpaceError: CONFIG.quality[S.qIdx][1], skipLevelOfDetail:true, dynamicScreenSpaceError:true, dynamicScreenSpaceErrorDensity:0.0004, dynamicScreenSpaceErrorFactor:6, foveatedScreenSpaceError:true, foveatedConeSize:0.25, foveatedTimeDelay:0.15, progressiveResolutionHeightFraction:0.4, preloadWhenHidden:false, preferLeaves:false, cacheBytes:CONFIG.tiles.cacheBytes, maximumCacheOverflowBytes:256*1024*1024, cullRequestsWhileMoving:true, cullRequestsWhileMovingMultiplier:30 });
+      p.ts=ts; scene.primitives.add(ts); this.active.push(p); toast(`${p.name} 3D 모델 로드 (SISTECH)`); }catch(e){ console.warn('tileset',p.id,e.message); } this.loading.delete(p.id); }
+};
+function applyQuality(){ const [lab,sse,gsse,res]=CONFIG.quality[S.qIdx]; globe.maximumScreenSpaceError=gsse; viewer.resolutionScale=res; for(const p of TILES.active) if(p.ts) p.ts.maximumScreenSpaceError=sse; q('#bQ').querySelector('small').textContent = S.qAuto? `자동(${lab})` : lab; }
+function autoQuality(){ if(!S.qAuto) return; if(fps<CONFIG.autoFpsMin){ if(!lowSince) lowSince=performance.now(); else if(performance.now()-lowSince>CONFIG.autoFpsSec*1000 && S.qIdx>0){ S.qIdx--; applyQuality(); toast(`화질 자동 하향: ${CONFIG.quality[S.qIdx][0]} (FPS ${fps.toFixed(0)})`); lowSince=0; } } else lowSince=0; }
+applyQuality();
+
+/* ---------- HUD ---------- */
+function updHud(kmh){ q('#spdV').textContent=Math.round(kmh);
+  const b=q('#badge'); if(LOG.flashTxt && performance.now()<LOG.flashUntil){ b.textContent=LOG.flashTxt; b.className=LOG.flashCls||''; return; }
+  if(S.weak){ b.textContent='GPS 신호 약함'; b.className='warn'; return; }
+  if(LOG.pendingUp>0){ b.textContent=`⚠ 대기 ${LOG.pendingUp}건`; b.className='warn'; return; }
+  if(LOG.trip){ b.textContent=`🔴 기록 중 · ${Math.floor((Date.now()-LOG.trip.start)/60000)}분 · ${(LOG.trip.dist/1000).toFixed(1)} km`; b.className='rec'; return; }
+  if(!S.started){ b.textContent = SIM? '시뮬레이션 준비 중…' : REPLAY? '재생 준비 중…' : 'GPS 대기 중…'; b.className=''; return; }
+  b.textContent = S.matched ? (S.way && S.way.name ? S.way.name : '도로 정합') : '도로 미정합'; b.className = S.matched? 'ok' : 'warn'; }
+function updDbg(){ const sp = S.pos? scene.cartesianToCanvasCoordinates(S.pos) : null; const W=innerWidth,H=innerHeight;
+  q('#dbg').textContent = `viewport ${W}×${H}  DPR ${devicePixelRatio.toFixed(2)}  canvas ${scene.canvas.width}×${scene.canvas.height}\nFPS ${fps.toFixed(0)}  GPS interval ${(S.fixGap/1000).toFixed(2)} s  acc ${S.acc.toFixed(1)} m  fixes ${S.fixes}\nmatch ${S.matched?'ON':'off'}  way ${S.way?S.way.id+' '+(S.way.name||S.way.hw):'-'}  d ${S.matchDist.toFixed(1)} m  lane ${S.laneOff.toFixed(1)} m\nroads ${ROADS.ways.size}  tiles ${TILES.active.map(p=>p.id).join(',')||'-'}  q ${CONFIG.quality[S.qIdx][0]}\nspeed ${(S.spd*3.6).toFixed(1)} km/h  hdg ${S.hdg.toFixed(1)}  cam ${(S.camHdg||0).toFixed(1)}  range ${S.viewRange.toFixed(0)} pitch ${S.viewPitch.toFixed(1)}\ncar px ${sp?sp.x.toFixed(1)+','+sp.y.toFixed(1):'-'}  target ${(W*CONFIG.anchorX).toFixed(1)},${(H*CONFIG.anchorY).toFixed(1)}  Δ ${sp?(sp.x-W*CONFIG.anchorX).toFixed(1)+','+(sp.y-H*CONFIG.anchorY).toFixed(1):'-'}\nmatched ${S.stat.n?Math.round(100*S.stat.matched/S.stat.n):0}%  mean raw→matched ${S.stat.matched?(S.stat.sumD/S.stat.matched).toFixed(1):'-'} m  log ${LOG.trip?LOG.trip.id:'-'} buf ${LOG.buf.length}`; }
+if(DEBUG) q('#dbg').classList.add('show');
+
+/* ---------- 주행 기록 (IndexedDB 'sistech-tesla') ---------- */
+const LOG = { db:null, trip:null, buf:[], aboveSince:0, idleSince:0, flashTxt:'', flashUntil:0, pendingUp:0, lastLL:null, lastT:0,
+  open(){ return new Promise((res,rej)=>{ const r=indexedDB.open('sistech-tesla',1); r.onupgradeneeded=()=>{ const d=r.result; if(!d.objectStoreNames.contains('trips')) d.createObjectStore('trips',{keyPath:'id'}); if(!d.objectStoreNames.contains('fixes')){ const s=d.createObjectStore('fixes',{autoIncrement:true}); s.createIndex('trip','tripId'); } if(!d.objectStoreNames.contains('upload')) d.createObjectStore('upload',{autoIncrement:true}); }; r.onsuccess=()=>{ this.db=r.result; res(); }; r.onerror=()=>rej(r.error); }); },
+  tx(store,mode,fn){ return new Promise((res,rej)=>{ if(!this.db) return rej(new Error('db')); const t=this.db.transaction(store,mode); const s=t.objectStore(store); const out=fn(s); t.oncomplete=()=>res(out&&out.result!==undefined?out.result:out); t.onerror=()=>rej(t.error); }); },
+  onFix(f,kmh){ if(REPLAY) return; const now=Date.now();
+    if(!this.trip){ if(kmh>CONFIG.log.startKmh){ if(!this.aboveSince) this.aboveSince=now; else if(now-this.aboveSince>=CONFIG.log.startSec*1000) this.start(now); } else this.aboveSince=0; }
+    if(!this.trip) return;
+    const rec={ tripId:this.trip.id, ts:f.ts||now, lat:f.lat, lon:f.lon, speed:+(kmh).toFixed(1), heading:+S.hdg.toFixed(1), accuracy:f.acc!=null?+f.acc.toFixed(1):null, matchedLat:S.matchedLL?+S.matchedLL[1].toFixed(7):null, matchedLon:S.matchedLL?+S.matchedLL[0].toFixed(7):null, wayId:S.way?S.way.id:null, matched:S.matched };
+    this.buf.push(rec); this.trip.n++; if(this.lastLL) this.trip.dist+=hav(this.lastLL,[f.lon,f.lat]); this.lastLL=[f.lon,f.lat];
+    if(kmh<1){ if(!this.idleSince) this.idleSince=now; else if(now-this.idleSince>CONFIG.log.endIdleMin*60000) this.end(); } else this.idleSince=0;
+    if(now-this.lastT>CONFIG.log.flushMs) this.flush(); },
+  start(now){ this.trip={ id:'T'+new Date(now).toISOString().replace(/[-:T]/g,'').slice(0,14), start:now, end:null, n:0, dist:0, src: SIM?'sim':'gps' }; this.lastLL=null; this.lastT=now; this.tx('trips','readwrite',s=>s.put(this.trip)).catch(()=>{}); toast('주행 기록 시작'); },
+  async flush(final){ if(!this.db) return; this.lastT=Date.now(); if(!this.buf.length && !final) return;
+    const batch=this.buf; this.buf=[]; this.flashTxt='⏳ 저장 중…'; this.flashCls='warn'; this.flashUntil=performance.now()+1500;
+    try{ await this.tx('fixes','readwrite',s=>{ for(const r of batch) s.add(r); }); if(this.trip) await this.tx('trips','readwrite',s=>s.put(this.trip)); this.flashTxt='✓ 저장됨 '+hhmm(Date.now()); this.flashCls='ok'; this.flashUntil=performance.now()+2500; }
+    catch(e){ this.buf=batch.concat(this.buf); this.flashTxt='저장 실패'; this.flashCls='warn'; this.flashUntil=performance.now()+2500; }
+    this.upload(batch); },
+  end(){ if(!this.trip) return; this.trip.end=Date.now(); const t=this.trip; this.flush(true).then(()=>this.tx('trips','readwrite',s=>s.put(t))).catch(()=>{}); this.trip=null; this.aboveSince=0; this.idleSince=0; this.lastLL=null; toast('주행 기록 종료'); },
+  // 클라우드 업로드 훅 (기본 OFF: localStorage 'tesla.uploadUrl' 설정 시에만)
+  async upload(batch){ let url=null; try{ url=localStorage.getItem('tesla.uploadUrl'); }catch(e){} if(!url) return;
+    if(batch && batch.length) await this.tx('upload','readwrite',s=>s.add({ tripId:this.trip&&this.trip.id, fixes:batch })).catch(()=>{});
+    const items = await this.tx('upload','readonly',s=>{ const o={}; const r=s.openCursor(); const arr=[]; r.onsuccess=()=>{ const c=r.result; if(c){ arr.push({k:c.key,v:c.value}); c.continue(); } else o.result=arr; }; return o; }).catch(()=>[]);
+    this.pendingUp = items.length; if(!navigator.onLine) return;
+    for(const it of items){ try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(it.v)}); if(!r.ok) break; await this.tx('upload','readwrite',s=>s.delete(it.k)); this.pendingUp--; }catch(e){ break; } } },
+  async trips(){ return this.tx('trips','readonly',s=>s.getAll()); },
+  async fixes(id){ return this.tx('fixes','readonly',s=>s.index('trip').getAll(id)); },
+  async del(id){ const keys = await this.tx('fixes','readonly',s=>s.index('trip').getAllKeys(id)); await this.tx('fixes','readwrite',s=>{ for(const k of keys) s.delete(k); }); await this.tx('trips','readwrite',s=>s.delete(id)); },
+};
+LOG.open().catch(e=>console.warn('idb',e));
+addEventListener('pagehide', ()=>{ if(LOG.trip) LOG.end(); else LOG.flush(true); });
+addEventListener('online', ()=>LOG.upload());
+
+/* ---------- 내보내기 (GPX / GeoJSON / CSV) ---------- */
+function dl(name, text, type){ const blob=new Blob([text],{type}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },2000); }
+const esc=s=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+async function exportTrip(t, fmt){ const fx=(await LOG.fixes(t.id)).sort((a,b)=>a.ts-b.ts); if(!fx.length) return toast('기록 없음');
+  if(fmt==='gpx'){ const pts=fx.map(f=>`   <trkpt lat="${f.lat.toFixed(7)}" lon="${f.lon.toFixed(7)}"><time>${new Date(f.ts).toISOString()}</time><extensions><speed>${(f.speed/3.6).toFixed(2)}</speed><course>${f.heading}</course>${f.accuracy!=null?`<hdop>${f.accuracy}</hdop>`:''}${f.matchedLat!=null?`<sistech:matchedLat>${f.matchedLat}</sistech:matchedLat><sistech:matchedLon>${f.matchedLon}</sistech:matchedLon><sistech:wayId>${f.wayId}</sistech:wayId>`:''}</extensions></trkpt>`).join('\n');
+    dl(`${t.id}.gpx`, `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="SISTECH EARTH Drive" xmlns="http://www.topografix.com/GPX/1/1" xmlns:sistech="https://signspark.github.io/sistech-earth/">\n <metadata><name>${esc(t.id)}</name><time>${new Date(t.start).toISOString()}</time></metadata>\n <trk><name>${esc(t.id)}</name><src>${t.src}</src><trkseg>\n${pts}\n </trkseg></trk>\n</gpx>\n`, 'application/gpx+xml'); }
+  else if(fmt==='geojson'){ const gj={ type:'FeatureCollection', properties:{ id:t.id, start:new Date(t.start).toISOString(), end:t.end?new Date(t.end).toISOString():null, distance_m:Math.round(t.dist), n:fx.length, src:t.src },
+      features:[ { type:'Feature', properties:{ kind:'raw' }, geometry:{ type:'LineString', coordinates: fx.map(f=>[f.lon,f.lat]) } }, { type:'Feature', properties:{ kind:'matched' }, geometry:{ type:'LineString', coordinates: fx.filter(f=>f.matchedLat!=null).map(f=>[f.matchedLon,f.matchedLat]) } },
+        ...fx.map(f=>({ type:'Feature', properties:{ ts:new Date(f.ts).toISOString(), speed_kmh:f.speed, heading:f.heading, accuracy:f.accuracy, wayId:f.wayId, matched:f.matched, matchedLat:f.matchedLat, matchedLon:f.matchedLon }, geometry:{ type:'Point', coordinates:[f.lon,f.lat] } })) ] };
+    dl(`${t.id}.geojson`, JSON.stringify(gj), 'application/geo+json'); }
+  else { const rows=[['ts','lat','lon','speed_kmh','heading','accuracy_m','matchedLat','matchedLon','wayId','matched'].join(',')]; for(const f of fx) rows.push([new Date(f.ts).toISOString(),f.lat,f.lon,f.speed,f.heading,f.accuracy??'',f.matchedLat??'',f.matchedLon??'',f.wayId??'',f.matched?1:0].join(','));
+    dl(`${t.id}.csv`, '\uFEFF'+rows.join('\r\n'), 'text/csv;charset=utf-8'); } }
+async function openModal(){ const box=q('#trips'); box.innerHTML='<div class="empty">불러오는 중…</div>'; q('#modal').classList.add('show');
+  let ts=[]; try{ ts=await LOG.trips(); }catch(e){} ts.sort((a,b)=>b.start-a.start);
+  if(!ts.length){ box.innerHTML='<div class="empty">저장된 주행 기록이 없습니다</div>'; return; }
+  box.innerHTML=''; for(const t of ts){ const el=document.createElement('div'); el.className='trip'; const dur=Math.round(((t.end||Date.now())-t.start)/60000);
+    el.innerHTML=`<div class="info"><b>${new Date(t.start).toLocaleString('ko-KR')}${LOG.trip&&LOG.trip.id===t.id?' · 기록 중':''}</b><span>${dur}분 · ${(t.dist/1000).toFixed(1)} km · ${t.n}점 · ${t.src==='sim'?'시뮬레이션':'GPS'} · ${t.id}</span></div><button data-f="gpx">GPX</button><button data-f="geojson">GeoJSON</button><button data-f="csv">CSV</button><button class="del" data-f="del">삭제</button>`;
+    el.querySelectorAll('button').forEach(b=>b.onclick=async e=>{ e.stopPropagation(); if(b.dataset.f==='del'){ if(LOG.trip&&LOG.trip.id===t.id) return toast('기록 중인 주행은 삭제할 수 없습니다'); await LOG.del(t.id); openModal(); } else exportTrip(t,b.dataset.f); });
+    box.appendChild(el); } }
+q('#mClose').onclick=()=>q('#modal').classList.remove('show');
+q('#modal').addEventListener('click', e=>{ if(e.target===q('#modal')) q('#modal').classList.remove('show'); });
+
+/* ---------- 탭 → 제어막대 (3 s) · 드래그 → 따라가기 일시정지 ---------- */
+let barT, pd=null;
+function showBar(){ q('#bar').classList.add('show'); q('#bFollow').classList.toggle('on', S.follow); clearTimeout(barT); barT=setTimeout(()=>q('#bar').classList.remove('show'), CONFIG.barSec*1000); }
+const cv=scene.canvas;
+cv.addEventListener('pointerdown', e=>{ pd={x:e.clientX,y:e.clientY,t:performance.now()}; });
+cv.addEventListener('pointermove', e=>{ if(pd && Math.hypot(e.clientX-pd.x,e.clientY-pd.y)>12){ if(S.follow){ S.follow=false; } S.lastUser=performance.now(); } });
+cv.addEventListener('pointerup', e=>{ if(!pd) return; const mv=Math.hypot(e.clientX-pd.x,e.clientY-pd.y), dtp=performance.now()-pd.t; pd=null; if(mv<12 && dtp<400) showBar(); else { S.lastUser=performance.now(); } });
+cv.addEventListener('wheel', ()=>{ S.follow=false; S.lastUser=performance.now(); }, {passive:true});
+q('#bar').addEventListener('pointerdown', ()=>{ clearTimeout(barT); barT=setTimeout(()=>q('#bar').classList.remove('show'), CONFIG.barSec*1000); });
+q('#bFollow').onclick=()=>{ S.follow=true; q('#bFollow').classList.add('on'); toast('따라가기 재개'); };
+q('#bDim').onclick=()=>{ S.dim = S.dim==='3D'?'2D':'3D'; q('#bDim').innerHTML = S.dim==='3D' ? '3D<small>2D 전환</small>' : '2D<small>3D 전환</small>'; S.follow=true; };
+q('#bQ').onclick=()=>{ // 자동 → 저 → 중 → 고 → 자동
+  if(S.qAuto){ S.qAuto=false; S.qIdx=0; } else if(S.qIdx<CONFIG.quality.length-1) S.qIdx++; else { S.qAuto=true; S.qIdx=1; } applyQuality(); toast(`화질: ${S.qAuto?'자동':CONFIG.quality[S.qIdx][0]}`); };
+q('#bExp').onclick=()=>{ openModal(); };
+q('#bExit').onclick=()=>{ if(LOG.trip) LOG.end(); location.href='index.html'; };
+
+/* ---------- 위치 소스 ---------- */
+// 송도 실도로 가상 주행 (OSRM 경로, 실패 시 내장 경로) · 속도 0→30→60→80 km/h + 정차 · 가우시안 잡음
+const SIM_FALLBACK = [[126.65729,37.399],[126.65995,37.39682],[126.66104,37.39599],[126.6617,37.3955],[126.66242,37.39499],[126.66416,37.39391],[126.66566,37.39303],[126.66598,37.39297],[126.66609,37.39299],[126.66618,37.39306],[126.66622,37.39315],[126.6662,37.39328],[126.66604,37.39344],[126.66309,37.39516],[126.66208,37.39583],[126.66202,37.39587],[126.66043,37.39709],[126.6589,37.39836],[126.65866,37.39856],[126.65701,37.39991],[126.65636,37.40047],[126.65591,37.40072],[126.65566,37.40085],[126.6556,37.40089],[126.65547,37.40091],[126.65539,37.4009],[126.65523,37.40089],[126.65505,37.40086],[126.65499,37.40083],[126.65483,37.40074],[126.65438,37.40028],[126.65369,37.39957],[126.65303,37.39891],[126.65278,37.39866],[126.65247,37.39823],[126.65232,37.39808],[126.65209,37.39786],[126.65081,37.39663],[126.6499,37.39581],[126.64794,37.39397],[126.64754,37.39359],[126.64753,37.39358],[126.64738,37.39344],[126.64727,37.39333],[126.64712,37.3932],[126.64709,37.39317],[126.64688,37.39297],[126.64682,37.39292],[126.6458,37.392],[126.64514,37.3914],[126.64506,37.39133],[126.64496,37.39123],[126.64361,37.38996],[126.64179,37.38822],[126.63968,37.38628],[126.63925,37.38588],[126.63854,37.38524],[126.63743,37.38422],[126.63707,37.38389],[126.63703,37.38385],[126.6369,37.38373],[126.63526,37.3822],[126.63329,37.38036],[126.6328,37.37989],[126.63269,37.37979],[126.63254,37.37961],[126.63249,37.37954],[126.63238,37.37961],[126.63232,37.37964],[126.62897,37.3817],[126.62746,37.38259],[126.62696,37.3829],[126.62555,37.38376],[126.62546,37.38368],[126.62736,37.38251],[126.62727,37.38243],[126.6272,37.38242],[126.62713,37.38237],[126.62707,37.38233],[126.62698,37.3823],[126.62689,37.38228],[126.62682,37.38227],[126.62671,37.38225],[126.62665,37.38221],[126.62659,37.38218],[126.62653,37.38213],[126.62647,37.38206],[126.62643,37.38203],[126.6264,37.38196],[126.62638,37.38189],[126.62637,37.38183],[126.62636,37.38175],[126.62633,37.38164],[126.62629,37.38153],[126.62623,37.38144],[126.62615,37.38132],[126.62608,37.38124],[126.626,37.38118],[126.6259,37.38112],[126.6258,37.38106],[126.62572,37.38099],[126.62567,37.38093],[126.62562,37.38087],[126.62559,37.3808],[126.62556,37.38072],[126.62554,37.38064],[126.62527,37.38063],[126.62478,37.38063],[126.62476,37.38063],[126.62476,37.38061],[126.62476,37.38041],[126.62477,37.38023],[126.62485,37.3801],[126.62485,37.37991],[126.62511,37.37991],[126.62524,37.37995]];
+async function startSim(){
+  let co=SIM_FALLBACK;
+  try{ const r=await fetch('https://router.project-osrm.org/route/v1/driving/126.6560,37.3980;126.6265,37.3780?overview=full&geometries=geojson',{signal:AbortSignal.timeout(8000)}); const j=await r.json(); if(j.routes&&j.routes[0]) co=j.routes[0].geometry.coordinates; }catch(e){}
+  // 누적거리
+  const cum=[0]; for(let i=1;i<co.length;i++) cum.push(cum[i-1]+hav(co[i-1],co[i])); const total=cum[cum.length-1];
+  // 속도 프로파일 (초 단위 구간: [지속시간, 목표 km/h])
+  const prof=[[8,30],[15,30],[8,60],[25,60],[8,80],[30,80],[10,0],[12,0],[6,40],[20,40],[8,0],[8,0]]; const profTotal=prof.reduce((s,p)=>s+p[0],0);
+  let s=0, v=0, t=0, dir=1; const dt=1/CONFIG.sim.hz;
+  function targetV(tt){ let a=tt%profTotal, prev=0; for(const [d,tv] of prof){ if(a<d){ return prev+(tv-prev)*Math.min(1,a/d); } a-=d; prev=tv; } return 0; }
+  function at(sd){ let i=1; while(i<cum.length-1 && cum[i]<sd) i++; const f=(sd-cum[i-1])/((cum[i]-cum[i-1])||1); const a=co[i-1],b=co[i]; return { ll:[a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f], br: bearing(a,b) }; }
+  setInterval(()=>{ t+=dt; const tv=targetV(t)/3.6; v += clamp(tv-v, -2.5*dt, 2.0*dt); s+=v*dt*dir; if(s>=total){ s=total; dir=-1; } if(s<=0){ s=0; dir=1; }
+    const p=at(s); const br=(p.br+(dir<0?180:0))%360; const n=CONFIG.sim.noiseSigma; const ll=move(p.ll[0],p.ll[1],Math.random()*360, Math.abs(gauss())*n);
+    onFix({ ts:Date.now(), lon:ll[0], lat:ll[1], spd: Math.max(0, v+gauss()*0.3), hdg: v>1? (br+gauss()*CONFIG.sim.hdgSigma+360)%360 : null, acc: 5+Math.abs(gauss())*4 }); }, dt*1000);
+  toast('시뮬레이션: 인천 송도 (아암대로·컨벤시아대로·아카데미로)', 3000);
+}
+async function startReplay(id){ await LOG.open().catch(()=>{}); const fx=(await LOG.fixes(id).catch(()=>[])).sort((a,b)=>a.ts-b.ts); if(!fx.length){ toast('재생할 기록이 없습니다: '+id, 4000); return; }
+  toast(`재생: ${id} (${fx.length}점)`, 3000); let i=0; const step=()=>{ if(i>=fx.length){ toast('재생 종료'); return; } const f=fx[i]; onFix({ ts:f.ts, lon:f.lon, lat:f.lat, spd:f.speed/3.6, hdg:f.heading, acc:f.accuracy }); i++; if(i<fx.length) setTimeout(step, clamp(fx[i].ts-f.ts, 200, 3000)); }; step(); }
+function startGps(){ if(!navigator.geolocation){ toast('이 브라우저는 위치 정보를 지원하지 않습니다', 5000); return; }
+  navigator.geolocation.watchPosition(p=>{ const c=p.coords; onFix({ ts:p.timestamp, lon:c.longitude, lat:c.latitude, spd: c.speed!=null&&!isNaN(c.speed)? c.speed : null, hdg: c.heading!=null&&!isNaN(c.heading)? c.heading : null, acc:c.accuracy }); },
+    e=>{ q('#badge').textContent = e.code===1? '위치 권한 거부됨' : 'GPS 오류 ('+e.code+')'; q('#badge').className='warn'; }, { enableHighAccuracy:true, maximumAge:0, timeout:20000 }); }
+
+/* ---------- 시작: 한국 전역 초기 시점 → 첫 픽스 후 차량 추종 ---------- */
+camera.setView({ destination: C.Cartesian3.fromDegrees(127.2, 36.3, 1400000) });
+if(SIM) startSim(); else if(REPLAY) startReplay(REPLAY); else startGps();
+addEventListener('resize', ()=>{ /* 앵커는 매 프레임 innerWidth/innerHeight 기반으로 재계산됨 */ });
+window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
+</script>
+</body>
+</html>
