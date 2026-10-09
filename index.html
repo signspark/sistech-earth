@@ -6360,7 +6360,10 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     RE.agg = out; return out;
   }
   const SCALE = { m: v => 24 + v/13, j: v => 24 + v/250, w: v => 24 + v*1.6 }; // m: 만원/평 → 3,000 ≈ 255 m · j: 5억 ≈ 225 m · w: 150만 ≈ 265 m
-  const heightOf = v => Math.min(600, SCALE[RE.f.deal](v || 0));
+  const heightOf = v => Math.min(600, SCALE[RE.f.deal](v || 0)) * (RE.hScale || 1); // 저고도(카메라 < 900 m)에서는 기둥 높이 35 %로 축소
+  RE.hScale = 1;
+  function checkScale(){ if(!RE.on || !RE.data) return; let h = 1e9; try{ h = camera.positionCartographic.height; }catch(e){} const want = h < 900 ? .35 : 1; if(want !== RE.hScale){ RE.hScale = want; build(); } }
+  try{ camera.moveEnd.addEventListener(checkScale); }catch(e){}
 
   /* ---- 지형 높이 (한 번만) ---- */
   async function groundAll(){
@@ -6432,7 +6435,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
       <span class="lbl per" style="margin-left:10px">기간</span><div class="seg" id="rePer"><button data-m="3">3개월</button><button data-m="6">6개월</button><button data-m="12" class="on">12개월</button></div>
       <button class="chip" id="reJs" style="--c:#A4C81C;margin-left:auto">전세 안전 체크</button></div>`;
     document.body.appendChild(p);
-    p.querySelector('#reDeal').onclick = e => { const b = e.target.closest('button'); if(!b) return; RE.f.deal = b.dataset.d; p.querySelectorAll('#reDeal button').forEach(x=>x.classList.toggle('on', x===b)); build(); if(RE.sel && RE.cardOpen) card(RE.sel); };
+    p.querySelector('#reDeal').onclick = e => { const b = e.target.closest('button'); if(!b) return; RE.f.deal = b.dataset.d; p.querySelectorAll('#reDeal button').forEach(x=>x.classList.toggle('on', x===b)); build(); if(RE.sel && RE.cardOpen && document.getElementById('re50body')) card(RE.sel, RE.cardTy); };
     p.querySelector('#rePer').onclick = e => { const b = e.target.closest('button'); if(!b) return; RE.f.months = +b.dataset.m; p.querySelectorAll('#rePer button').forEach(x=>x.classList.toggle('on', x===b)); build(); };
     p.querySelector('#reTy').onclick = e => { const b = e.target.closest('button'); if(!b) return; const k = b.dataset.ty; if(RE.f.types.has(k)){ if(RE.f.types.size===1) return toast('유형은 하나 이상 선택', 1200); RE.f.types.delete(k); } else RE.f.types.add(k); b.classList.toggle('on', RE.f.types.has(k)); build(); };
     const bud = () => { RE.f.min = Math.round((parseFloat(p.querySelector('#reMin').value)||0)*10000); RE.f.max = Math.round((parseFloat(p.querySelector('#reMax').value)||0)*10000); build(); };
@@ -6482,8 +6485,8 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
       const y0 = new Date().getFullYear();
       for(const y of [y0, y0-1]){
         const a = await nedRows('getApartHousingPriceAttr', 'apartHousingPrices', 'pnu='+pnu+'&stdrYear='+y+'&numOfRows=1000&pageNo=1');
-        if(a.total > 0){ let rows = a.rows; if(a.total > 1000){ const b = await nedRows('getApartHousingPriceAttr', 'apartHousingPrices', 'pnu='+pnu+'&stdrYear='+y+'&numOfRows=1000&pageNo=2'); rows = rows.concat(b.rows); }
-          return { year:y, units: rows.map(r => ({ area:+r.prvuseAr, price:(+r.pblntfPc)/10000, dong:r.dongNm, ho:r.hoNm, name:r.aphusNm })).filter(u => u.price > 0), total:a.total }; }
+        if(a.total > 0){ let rows = a.rows; for(let pg = 2; pg <= 3 && rows.length < a.total; pg++){ const b = await nedRows('getApartHousingPriceAttr', 'apartHousingPrices', 'pnu='+pnu+'&stdrYear='+y+'&numOfRows=1000&pageNo='+pg); if(!b.rows.length) break; rows = rows.concat(b.rows); }
+          return { year:y, units: rows.map(r => ({ area:+r.prvuseAr, price:(+r.pblntfPc)/10000, dong:r.dongNm, ho:r.hoNm, name:r.aphusNm, kind:r.aphusSeCodeNm||'' })).filter(u => u.price > 0), total:a.total }; }
       }
       return { year:null, units:[], total:0 };
     });
@@ -6495,16 +6498,19 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
       return rows[0] || null;
     });
   }
-  function aptMedian(ap, area){ // 면적 ±3㎡ 호의 공시가격 중앙값(만원) → 없으면 전체
+  function aptMedian(ap, area, ty){ // 유형(아파트/연립·다세대) 일치 호 중 면적 ±3㎡ 공시가격 중앙값(만원) → 없으면 그 유형 전체
     if(!ap || !ap.units.length) return null;
-    let u = area ? ap.units.filter(x => Math.abs(x.area - area) <= 3) : [];
-    const band = u.length > 0; if(!band) u = ap.units;
-    return { price: med(u.map(x=>x.price)), n:u.length, band, year:ap.year };
+    let base = ap.units; if(ty==='A') base = base.filter(x => /아파트/.test(x.kind)); else if(ty==='B') base = base.filter(x => /연립|다세대/.test(x.kind)); if(!base.length) base = ap.units;
+    let u = area ? base.filter(x => Math.abs(x.area - area) <= 3) : [];
+    const band = u.length > 0; if(!band) u = base;
+    return { price: med(u.map(x=>x.price)), n:u.length, band, year:ap.year, kind:[...new Set(u.map(x=>x.kind))].join('·') };
   }
 
   /* ---- 통계 ---- */
-  function stats(s){ // 카드용(필터 무관 · 전체 기간 · 해제 제외)
-    const T = s.trades.filter(live);
+  function typesOf(s){ const cnt = {}; for(const t of s.trades) if(live(t)) cnt[t[1]] = (cnt[t[1]]||0)+1; return Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a]); }
+  function stats(s, ty){ // 카드용(필터 무관 · 전체 기간 · 해제 제외 · 유형별)
+    if(!ty) ty = typesOf(s)[0];
+    const T = s.trades.filter(t => live(t) && t[1]===ty);
     const m = T.filter(t=>t[2]==='m'), j = T.filter(t=>t[2]==='j'), w = T.filter(t=>t[2]==='w');
     const areas = {}; for(const t of T){ const k = Math.round(t[4]); areas[k] = (areas[k]||0)+1; }
     const mainArea = Object.keys(areas).sort((a,b)=>areas[b]-areas[a]).map(Number)[0] || null;
@@ -6516,11 +6522,11 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
       const nm = m.filter(t=>Math.abs(t[4]-k)<=3).length, nj = j.filter(t=>Math.abs(t[4]-k)<=3).length;
       if(nm || nj) bands.push({ area:k, m:mm, j:jj, nm, nj, ratio: (mm && jj) ? jj/mm : null }); }
     bands.sort((a,b)=>a.area-b.area);
-    return { n:T.length, nCancel: s.trades.length - T.length,
+    return { n:T.length, nCancel: s.trades.filter(t=>t[1]===ty && !live(t)).length,
       m:{ n:m.length, med: med(m.map(t=>t[5])), m2: med(m.map(t=>t[5]/t[4])), py: med(m.map(t=>t[5]/(t[4]/PY))) },
       j:{ n:j.length, med: med(j.map(t=>t[5])), m2: med(j.map(t=>t[5]/t[4])) },
       w:{ n:w.length, dep: med(w.map(t=>t[5])), rent: med(w.map(t=>t[6])) },
-      mainArea, bands, types:[...new Set(T.map(t=>t[1]))] };
+      mainArea, bands, ty, types: typesOf(s) };
   }
   function spark(m){ // 월별 매매 평당가 중앙값 스파크라인
     const by = {}; for(const t of m){ const k = Math.floor(t[3]/100); (by[k] = by[k]||[]).push(t[5]/(t[4]/PY)); }
@@ -6539,14 +6545,16 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   const kv = (k, v) => `<div>${k}<b>${v}</b></div>`;
   function tradeRows(T, limit){
     const rows = T.slice().sort((a,b)=>b[3]-a[3]).slice(0, limit);
-    return rows.map(t => `<tr class="${t[8]?'x':''}"><td>${ymdS(t[3])}${t[8]?'<span class="tag cancel">해제</span>':''}</td><td><span class="ty" style="background:${TYC[t[1]]}"></span>${DEAL[t[2]]}</td><td class="r">${t[4].toFixed(1)}㎡</td><td class="r">${t[2]==='w' ? won(t[5])+' / '+Math.round(t[6])+'만' : won(t[5])}</td><td class="r">${t[7]==null?'-':t[7]+'층'}</td></tr>`).join('');
+    return rows.map(t => `<tr class="${t[8]?'x':''}"><td>${ymdS(t[3])}${t[8]?'<span class="tag cancel">해제</span>':''}</td><td><span class="ty" style="background:${TYC[t[1]]}"></span>${TYS[t[1]]||t[1]} <b style="font-weight:600">${DEAL[t[2]]}</b></td><td class="r">${t[4].toFixed(1)}㎡</td><td class="r">${t[2]==='w' ? won(t[5])+' / '+Math.round(t[6])+'만' : won(t[5])}</td><td class="r">${t[7]==null?'-':t[7]+'층'}</td></tr>`).join('');
   }
-  function card(id){
-    const s = site(id); if(!s) return; const my = ++RE.seq; const S = stats(s);
+  const TYS = { A:'아파트', B:'연립', C:'단독', D:'오피스텔', F:'상업', H:'공장' };
+  function card(id, ty){
+    const s = site(id); if(!s) return; const my = ++RE.seq; const S = stats(s, ty); ty = S.ty; RE.cardTy = ty;
     const tyHtml = s[7].split('').map(k => `<span class="ty" style="background:${TYC[k]}"></span>${TYN[k]||k}`).join(' · ');
     const title = esc(s[1]); const sub = esc(s[2]+' '+s[3]) + (s[8] ? ' · '+esc(s[8])+'년 건축' : '') + ' · ' + tyHtml;
     const bands = S.bands.filter(b=>b.ratio!=null);
-    let html = `<div class="sec"><div class="kv">
+    const tyTabs = S.types.length > 1 ? '<div class="seg" id="re50ty" style="display:inline-flex;gap:2px;background:rgba(3,18,42,.6);border:1px solid var(--line);border-radius:8px;padding:2px;margin-bottom:8px">'+S.types.map(k=>'<button data-ty="'+k+'" style="padding:3px 9px;border-radius:6px;border:0;font-size:12px;'+(k===ty?'background:var(--lime);color:var(--navy-950);font-weight:700':'background:transparent;color:var(--text)')+'"><span class="ty" style="background:'+TYC[k]+'"></span>'+(TYN[k]||k)+' '+s.trades.filter(t=>live(t)&&t[1]===k).length+'건</button>').join('')+'</div><div class="meta" style="margin:0 0 6px">한 지번에 여러 유형(주상복합·오피스텔·상가) · 아래 통계는 <b style="color:#fff">'+(TYN[ty]||ty)+'</b>만 집계</div>' : '';
+    let html = `<div class="sec">${tyTabs}<div class="kv">
       ${S.m.n ? kv('매매 중앙값', won(S.m.med)+' <span style="color:var(--text-dim);font-weight:400">'+S.m.n+'건</span>') : ''}
       ${S.m.n ? kv('단가', Math.round(S.m.m2).toLocaleString()+'만/㎡ · '+Math.round(S.m.py).toLocaleString()+'만/평') : ''}
       ${S.j.n ? kv('전세 중앙값', won(S.j.med)+' <span style="color:var(--text-dim);font-weight:400">'+S.j.n+'건</span>') : ''}
@@ -6554,9 +6562,9 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
       ${kv('공시가격', '<span id="re50gong" style="color:var(--text-dim);font-weight:400">조회 중…</span>')}
       </div>
       ${bands.length ? '<div class="meta" style="margin-top:8px">전세가율(면적대별 · ±3㎡): '+bands.map(b=>'<b style="color:#fff">'+b.area+'㎡</b> '+Math.round(b.ratio*100)+'% <span style="opacity:.7">('+b.nm+'/'+b.nj+'건)</span>').join(' · ')+'</div>' : ''}
-      <div class="meta">계약 ${S.n}건 (해제 ${S.nCancel}건 제외 · 2025.10~2026.09 전체)</div></div>`;
-    const sp = spark(s.trades.filter(t=>live(t) && t[2]==='m'));
-    if(sp) html += `<div class="sec"><h3 style="margin:0 0 4px;font-size:13px;color:var(--lime-bright)">매매 평당가 추이 (월별 중앙값)</h3>${sp}</div>`;
+      <div class="meta">${TYN[ty]||ty} 계약 ${S.n}건 (해제 ${S.nCancel}건 제외 · 2025.10~2026.09 전체)</div></div>`;
+    const sp = spark(s.trades.filter(t=>live(t) && t[2]==='m' && t[1]===ty));
+    if(sp) html += `<div class="sec"><h3 style="margin:0 0 4px;font-size:13px;color:var(--lime-bright)">${TYN[ty]||ty} 매매 평당가 추이 (월별 중앙값)</h3>${sp}</div>`;
     const all = s.trades.length;
     html += `<div class="sec"><h3 style="margin:0 0 6px;font-size:13px;color:var(--lime-bright)">최근 거래 <small style="color:var(--text-dim);font-weight:400">${all}건</small></h3>
       <table class="re50tbl"><thead><tr><th>계약일</th><th>유형</th><th class="r">면적</th><th class="r">금액</th><th class="r">층</th></tr></thead><tbody id="re50rows">${tradeRows(s.trades, 20)}</tbody></table>
@@ -6568,13 +6576,14 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     const body = document.getElementById('re50body');
     let shown = 20; const more = body.querySelector('#re50more'); if(more) more.onclick = () => { shown += 20; body.querySelector('#re50rows').innerHTML = tradeRows(s.trades, shown); more.textContent = shown >= all ? '전체 표시됨' : '더보기 ('+Math.min(shown,all)+' / '+all+')'; if(shown >= all) more.disabled = true; };
     body.querySelectorAll('[data-re]').forEach(b => b.onclick = () => action(b.dataset.re, s, S));
+    const tt = body.querySelector('#re50ty'); if(tt) tt.onclick = e => { const b = e.target.closest('button'); if(b) card(id, b.dataset.ty); };
     // 공시가격
-    gongsi(s, S.mainArea).then(txt => { if(RE.seq!==my) return; const el = document.getElementById('re50gong'); if(el) el.outerHTML = txt; }).catch(e => { const el = document.getElementById('re50gong'); if(el) el.textContent = '조회 실패 ('+e.message+')'; });
+    gongsi(s, S.mainArea, ty).then(txt => { if(RE.seq!==my) return; const el = document.getElementById('re50gong'); if(el) el.outerHTML = txt; }).catch(e => { const el = document.getElementById('re50gong'); if(el) el.textContent = '조회 실패 ('+e.message+')'; });
   }
-  async function gongsi(s, area){
-    const isHouse = /[ABD]/.test(s[7]);
-    if(isHouse){ const ap = await aptPrice(s[4]); const r = aptMedian(ap, area);
-      if(r) return won(r.price)+' <span style="color:var(--text-dim);font-weight:400">'+r.year+' 공동주택가격 · '+(r.band ? area+'㎡대 '+r.n+'호' : '전체 '+r.n+'호')+' 중앙값</span>';
+  async function gongsi(s, area, ty){
+    if(ty==='D') return '<span style="color:var(--text-dim)">오피스텔은 공동주택가격 비대상 (국세청 기준시가 확인)</span>';
+    if(ty==='A' || ty==='B'){ const ap = await aptPrice(s[4]); const r = aptMedian(ap, area, ty);
+      if(r) return won(r.price)+' <span style="color:var(--text-dim);font-weight:400">'+r.year+' 공동주택가격('+esc(r.kind)+') · '+(r.band ? area+'㎡대 '+r.n+'호' : '전체 '+r.n+'호')+' 중앙값</span>';
     }
     const lp = await landPrice(s[4]);
     if(lp) return lp.won.toLocaleString()+'원/㎡ <span style="color:var(--text-dim);font-weight:400">'+lp.year+' 개별공시지가</span>';
@@ -6624,6 +6633,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     try{ await load(); }catch(e){ toast('실거래가 자료를 불러오지 못했습니다: '+e.message, 3500); if(n) n.textContent = '자료 없음'; return; }
     if(!RE.on) return;
     await groundAll(); if(!RE.on) return;
+    try{ RE.hScale = camera.positionCartographic.height < 900 ? .35 : 1; }catch(e){}
     build();
     toast('실거래가 켜짐 · 기둥을 클릭하면 단지 거래 내역 · 상단에서 검색/필터', 3000);
     if(!RE.flown && STATE.mode==='site'){ RE.flown = true; const ct = camera.positionCartographic; const lon = deg(ct.longitude), lat = deg(ct.latitude); if(!(lon > 126.58 && lon < 126.76 && lat > 37.35 && lat < 37.47)){ camera.flyTo({ destination: C.Cartesian3.fromDegrees(126.66, 37.36, 5200), orientation:{ heading:0, pitch: rad(-48), roll:0 }, duration:2 }); } }
@@ -6648,7 +6658,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   try{ const _cap50 = closeAllPanels; closeAllPanels = function(){ const r = _cap50.apply(this, arguments); if(RE.cardOpen){ RE.cardOpen = false; RE.sel = null; highlightSel(); } return r; }; }catch(e){}
   try{ new MutationObserver(()=>{ if(!RE.cardOpen) return; if(!document.getElementById('re50body') && !document.getElementById('js51body')){ RE.cardOpen = false; RE.sel = null; highlightSel(); } }).observe(document.getElementById('cardBody'), { childList:true }); }catch(e){}
   if(STATE.on.has('re')){ if(STATE.mode==='site') setTimeout(()=>on(), 1500); else STATE.on.delete('re'); }
-  window.__RE50 = { RE, load, aggregate, build, stats, card, site, nearestSite, aptPrice, landPrice, aptMedian, med, won, wonS, flyToSite, TYN, TYC, DEAL, PY, get cardOpen(){ return RE.cardOpen; }, setCardOpen(v){ RE.cardOpen = v; }, version:'50.1' };
+  window.__RE50 = { RE, load, aggregate, build, stats, card, site, nearestSite, aptPrice, landPrice, aptMedian, med, won, wonS, flyToSite, TYN, TYC, DEAL, PY, get cardOpen(){ return RE.cardOpen; }, setCardOpen(v){ RE.cardOpen = v; }, typesOf, TYS, version:'50.2' };
 })();
 </script>
 
@@ -6678,10 +6688,11 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   function estimate(s, area, type, gong){
     const R0 = R(); const d = R0.RE.data; const PY = R0.PY, med = R0.med;
     const s12 = Math.max(d.minYmd, (function(y){ let Y=Math.floor(y/10000)-1; return Y*10000 + (y%10000); })(d.maxYmd)+1);
-    const m = s.trades.filter(t => !t[8] && t[2]==='m' && t[3] >= s12);
+    const TN = TYN[type]||type;
+    const m = s.trades.filter(t => !t[8] && t[2]==='m' && t[1]===type && t[3] >= s12); // 선택한 주택유형만
     const band = m.filter(t => Math.abs(t[4]-area) <= 3);
-    if(band.length) return { price: med(band.map(t=>t[5])), basis:'같은 단지 ±3㎡ 매매 실거래 중앙값 (12개월)', n:band.length, level:1 };
-    if(m.length){ const m2 = med(m.map(t=>t[5]/t[4])); return { price: m2*area, basis:'같은 단지 매매 ㎡단가 중앙값 × 면적 (면적대 거래 없음 · 12개월)', n:m.length, level:2 }; }
+    if(band.length) return { price: med(band.map(t=>t[5])), basis:'같은 단지 '+TN+' ±3㎡ 매매 실거래 중앙값 (12개월)', n:band.length, level:1 };
+    if(m.length){ const m2 = med(m.map(t=>t[5]/t[4])); return { price: m2*area, basis:'같은 단지 '+TN+' 매매 ㎡단가 중앙값 × 면적 (면적대 거래 없음 · 12개월)', n:m.length, level:2 }; }
     if(gong && gong.price) return { price: gong.price*1.4, basis:gong.label+' × 140%', n:gong.n, level:3 };
     // 동 ㎡단가 (같은 유형)
     const rows = []; for(const x of d.sites){ if(x[2]!==s[2]) continue; for(const t of x.trades) if(!t[8] && t[2]==='m' && t[1]===type && t[3] >= s12) rows.push(t[5]/t[4]); }
@@ -6691,7 +6702,8 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   async function gongsiFor(s, area, type){
     const R0 = R();
     try{
-      if(type==='A' || type==='B' || type==='D'){ const ap = await R0.aptPrice(s[4]); const r = R0.aptMedian(ap, area); if(r) return { price:r.price, n:r.n, year:r.year, label:r.year+' 공동주택가격'+(r.band ? ' ('+area+'㎡대 '+r.n+'호 중앙값)' : ' (면적대 없음 · 전체 '+r.n+'호 중앙값)'), kind:'apt' }; return { price:null, label:'공동주택가격 없음(해당 PNU 미등재)', kind:'none' }; }
+      if(type==='D') return { price:null, label:'오피스텔은 공동주택가격 비대상 (국세청 기준시가)', kind:'none' };
+      if(type==='A' || type==='B'){ const ap = await R0.aptPrice(s[4]); const r = R0.aptMedian(ap, area, type); if(r) return { price:r.price, n:r.n, year:r.year, label:r.year+' 공동주택가격('+r.kind+')'+(r.band ? ' ('+area+'㎡대 '+r.n+'호 중앙값)' : ' (면적대 없음 · 전체 '+r.n+'호 중앙값)'), kind:'apt' }; return { price:null, label:'공동주택가격 없음(해당 PNU 미등재)', kind:'none' }; }
       // 단독다가구: 개별주택가격 시도
       const d = await new Promise((res,rej)=>{ const cb='__vw51_'+Math.random().toString(36).slice(2,8); const sc=document.createElement('script'); const t=setTimeout(()=>{sc.remove();rej(new Error('timeout'));},12000); window[cb]=x=>{clearTimeout(t);sc.remove();res(x);}; sc.onerror=()=>{clearTimeout(t);rej(new Error('net'));}; sc.src='https://api.vworld.kr/ned/data/getIndvdHousingPriceAttr?key=57C7018D-1A36-4873-99CD-A2272BD3040E&domain=https%3A%2F%2Fsignspark.github.io&pnu='+s[4]+'&format=json&numOfRows=20&pageNo=1&callback='+cb; document.head.appendChild(sc); });
       const rows = ((d.indvdHousingPrices && d.indvdHousingPrices.field) || []).map(r=>({ y:+r.stdrYear, p:(+r.housePc||+r.pblntfPc||0)/10000 })).filter(r=>r.p>0).sort((a,b)=>b.y-a.y);
@@ -6704,18 +6716,23 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   /* ---- 패널 ---- */
   function CARD(title, sub, html){ STATE.point = null; const c = document.getElementById('card'); c.classList.add('open'); document.getElementById('cardTitle').innerHTML = title + '<small>' + (sub||'') + '</small>'; document.getElementById('cardBody').innerHTML = '<div class="re50" id="js51body">' + html + '</div>'; JS.open = true; const R0 = R(); if(R0) R0.setCardOpen(true); try{ if(window.matchMedia('(max-width:600px)').matches){ const p = document.getElementById('rePanel'); if(p) p.classList.add('mini'); } }catch(e){} }
   const won = v => R().won(v);
-  function areasOf(s){ const cnt = {}; for(const t of s.trades){ const k = +t[4].toFixed(2); cnt[k] = (cnt[k]||0)+1; } return Object.keys(cnt).map(Number).sort((a,b)=>cnt[b]-cnt[a]).slice(0, 12); }
+  function areasOf(s, ty){ const cnt = {}; for(const t of s.trades){ if(t[8] || (ty && t[1]!==ty)) continue; const k = +t[4].toFixed(2); cnt[k] = (cnt[k]||0)+1; } return Object.keys(cnt).map(Number).sort((a,b)=>cnt[b]-cnt[a]).slice(0, 12); }
   function form(){
     const R0 = R(); const s = JS.sid!=null ? R0.site(JS.sid) : null;
-    const areas = s ? areasOf(s) : [];
-    if(s && (JS.area==null || !areas.length || JS.areaSite!==s[0])){ JS.area = areas[0] || 84; JS.areaSite = s[0]; const ty = s[7].split('').find(k=>TYN[k]); JS.type = ty || 'A'; }
+    const siteTypes = s ? R0.typesOf(s).filter(k=>TYN[k]) : [];
+    if(s && JS.areaSite!==s[0]){ JS.areaSite = s[0]; JS.type = siteTypes[0] || (s[7].split('').find(k=>TYN[k])) || 'A'; JS.area = null; }
+    if(s && !siteTypes.includes(JS.type) && siteTypes.length) JS.type = siteTypes[0];
+    const areas = s ? areasOf(s, siteTypes.includes(JS.type) ? JS.type : null) : [];
+    if(s && JS.area==null) JS.area = areas[0] || 84;
+    const mixed = siteTypes.length > 1;
     const title = '전세 안전 체크'; const sub = s ? esc(s[1])+' · '+esc(s[2]+' '+s[3])+(s[8]?' · '+esc(s[8])+'년':'') : '단지를 선택하세요';
     let html = `<div class="sec">
       <label class="f"><span>단지</span><input type="text" id="js51site" value="${s?esc(s[1]):''}" placeholder="지도에서 기둥(단지)을 클릭" readonly><button class="chip" id="js51pick" style="--c:#A4C81C;height:30px;border:1px solid var(--line-strong);border-radius:6px;background:rgba(3,18,42,.6);color:var(--text);padding:0 8px;font-size:12px">${JS.picking?'클릭 대기…':'지도에서 선택'}</button></label>
-      <label class="f"><span>전용면적</span><select id="js51areaSel">${areas.map(a=>`<option value="${a}" ${Math.abs(a-JS.area)<.005?'selected':''}>${a} ㎡ (${(a/3.305785).toFixed(1)}평)</option>`).join('')}<option value="_" ${areas.some(a=>Math.abs(a-JS.area)<.005)?'':'selected'}>직접 입력</option></select><input type="number" id="js51area" value="${JS.area||''}" step="0.01" min="5" style="flex:0 0 78px"></label>
+      <label class="f"><span>전용면적</span><select id="js51areaSel">${areas.map(a=>`<option value="${a}" ${Math.abs(a-JS.area)<.005?'selected':''}>${a} ㎡ (${(a/3.305785).toFixed(1)}평)${mixed?' · '+TYN[JS.type]:''}</option>`).join('')}<option value="_" ${areas.some(a=>Math.abs(a-JS.area)<.005)?'':'selected'}>직접 입력</option></select><input type="number" id="js51area" value="${JS.area||''}" step="0.01" min="5" style="flex:0 0 78px"></label>
       <label class="f"><span>보증금</span><input type="number" id="js51dep" value="${JS.deposit}" step="500" min="0"><span style="flex:0 0 auto">만원</span></label>
       <label class="f"><span>선순위 채권</span><input type="number" id="js51sen" value="${JS.senior}" step="500" min="0" title="등기부 을구 근저당 채권최고액 등"><span style="flex:0 0 auto">만원</span></label>
-      <label class="f"><span>주택유형</span><select id="js51ty">${['A','B','D','C'].map(k=>`<option value="${k}" ${JS.type===k?'selected':''}>${TYN[k]}</option>`).join('')}</select></label>
+      <label class="f"><span>주택유형</span><select id="js51ty">${['A','B','D','C'].map(k=>`<option value="${k}" ${JS.type===k?'selected':''}>${TYN[k]}${siteTypes.includes(k)?' ('+s.trades.filter(t=>!t[8]&&t[1]===k).length+'건)':''}</option>`).join('')}</select></label>
+      ${mixed ? '<div class="meta" style="margin:0 0 6px">한 지번에 '+siteTypes.map(k=>TYN[k]).join('·')+' 혼재 · 선택한 유형의 거래만 사용</div>' : ''}
       <button class="cta" id="js51go" style="margin-top:8px">안전도 계산</button>
       </div><div id="js51out"></div>
       <div class="sec" style="display:flex;gap:6px"><button class="cta ghost" id="js51back" style="flex:1">← 실거래 카드</button><button class="cta ghost" id="js51copy" style="flex:1" ${JS.last?'':'disabled'}>결과 텍스트 복사</button></div>`;
@@ -6726,7 +6743,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     b.querySelector('#js51area').onchange = e => { JS.area = +e.target.value; const sel = b.querySelector('#js51areaSel'); sel.value = [...sel.options].some(o=>o.value!=='_' && Math.abs(+o.value-JS.area)<.005) ? String(JS.area) : '_'; };
     b.querySelector('#js51dep').onchange = e => JS.deposit = +e.target.value||0;
     b.querySelector('#js51sen').onchange = e => JS.senior = +e.target.value||0;
-    b.querySelector('#js51ty').onchange = e => JS.type = e.target.value;
+    b.querySelector('#js51ty').onchange = e => { JS.type = e.target.value; JS.deposit = +b.querySelector('#js51dep').value||0; JS.senior = +b.querySelector('#js51sen').value||0; JS.area = null; JS.last = null; form(); };
     b.querySelector('#js51go').onclick = () => { JS.area = +b.querySelector('#js51area').value||JS.area; JS.deposit = +b.querySelector('#js51dep').value||0; JS.senior = +b.querySelector('#js51sen').value||0; JS.type = b.querySelector('#js51ty').value; run(); };
     b.querySelector('#js51back').onclick = () => { JS.open = false; if(JS.sid!=null) R0.card(JS.sid); else { document.getElementById('card').classList.remove('open'); R0.setCardOpen(false); } };
     b.querySelector('#js51copy').onclick = copy;
@@ -6819,7 +6836,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   const cc = document.getElementById('cardClose'); if(cc) cc.addEventListener('click', ()=>{ if(JS.open){ JS.open = false; JS.picking = false; } });
   try{ new MutationObserver(()=>{ if(JS.open && !document.getElementById('js51body')){ JS.open = false; JS.picking = false; } }).observe(document.getElementById('cardBody'), { childList:true }); }catch(e){}
   if(STATE.on.has('jeonse')) STATE.on.delete('jeonse'); // 패널은 주소로 복원하지 않음
-  window.__JS51 = { JS, get open(){ return JS.open; }, get picking(){ return JS.picking; }, select, run, estimate, gongsiFor, light, text, form, last:null, version:'51.1' };
+  window.__JS51 = { JS, get open(){ return JS.open; }, get picking(){ return JS.picking; }, select, run, estimate, gongsiFor, light, text, form, last:null, version:'51.2' };
 })();
 </script>
 
