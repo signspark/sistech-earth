@@ -6839,6 +6839,496 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   window.__JS51 = { JS, get open(){ return JS.open; }, get picking(){ return JS.picking; }, select, run, estimate, gongsiFor, light, text, form, last:null, version:'51.2' };
 })();
 </script>
+<script>
+/* ---------- 52. SITE › 분석 › 건물 속성 조회 › 3D 모델 잘라 내보내기 (2026-10-10): 건물 외곽선(바닥면) 기준으로 드론 3D 타일을 잘라 GLB 1개 / OBJ+MTL+JPG ZIP ----------
+   - 건물 카드(49)에 "3D 모델 잘라 내보내기" 섹션 추가 · 외곽선 = 브이월드 건축물정보(건축물대장) 도형
+   - 3D-View 타일셋(tileset.json 트리)을 외곽선 + 여유 폭으로 직접 탐색 → 선택 해상도(최고 ≈ 타일 오차 0.15 m / 고 0.4 m / 중 1.5 m)의 glb 타일만 내려받음
+   - glb: Draco 메시(구글 draco 1.5.7 wasm) + KTX2 텍스처(Basis 트랜스코더 wasm) 해제 → 외곽선 기둥(평면)으로 삼각형 절단(경계 삼각형은 다각형 절단 · UV 보간) + 기준 지면 아래 절단(지면 제거)
+   - 메모리: 타일을 하나씩 처리하고 버림 · 텍스처는 남은 부분만 잘라 JPEG로 즉시 압축 (1024² RGBA 원본은 보관하지 않음)
+   - 좌표: GLB = 원점(외곽선 중심 · 절단 높이) 기준 ENU 미터 (glTF Y-up: x=동, y=위, z=−북) · 원점 경위도/타원체고/EPSG:5186은 asset.extras에 기록
+           OBJ = EPSG:5185~5187 TM 좌표 원점 기준 상대값(X=동, Y=북, Z=위, 미터) · 기준점.txt에 원점 절대좌표 · 외곽선.geojson 동봉
+   - 바닥면 닫기(옵션): 절단 높이에 외곽선 모양 바닥판(회색) 추가 · 결과 미리보기(원본 타일 숨기고 잘린 모델만 표시)
+   - 한계: 드론 메시는 한 덩어리라 외곽선 안의 나무·차량도 함께 잘림 · 외곽선 밖으로 나온 처마·발코니는 여유 폭만큼만 남음
+*/
+(function(){
+  const C = Cesium, B49 = window.__BD49; if(!B49) return;
+  const VER = '52.1';
+  const rad = d=>d*Math.PI/180, deg = r=>r*180/Math.PI;
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const X = { busy:false, abort:false, prev:null, last:null, jcache:new Map() };
+  const LOD = { max:{ ge:0, name:'최고 (원본 최세밀)' }, high:{ ge:0.4, name:'고 (약 0.4 m 오차)' }, mid:{ ge:1.5, name:'중 (약 1.5 m 오차)' } };
+  const LIM = { warnTiles:700, maxTiles:2500, maxTris:6e6 };
+
+  /* ---- 외부 라이브러리 (처음 내보낼 때만 로드) ---- */
+  const DR = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/', BS = 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/basis/';
+  let libP = null;
+  const loadScript = src => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('라이브러리 로드 실패: '+src.split('/').pop())); document.head.appendChild(s); });
+  function libs(){
+    if(!libP) libP = (async () => {
+      const [dw, bw] = await Promise.all([ fetch(DR+'draco_decoder_gltf.wasm').then(r=>r.arrayBuffer()), fetch(BS+'basis_transcoder.wasm').then(r=>r.arrayBuffer()) ]);
+      if(typeof DracoDecoderModule === 'undefined') await loadScript(DR+'draco_wasm_wrapper_gltf.js');
+      if(typeof BASIS === 'undefined') await loadScript(BS+'basis_transcoder.js');
+      const D = await DracoDecoderModule({ wasmBinary: dw }); const Bs = await BASIS({ wasmBinary: bw }); Bs.initializeBasis();
+      return { D, Bs };
+    })();
+    libP.catch(() => { libP = null; });
+    return libP;
+  }
+
+  /* ---- 네트워크 ---- */
+  async function fetchRetry(u, kind){
+    let err; for(let k=0;k<4;k++){ try{ const r = await fetch(u); if(r.ok) return kind==='json' ? await r.json() : await r.arrayBuffer(); err = new Error('HTTP '+r.status); if(r.status===401||r.status===403||r.status===404) break; }catch(e){ err = e; } await new Promise(r=>setTimeout(r, 400*(k+1))); }
+    throw new Error('타일 받기 실패 ('+(err && err.message)+')');
+  }
+  function getJ(u){ if(!X.jcache.has(u)){ const p = fetchRetry(u,'json'); X.jcache.set(u, p); p.catch(()=>X.jcache.delete(u)); if(X.jcache.size > 3000) X.jcache.delete(X.jcache.keys().next().value); } return X.jcache.get(u); }
+
+  /* ---- 한국 TM (GRS80) · 48과 같은 식 ---- */
+  const A_ = 6378137.0, F_ = 1/298.257222101, E2 = F_*(2-F_), EP2 = E2/(1-E2);
+  const CRS = { 5185:{ lon0:125, name:'Korea 2000 / West Belt 2010' }, 5186:{ lon0:127, name:'Korea 2000 / Central Belt 2010' }, 5187:{ lon0:129, name:'Korea 2000 / East Belt 2010' } };
+  const Mf = phi => A_*((1-E2/4-3*E2*E2/64-5*E2**3/256)*phi - (3*E2/8+3*E2*E2/32+45*E2**3/1024)*Math.sin(2*phi) + (15*E2*E2/256+45*E2**3/1024)*Math.sin(4*phi) - (35*E2**3/3072)*Math.sin(6*phi));
+  const M0 = Mf(rad(38));
+  function tmFwd(lon, lat, code){ const l0 = rad(CRS[code].lon0), p = rad(lat), s = Math.sin(p), c = Math.cos(p), t = Math.tan(p);
+    const N = A_/Math.sqrt(1-E2*s*s), T = t*t, Cc = EP2*c*c, A = (rad(lon)-l0)*c;
+    const x = 200000 + N*(A + (1-T+Cc)*A**3/6 + (5-18*T+T*T+72*Cc-58*EP2)*A**5/120);
+    const y = 600000 + (Mf(p) - M0 + N*t*(A*A/2 + (5-T+9*Cc+4*Cc*Cc)*A**4/24 + (61-58*T+T*T+600*Cc-330*EP2)*A**6/720));
+    return [x, y]; }
+  const tmCode = lon => lon < 126 ? 5185 : lon < 128 ? 5186 : 5187;
+
+  /* ---- 외곽선 준비 (ENU 평면 · 여유 폭 · 삼각분할) ---- */
+  const sArea = r => { let a = 0; for(let i=0;i<r.length;i++){ const p = r[i], o = r[(i+1)%r.length]; a += p[0]*o[1]-o[0]*p[1]; } return a/2; };
+  function offsetRing(r, b){ // 각 변을 오른쪽 법선(dy,−dx) 방향으로 b만큼 (바깥 고리 반시계 · 구멍 시계 → 모두 건물 바깥쪽)
+    if(!(b > 0)) return r.slice(); const n = r.length, out = [];
+    for(let i=0;i<n;i++){ const p0 = r[(i-1+n)%n], p1 = r[i], p2 = r[(i+1)%n];
+      let ax = p1[0]-p0[0], ay = p1[1]-p0[1], bx = p2[0]-p1[0], by = p2[1]-p1[1]; const la = Math.hypot(ax,ay)||1, lb = Math.hypot(bx,by)||1;
+      const n1 = [ay/la, -ax/la], n2 = [by/lb, -bx/lb]; let mx = n1[0]+n2[0], my = n1[1]+n2[1]; const d = 1 + n1[0]*n2[0] + n1[1]*n2[1];
+      let f = d > 1e-6 ? b/d : b*3; const ml = Math.hypot(mx,my)*f; if(ml > b*3){ f *= b*3/ml; }
+      if(d <= 1e-6){ mx = n1[0]; my = n1[1]; f = b; }
+      out.push([p1[0]+mx*f, p1[1]+my*f]); }
+    return out;
+  }
+  function prepFootprint(geom, toLocal, buf){
+    const polys = geom.type==='Polygon' ? [geom.coordinates] : geom.type==='MultiPolygon' ? geom.coordinates : [];
+    const P = [], tris = [], edges = []; let bb = [Infinity,Infinity,-Infinity,-Infinity];
+    for(const pg of polys){
+      const rings = pg.map(r => { const a = r.map(([lon,lat]) => toLocal(lon,lat)); const f = a[0], l = a[a.length-1]; if(a.length>1 && Math.hypot(f[0]-l[0], f[1]-l[1]) < 1e-6) a.pop(); return a; }).filter(r => r.length >= 3);
+      if(!rings.length) continue;
+      let outer = rings[0]; if(sArea(outer) < 0) outer = outer.slice().reverse();
+      const holes = rings.slice(1).map(h => sArea(h) > 0 ? h.slice().reverse() : h);
+      const o2 = offsetRing(outer, buf), h2 = holes.map(h => offsetRing(h, buf)).filter(h => Math.abs(sArea(h)) > 0.5 && sArea(h) < 0);
+      P.push({ outer:o2, holes:h2 });
+      for(const r of [o2, ...h2]) for(let i=0;i<r.length;i++){ const a = r[i], c = r[(i+1)%r.length]; edges.push([a[0],a[1],c[0],c[1]]); bb = [Math.min(bb[0],a[0]),Math.min(bb[1],a[1]),Math.max(bb[2],a[0]),Math.max(bb[3],a[1])]; }
+      const flat = o2.concat(...h2); const holeIdx = []; let k = o2.length; for(const h of h2){ holeIdx.push(k); k += h.length; }
+      const ids = C.PolygonPipeline.triangulate(flat.map(p => new C.Cartesian2(p[0], p[1])), holeIdx);
+      for(let i=0;i<ids.length;i+=3){ let a = flat[ids[i]], b = flat[ids[i+1]], c = flat[ids[i+2]]; if(((b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])) < 0){ const t = b; b = c; c = t; }
+        const hp = [[a,b],[b,c],[c,a]].map(([p,q]) => { const A = -(q[1]-p[1]), B = q[0]-p[0]; return [A, B, -(A*p[0]+B*p[1])]; });
+        tris.push({ p:[a,b,c], hp, bb:[Math.min(a[0],b[0],c[0]), Math.min(a[1],b[1],c[1]), Math.max(a[0],b[0],c[0]), Math.max(a[1],b[1],c[1])] }); }
+    }
+    const inRing = (x, y, r) => { let ins = false; for(let i=0, j=r.length-1; i<r.length; j=i++){ const xi=r[i][0], yi=r[i][1], xj=r[j][0], yj=r[j][1]; if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi)) ins = !ins; } return ins; };
+    const inside = (x, y) => { if(x<bb[0]||x>bb[2]||y<bb[1]||y>bb[3]) return false; for(const p of P){ if(inRing(x,y,p.outer) && !p.holes.some(h=>inRing(x,y,h))) return true; } return false; };
+    const dist = (x, y) => { let m = Infinity; for(const e of edges){ const dx = e[2]-e[0], dy = e[3]-e[1]; const L = dx*dx+dy*dy; let t = L ? ((x-e[0])*dx+(y-e[1])*dy)/L : 0; t = t<0?0:t>1?1:t; const ex = e[0]+t*dx-x, ey = e[1]+t*dy-y; const d = ex*ex+ey*ey; if(d < m) m = d; } return Math.sqrt(m); };
+    const area = P.reduce((s,p)=>s + Math.abs(sArea(p.outer)) - p.holes.reduce((t,h)=>t+Math.abs(sArea(h)),0), 0);
+    return { P, tris, edges, bb, inside, dist, area };
+  }
+
+  /* ---- 타일 트리 탐색 (외곽선 + 높이 범위와 겹치는 타일만) ---- */
+  function makeHit(fp, frame, zr){
+    const D = deg, sc = new C.Cartographic(), tmp = new C.Cartesian3();
+    const [x0,y0,x1,y1] = [fp.bb[0]-1, fp.bb[1]-1, fp.bb[2]+1, fp.bb[3]+1];
+    const segX = (a,b,c,d) => { const o = (p,q,r) => Math.sign((q[0]-p[0])*(r[1]-p[1])-(q[1]-p[1])*(r[0]-p[0])); return o(a,b,c)!==o(a,b,d) && o(c,d,a)!==o(c,d,b); };
+    function rectHit(r){ if(r[2]<x0||r[0]>x1||r[3]<y0||r[1]>y1) return false;
+      for(const e of fp.edges) if(e[0]>=r[0]&&e[0]<=r[2]&&e[1]>=r[1]&&e[1]<=r[3]) return true;
+      const cs = [[r[0],r[1]],[r[2],r[1]],[r[2],r[3]],[r[0],r[3]]]; for(const q of cs) if(fp.inside(q[0],q[1])) return true;
+      for(let i=0;i<4;i++) for(const e of fp.edges) if(segX(cs[i],cs[(i+1)%4],[e[0],e[1]],[e[2],e[3]])) return true; return false; }
+    const corners = pts => { let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity,h0=Infinity,h1=-Infinity; for(const p of pts){ const l = frame.ecefToLocal(p); if(l[0]<a)a=l[0]; if(l[0]>c)c=l[0]; if(l[1]<b)b=l[1]; if(l[1]>d)d=l[1]; if(l[2]<h0)h0=l[2]; if(l[2]>h1)h1=l[2]; } return { r:[a,b,c,d], h0, h1 }; };
+    return function(bv){
+      let k;
+      if(bv.region){ const [w,s,e,n,ha,hb] = bv.region; const pts = []; for(const lo of [w,e]) for(const la of [s,n]) for(const h of [ha,hb]) pts.push(C.Cartesian3.fromRadians(lo,la,h)); k = corners(pts); }
+      else if(bv.box){ const b = bv.box, pts = []; for(const sx of [-1,1]) for(const sy of [-1,1]) for(const sz of [-1,1]) pts.push(new C.Cartesian3(b[0]+sx*b[3]+sy*b[6]+sz*b[9], b[1]+sx*b[4]+sy*b[7]+sz*b[10], b[2]+sx*b[5]+sy*b[8]+sz*b[11])); k = corners(pts); }
+      else if(bv.sphere){ const s = bv.sphere; const l = frame.ecefToLocal(new C.Cartesian3(s[0],s[1],s[2])); k = { r:[l[0]-s[3],l[1]-s[3],l[0]+s[3],l[1]+s[3]], h0:l[2]-s[3], h1:l[2]+s[3] }; }
+      else return true;
+      if(k.h1 < zr[0] || k.h0 > zr[1]) return false;
+      return rectHit(k.r);
+    };
+  }
+  async function selectTiles(rootUrl, hit, target, onProg){
+    const out = []; let nj = 0;
+    async function walk(url, tile, refine, T){
+      if(tile.refine) refine = tile.refine;
+      if(tile.transform) T = C.Matrix4.multiply(T, C.Matrix4.fromColumnMajorArray(tile.transform), new C.Matrix4());
+      if(!hit(tile.boundingVolume)) return;
+      const cu = tile.content && (tile.content.uri || tile.content.url);
+      if(cu && /\.json(\?|$)/i.test(cu)){ const u = new URL(cu, url).href; nj++; if(onProg && nj%10===0) onProg(nj, out.length); const j = await getJ(u); await walk(u, j.root, refine, T); return; }
+      const kids = tile.children || [];
+      if(cu && (!kids.length || tile.geometricError <= target)){ out.push({ u:new URL(cu, url).href, ge:tile.geometricError, T }); return; }
+      if(cu && refine==='ADD') out.push({ u:new URL(cu, url).href, ge:tile.geometricError, T });
+      await Promise.all(kids.map(k => walk(url, k, refine, T)));
+    }
+    const I = C.Matrix4.clone(C.Matrix4.IDENTITY);
+    const root = await getJ(rootUrl); await walk(rootUrl, root.root, root.root.refine || 'REPLACE', I);
+    return out;
+  }
+
+  /* ---- glb 해석 ---- */
+  function parseGlb(ab){
+    const dv = new DataView(ab); if(dv.getUint32(0,true) !== 0x46546C67) throw new Error('glb 아님');
+    let off = 12, json = null, bin = null;
+    while(off < ab.byteLength){ const len = dv.getUint32(off,true), type = dv.getUint32(off+4,true); const ch = new Uint8Array(ab, off+8, len); if(type===0x4E4F534A) json = JSON.parse(new TextDecoder().decode(ch)); else if(type===0x004E4942) bin = ch; off += 8 + len; }
+    return { g:json, bin };
+  }
+  const bvBytes = (g, bin, i) => { const v = g.bufferViews[i]; return new Uint8Array(bin.buffer, bin.byteOffset + (v.byteOffset||0), v.byteLength); };
+  const NC = { SCALAR:1, VEC2:2, VEC3:3, VEC4:4 };
+  function readAccessor(g, bin, i){ // 압축 안 된 glb 대비
+    const a = g.accessors[i], v = g.bufferViews[a.bufferView], n = NC[a.type], cnt = a.count;
+    const T = { 5126:Float32Array, 5125:Uint32Array, 5123:Uint16Array, 5121:Uint8Array, 5122:Int16Array, 5120:Int8Array }[a.componentType];
+    const stride = v.byteStride || n*T.BYTES_PER_ELEMENT; const base = bin.byteOffset + (v.byteOffset||0) + (a.byteOffset||0);
+    const out = new Float64Array(cnt*n); const dv = new DataView(bin.buffer);
+    const rd = { 5126:(o)=>dv.getFloat32(o,true), 5125:(o)=>dv.getUint32(o,true), 5123:(o)=>dv.getUint16(o,true), 5121:(o)=>dv.getUint8(o), 5122:(o)=>dv.getInt16(o,true), 5120:(o)=>dv.getInt8(o) }[a.componentType];
+    const nm = a.normalized ? ({5123:65535,5121:255,5122:32767,5120:127}[a.componentType]||1) : 1;
+    for(let k=0;k<cnt;k++) for(let c=0;c<n;c++) out[k*n+c] = rd(base + k*stride + c*T.BYTES_PER_ELEMENT)/nm;
+    return out;
+  }
+  function decodePrim(L, g, bin, prim){
+    const ext = prim.extensions && prim.extensions.KHR_draco_mesh_compression;
+    if(ext){
+      const D = L.D, dec = new D.Decoder(), buf = new D.DecoderBuffer(); const src = bvBytes(g, bin, ext.bufferView); const data = new Int8Array(src.buffer, src.byteOffset, src.byteLength);
+      buf.Init(data, data.length); const mesh = new D.Mesh(); const st = dec.DecodeBufferToMesh(buf, mesh);
+      try{
+        if(!st.ok()) throw new Error('Draco 해제 실패');
+        const nf = mesh.num_faces(), np = mesh.num_points();
+        const attr = (id, comps) => { const at = dec.GetAttributeByUniqueId(mesh, id); const n = np*comps, ptr = D._malloc(n*4); dec.GetAttributeDataArrayForAllPoints(mesh, at, D.DT_FLOAT32, n*4, ptr); const arr = new Float32Array(D.HEAPF32.buffer, ptr, n).slice(); D._free(ptr); return arr; };
+        const pos = attr(ext.attributes.POSITION, 3); const uv = ext.attributes.TEXCOORD_0 !== undefined ? attr(ext.attributes.TEXCOORD_0, 2) : null;
+        const ip = D._malloc(nf*12); dec.GetTrianglesUInt32Array(mesh, nf*12, ip); const idx = new Uint32Array(D.HEAPU32.buffer, ip, nf*3).slice(); D._free(ip);
+        return { pos, uv, idx };
+      } finally { D.destroy(mesh); D.destroy(buf); D.destroy(dec); }
+    }
+    const pos = readAccessor(g, bin, prim.attributes.POSITION); const uv = prim.attributes.TEXCOORD_0 !== undefined ? readAccessor(g, bin, prim.attributes.TEXCOORD_0) : null;
+    let idx; if(prim.indices !== undefined) idx = Uint32Array.from(readAccessor(g, bin, prim.indices)); else { idx = new Uint32Array(pos.length/3); for(let i=0;i<idx.length;i++) idx[i] = i; }
+    return { pos, uv, idx };
+  }
+  async function textureRGBA(L, g, bin, matIdx){
+    const m = g.materials && g.materials[matIdx]; const ti = m && m.pbrMetallicRoughness && m.pbrMetallicRoughness.baseColorTexture; if(!ti) return null;
+    const tx = g.textures[ti.index]; const si = tx.extensions && tx.extensions.KHR_texture_basisu ? tx.extensions.KHR_texture_basisu.source : tx.source; const im = g.images[si];
+    const bytes = bvBytes(g, bin, im.bufferView).slice();
+    if(im.mimeType === 'image/ktx2'){
+      const kf = new L.Bs.KTX2File(bytes); try{
+        if(!kf.isValid()) throw new Error('KTX2 오류'); const w = kf.getWidth(), h = kf.getHeight(); if(!kf.startTranscoding()) throw new Error('KTX2 트랜스코딩 실패');
+        const dst = new Uint8Array(kf.getImageTranscodedSizeInBytes(0,0,0,13)); if(!kf.transcodeImage(dst,0,0,0,13,0,-1,-1)) throw new Error('KTX2 트랜스코딩 실패');
+        return { w, h, px:dst };
+      } finally { kf.close(); kf.delete(); }
+    }
+    const bmp = await createImageBitmap(new Blob([bytes], { type: im.mimeType || 'image/jpeg' }));
+    const cv = new OffscreenCanvas(bmp.width, bmp.height); const cx = cv.getContext('2d'); cx.drawImage(bmp, 0, 0);
+    return { w:bmp.width, h:bmp.height, px:new Uint8Array(cx.getImageData(0,0,bmp.width,bmp.height).data.buffer) };
+  }
+  // JPEG 압축은 워커 3개에서 (메인 스레드 canvas.toBlob는 Cesium 렌더와 경합해 1024²당 약 1.2초 → 워커 약 0.2초)
+  const POOL = { ws:[], q:[], seq:0, cb:new Map() };
+  function pool(){
+    if(POOL.ws.length || POOL.failed) return POOL.ws.length;
+    try{
+      const src = "onmessage=async e=>{const d=e.data;try{const cv=new OffscreenCanvas(d.w,d.h);cv.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(d.buf),d.w,d.h),0,0);const b=await cv.convertToBlob({type:'image/jpeg',quality:d.q});const ab=await b.arrayBuffer();postMessage({id:d.id,ab},[ab]);}catch(err){postMessage({id:d.id,err:String(err)});}}";
+      const url = URL.createObjectURL(new Blob([src], { type:'text/javascript' }));
+      for(let i=0;i<3;i++){ const w = new Worker(url); w.busy = false; w.onmessage = e => { w.busy = false; const f = POOL.cb.get(e.data.id); POOL.cb.delete(e.data.id); if(f) f(e.data); pump(); }; POOL.ws.push(w); }
+    }catch(e){ POOL.failed = true; }
+    return POOL.ws.length;
+  }
+  function pump(){ for(const w of POOL.ws){ if(w.busy || !POOL.q.length) continue; const job = POOL.q.shift(); w.busy = true; w.postMessage(job, [job.buf]); } }
+  function cropJpeg(tex, x0, y0, cw, ch, q){
+    const buf = new Uint8ClampedArray(cw*ch*4); const s = tex.px, W = tex.w;
+    for(let y=0;y<ch;y++) buf.set(s.subarray(((y0+y)*W + x0)*4, ((y0+y)*W + x0 + cw)*4), y*cw*4);
+    if(pool()){ const id = ++POOL.seq; return new Promise((res, rej) => { POOL.cb.set(id, d => d.err ? rej(new Error(d.err)) : res(new Uint8Array(d.ab))); POOL.q.push({ id, w:cw, h:ch, q, buf:buf.buffer }); pump(); }); }
+    const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch; cv.getContext('2d').putImageData(new ImageData(buf, cw, ch), 0, 0);
+    const b64 = atob(cv.toDataURL('image/jpeg', q).split(',')[1]); const u8 = new Uint8Array(b64.length); for(let i=0;i<b64.length;i++) u8[i] = b64.charCodeAt(i); return Promise.resolve(u8);
+  }
+
+  /* ---- 절단 ---- */
+  function clipPlane(P, a, b, c){ const out = []; const n = P.length; for(let i=0;i<n;i++){ const p = P[i], q = P[(i+1)%n]; const dp = a*p[0]+b*p[1]+c, dq = a*q[0]+b*q[1]+c; if(dp >= 0) out.push(p); if((dp >= 0) !== (dq >= 0)){ const t = dp/(dp-dq); out.push([p[0]+(q[0]-p[0])*t, p[1]+(q[1]-p[1])*t, p[2]+(q[2]-p[2])*t, p[3]+(q[3]-p[3])*t, p[4]+(q[4]-p[4])*t]); } } return out; }
+  function clipZ(P, z0){ const out = []; const n = P.length; for(let i=0;i<n;i++){ const p = P[i], q = P[(i+1)%n]; const dp = p[2]-z0, dq = q[2]-z0; if(dp >= 0) out.push(p); if((dp >= 0) !== (dq >= 0)){ const t = dp/(dp-dq); out.push([p[0]+(q[0]-p[0])*t, p[1]+(q[1]-p[1])*t, z0, p[3]+(q[3]-p[3])*t, p[4]+(q[4]-p[4])*t]); } } return out; }
+
+  function cutZPart(p, zc){ // 잘라낸 결과에 수평 절단(z >= zc) 적용
+    const P = p.pos, U = p.uv, I = p.idx, n = P.length/3; const map = new Int32Array(n).fill(-1); const oP = [], oU = [], oI = [];
+    const keep = i => { let k = map[i]; if(k < 0){ k = map[i] = oP.length/3; oP.push(P[i*3], P[i*3+1], P[i*3+2]); oU.push(U[i*2], U[i*2+1]); } return k; };
+    const v = i => [P[i*3], P[i*3+1], P[i*3+2], U[i*2], U[i*2+1]];
+    for(let t=0;t<I.length;t+=3){ const a = I[t], b = I[t+1], c = I[t+2]; const ia = P[a*3+2] >= zc, ib = P[b*3+2] >= zc, ic = P[c*3+2] >= zc;
+      if(ia && ib && ic){ oI.push(keep(a), keep(b), keep(c)); continue; } if(!ia && !ib && !ic) continue;
+      const Q = clipZ([v(a), v(b), v(c)], zc); if(Q.length < 3) continue; const base = oP.length/3; for(const q of Q){ oP.push(q[0], q[1], q[2]); oU.push(q[3], q[4]); } for(let k=1;k<Q.length-1;k++) oI.push(base, base+k, base+k+1); }
+    return { pos:Float32Array.from(oP), uv:Float32Array.from(oU), idx:Uint32Array.from(oI) };
+  }
+  function clipMesh(m, M, fp, zc, ringZ){ // m: {pos, uv, idx} · M: glb 좌표 → 로컬 ENU (Float64 16) → {pos(Float64 xyz), uv, idx} · ringZ: 외곽선 밖 1~4 m 띠의 높이 표본(지면 추정)
+    const np = m.pos.length/3, L = new Float64Array(np*3), ins = new Uint8Array(np), dd = new Float32Array(np);
+    for(let i=0;i<np;i++){ const x = m.pos[i*3], y = m.pos[i*3+1], z = m.pos[i*3+2];
+      const lx = M[0]*x+M[4]*y+M[8]*z+M[12], ly = M[1]*x+M[5]*y+M[9]*z+M[13], lz = M[2]*x+M[6]*y+M[10]*z+M[14];
+      L[i*3] = lx; L[i*3+1] = ly; L[i*3+2] = lz; }
+    const [bx0,by0,bx1,by1] = fp.bb; const need = new Uint8Array(np);
+    for(let i=0;i<np;i++){ const x = L[i*3], y = L[i*3+1]; if(x < bx0-5 || x > bx1+5 || y < by0-5 || y > by1+5){ ins[i] = 0; dd[i] = 99; continue; } ins[i] = fp.inside(x,y) ? 1 : 0; need[i] = 1; }
+    const distOf = i => { if(need[i]===1){ dd[i] = fp.dist(L[i*3], L[i*3+1]); need[i] = 2; } return dd[i]; };
+    if(ringZ && ringZ.length < 400000) for(let i=0;i<np;i+=3){ if(need[i] && !ins[i]){ const d = distOf(i); if(d >= 1 && d <= 4) ringZ.push(L[i*3+2]); } }
+    const uv = m.uv; const oP = [], oU = [], oI = []; const map = new Int32Array(np).fill(-1);
+    const keepV = i => { let k = map[i]; if(k < 0){ k = map[i] = oP.length/3; oP.push(L[i*3], L[i*3+1], L[i*3+2]); oU.push(uv ? uv[i*2] : 0, uv ? uv[i*2+1] : 0); } return k; };
+    const vtx = i => [L[i*3], L[i*3+1], L[i*3+2], uv ? uv[i*2] : 0, uv ? uv[i*2+1] : 0];
+    const emit = P => { if(P.length < 3) return; const b = oP.length/3; for(const p of P){ oP.push(p[0],p[1],p[2]); oU.push(p[3],p[4]); } for(let k=1;k<P.length-1;k++) oI.push(b, b+k, b+k+1); };
+    const idx = m.idx; const zOn = isFinite(zc);
+    for(let t=0;t<idx.length;t+=3){ const a = idx[t], b = idx[t+1], c = idx[t+2];
+      const za = L[a*3+2], zb = L[b*3+2], zz = L[c*3+2];
+      if(zOn && za < zc && zb < zc && zz < zc) continue;
+      const nIn = ins[a]+ins[b]+ins[c];
+      const ex = Math.sqrt(Math.max((L[a*3]-L[b*3])**2+(L[a*3+1]-L[b*3+1])**2, (L[b*3]-L[c*3])**2+(L[b*3+1]-L[c*3+1])**2, (L[c*3]-L[a*3])**2+(L[c*3+1]-L[a*3+1])**2));
+      let pieces = null;
+      if(nIn === 3 && distOf(a) > ex && distOf(b) > ex && distOf(c) > ex){ // 완전히 안쪽
+        if(!zOn || (za >= zc && zb >= zc && zz >= zc)){ oI.push(keepV(a), keepV(b), keepV(c)); continue; }
+        pieces = [[vtx(a), vtx(b), vtx(c)]];
+      } else if(nIn === 0 && (need[a]===0 || distOf(a) > ex) && (need[b]===0 || distOf(b) > ex) && (need[c]===0 || distOf(c) > ex)){ continue; } // 완전히 바깥
+      else { // 경계: 외곽선 삼각형 각각으로 절단
+        const tx0 = Math.min(L[a*3],L[b*3],L[c*3]), tx1 = Math.max(L[a*3],L[b*3],L[c*3]), ty0 = Math.min(L[a*3+1],L[b*3+1],L[c*3+1]), ty1 = Math.max(L[a*3+1],L[b*3+1],L[c*3+1]);
+        pieces = []; const T0 = [vtx(a), vtx(b), vtx(c)];
+        for(const ft of fp.tris){ if(ft.bb[2] < tx0 || ft.bb[0] > tx1 || ft.bb[3] < ty0 || ft.bb[1] > ty1) continue; let P = T0; for(const h of ft.hp){ P = clipPlane(P, h[0], h[1], h[2]); if(P.length < 3) break; } if(P.length >= 3) pieces.push(P); }
+      }
+      for(let P of pieces){ if(zOn) P = clipZ(P, zc); emit(P); }
+    }
+    return { pos:oP, uv:oU, idx:oI };
+  }
+
+  /* ---- 좌표틀 ---- */
+  function makeFrame(lon, lat, h){
+    const enu = C.Transforms.eastNorthUpToFixedFrame(C.Cartesian3.fromDegrees(lon, lat, h)); const inv = C.Matrix4.inverse(enu, new C.Matrix4());
+    const tmp = new C.Cartesian3();
+    return { enu, inv, ecefToLocal: p => { const r = C.Matrix4.multiplyByPoint(inv, p, tmp); return [r.x, r.y, r.z]; },
+      lonLatToLocal: (lo, la, hh) => { const r = C.Matrix4.multiplyByPoint(inv, C.Cartesian3.fromDegrees(lo, la, hh), tmp); return [r.x, r.y, r.z]; } };
+  }
+  function nodeMeshes(g){ // [{mesh, M(Matrix4 glb 좌표)}]
+    const out = []; const sc = g.scenes ? g.scenes[g.scene||0] : { nodes: g.nodes.map((_,i)=>i) };
+    const local = n => n.matrix ? C.Matrix4.fromColumnMajorArray(n.matrix) : C.Matrix4.fromTranslationQuaternionRotationScale(new C.Cartesian3(...(n.translation||[0,0,0])), new C.Quaternion(...(n.rotation||[0,0,0,1])), new C.Cartesian3(...(n.scale||[1,1,1])));
+    const walk = (i, P) => { const n = g.nodes[i]; const M = C.Matrix4.multiply(P, local(n), new C.Matrix4()); if(n.mesh !== undefined) out.push({ mesh:g.meshes[n.mesh], M }); for(const k of (n.children||[])) walk(k, M); };
+    for(const i of sc.nodes) walk(i, C.Matrix4.IDENTITY); return out;
+  }
+
+  /* ---- 메인: 잘라내기 ---- */
+  async function findProject(frame, fp, zr, target, prog){
+    const hit = makeHit(fp, frame, zr); const list = (window.PROJECTS || (typeof PROJECTS!=='undefined' ? PROJECTS : [])).filter(p => p.tsId);
+    const oc = C.Matrix4.getTranslation(frame.enu, new C.Cartesian3());
+    list.sort((a,b) => { const da = a.ts && a.ts.boundingSphere ? C.Cartesian3.distance(a.ts.boundingSphere.center, oc) - a.ts.boundingSphere.radius : 1e9; const db = b.ts && b.ts.boundingSphere ? C.Cartesian3.distance(b.ts.boundingSphere.center, oc) - b.ts.boundingSphere.radius : 1e9; return da - db; });
+    for(const p of list){
+      if(p.ts && p.ts.boundingSphere && C.Cartesian3.distance(p.ts.boundingSphere.center, oc) > p.ts.boundingSphere.radius + 2000) continue;
+      const url = TILESET_BASE + p.tsId + '/tileset.json';
+      const tiles = await selectTiles(url, hit, target, (nj, nt) => prog('타일 목록 찾는 중… ('+esc(p.name)+' · 목록 '+nj+'개)'));
+      if(tiles.length) return { p, tiles };
+    }
+    return null;
+  }
+
+  async function cut(S, opt, prog){
+    const geom = S.B && S.B.geom; if(!geom) throw new Error('건물 외곽선이 없습니다');
+    const rings = (geom.type==='Polygon' ? [geom.coordinates[0]] : geom.coordinates.map(p=>p[0])).filter(Boolean);
+    const big = rings.slice().sort((a,b)=>Math.abs(sArea(b))-Math.abs(sArea(a)))[0];
+    const bv = big.length > 1 && big[0][0]===big[big.length-1][0] && big[0][1]===big[big.length-1][1] ? big.slice(0,-1) : big;
+    let cx = 0, cy = 0; for(const v of bv){ cx += v[0]; cy += v[1]; } cx /= bv.length; cy /= bv.length;
+    if(!S.mh || S.mh.ground == null){ prog('3D 모델 높이 재는 중…'); try{ S.mh = await B49.measureHeight(rings); }catch(e){} }
+    let ground = S.mh && S.mh.ground != null ? S.mh.ground : null;
+    if(ground == null){ const h = globe.getHeight(C.Cartographic.fromDegrees(cx, cy)); ground = isFinite(h) ? h : 0; }
+    const roof = S.mh && S.mh.ok ? S.mh.roof : ground + 300;
+    const cutOn = opt.ground !== 'off'; const h0 = ground; // 임시 원점 높이 (화면 샘플 지면) → 내려받은 최세밀 메시로 지면 다시 추정 후 이동
+    let frame = makeFrame(cx, cy, h0);
+    const toLocal = (lon, lat) => { const l = frame.lonLatToLocal(lon, lat, h0); return [l[0], l[1]]; };
+    const fp = prepFootprint(geom, toLocal, +opt.buf);
+    if(!fp.tris.length) throw new Error('외곽선 도형을 해석하지 못했습니다');
+    const zr = [cutOn ? -12 : -40, roof - h0 + 15]; const ringZ = [];
+    prog('타일 목록 찾는 중…');
+    const found = await findProject(frame, fp, zr, LOD[opt.lod].ge, prog);
+    if(!found) throw new Error('이 건물 위치에는 SISTECH 3D 모델(3D-View 타일셋)이 없습니다');
+    const tiles = found.tiles;
+    if(tiles.length > LIM.maxTiles) throw new Error('타일이 너무 많습니다 ('+tiles.length+'개) · 해상도를 낮춰 주세요');
+    if(tiles.length > LIM.warnTiles && !confirm('타일 '+tiles.length+'개 (약 '+Math.round(tiles.length*0.13)+' MB 내려받기)입니다. 브라우저 메모리를 많이 쓸 수 있습니다. 계속할까요?\n(취소 후 해상도를 "고"로 낮추면 훨씬 가볍습니다)')) throw new Error('취소함');
+    prog('라이브러리 준비 중… (Draco · Basis)');
+    const L = await libs();
+    const yup = C.Axis.Y_UP_TO_Z_UP; const parts = [], pend = []; let nTri = 0, nBytes = 0, jpgBytes = 0; const t0 = performance.now();
+    // 받기는 6개 앞서, 처리는 하나씩
+    const q = tiles.map(t => ({ t, p:null })); let head = 0; const ahead = () => { while(head < q.length && head < done + 6){ const it = q[head++]; it.p = fetchRetry(it.t.u, 'buf'); it.p.catch(()=>{}); } };
+    let done = 0;
+    for(const it of q){
+      if(X.abort) throw new Error('중지함');
+      ahead(); const ab = await it.p; it.p = null; nBytes += ab.byteLength;
+      const { g, bin } = parseGlb(ab);
+      for(const nm of nodeMeshes(g)){
+        const Mw = C.Matrix4.multiply(it.t.T, C.Matrix4.multiply(yup, nm.M, new C.Matrix4()), new C.Matrix4());
+        const M = C.Matrix4.toArray(C.Matrix4.multiply(frame.inv, Mw, new C.Matrix4()));
+        for(const prim of nm.mesh.primitives){
+          if(prim.mode !== undefined && prim.mode !== 4) continue;
+          const m = decodePrim(L, g, bin, prim); const r = clipMesh(m, M, fp, -Infinity, ringZ);
+          if(!r.idx.length) continue;
+          // 텍스처: 남은 UV 범위만 잘라 JPEG
+          let jpg = null, uv = r.uv;
+          const tex = await textureRGBA(L, g, bin, prim.material).catch(()=>null);
+          if(tex){ let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity; for(let i=0;i<uv.length;i+=2){ const u = uv[i], v = uv[i+1]; if(u<u0)u0=u; if(u>u1)u1=u; if(v<v0)v0=v; if(v>v1)v1=v; }
+            const x0 = Math.max(0, Math.floor(u0*tex.w)-2), y0 = Math.max(0, Math.floor(v0*tex.h)-2), x1 = Math.min(tex.w, Math.ceil(u1*tex.w)+2), y1 = Math.min(tex.h, Math.ceil(v1*tex.h)+2);
+            const cw = Math.max(1, x1-x0), ch = Math.max(1, y1-y0);
+            jpg = cropJpeg(tex, x0, y0, cw, ch, opt.q || 0.88); pend.push(jpg); if(pend.length > 9) await pend.shift();
+            const nu = new Float32Array(uv.length); for(let i=0;i<uv.length;i+=2){ nu[i] = (uv[i]*tex.w - x0)/cw; nu[i+1] = (uv[i+1]*tex.h - y0)/ch; } uv = nu; }
+          else uv = Float32Array.from(uv);
+          parts.push({ pos:Float32Array.from(r.pos), uv, idx:Uint32Array.from(r.idx), jpg, src:it.t.u.split('/tileset/data/')[1] || it.t.u });
+          nTri += r.idx.length/3;
+          if(nTri > LIM.maxTris) throw new Error('삼각형이 너무 많습니다 ('+Math.round(nTri/1e4)+'만 개 이상) · 해상도를 낮춰 주세요');
+        }
+      }
+      done++;
+      if(done % 3 === 0 || done === q.length){ prog('자르는 중… 타일 '+done+'/'+q.length+' · 삼각형 '+(nTri/1e4).toFixed(1)+'만 · 받은 '+(nBytes/1048576).toFixed(1)+' MB'); await new Promise(r=>setTimeout(r, 0)); }
+    }
+    prog('텍스처 압축 마무리 중…');
+    for(const p of parts){ if(p.jpg){ p.jpg = await p.jpg; jpgBytes += p.jpg.length; } }
+    // 기준 지면: 외곽선 밖 1~4 m 띠의 최세밀 메시 높이 20% 분위 (화면 해상도와 무관하게 일정)
+    let gL = 0, gSrc = '화면 샘플'; if(ringZ.length > 50){ ringZ.sort((a,b)=>a-b); gL = ringZ[Math.floor(ringZ.length*0.2)]; gSrc = '메시 외곽 띠 '+ringZ.length+'점'; }
+    const zc = gL + (cutOn ? +opt.ground : 0);
+    if(cutOn){ prog('지면 아래 자르는 중…'); for(let i=parts.length-1;i>=0;i--){ const r = cutZPart(parts[i], zc); if(!r.idx.length){ parts.splice(i,1); continue; } nTri += (r.idx.length - parts[i].idx.length)/3; Object.assign(parts[i], r); } }
+    for(const p of parts) for(let i=2;i<p.pos.length;i+=3) p.pos[i] -= zc; // 절단 높이 = z 0
+    const hOrg = h0 + zc; frame = makeFrame(cx, cy, hOrg); ground = h0 + gL;
+    if(!parts.length) throw new Error('외곽선 안에 남는 3D 메시가 없습니다 (3D 모델 범위 밖이거나 지면 제거 높이가 지붕보다 높음)');
+    // 바닥면 닫기
+    if(opt.cap && cutOn){ const P = [], I = []; for(const ft of fp.tris){ const b = P.length/3; for(const p of ft.p) P.push(p[0], p[1], 0); I.push(b, b+2, b+1); } parts.push({ pos:Float32Array.from(P), uv:new Float32Array(P.length/3*2), idx:Uint32Array.from(I), jpg:null, cap:true, src:'바닥면' }); nTri += I.length/3; }
+    const tm = tmCode(cx); const tmO = tmFwd(cx, cy, tm);
+    const tE = (() => { const e = frame.enu; const at = (x, y) => { const p = C.Matrix4.multiplyByPoint(e, new C.Cartesian3(x, y, 0), new C.Cartesian3()); const c = C.Cartographic.fromCartesian(p); return tmFwd(deg(c.longitude), deg(c.latitude), tm); };
+      const a = at(0,0), ex = at(100,0), ny = at(0,100); return [ (ex[0]-a[0])/100, (ex[1]-a[1])/100, (ny[0]-a[0])/100, (ny[1]-a[1])/100, a[0]-tmO[0], a[1]-tmO[1] ]; })();
+    let mn = [Infinity,Infinity,Infinity], mx = [-Infinity,-Infinity,-Infinity]; for(const p of parts) for(let i=0;i<p.pos.length;i+=3) for(let k=0;k<3;k++){ const v = p.pos[i+k]; if(v<mn[k]) mn[k]=v; if(v>mx[k]) mx[k]=v; }
+    return { parts, nTri, nTiles:tiles.length, nBytes, jpgBytes, ms:performance.now()-t0, project:found.p.name, origin:{ lon:cx, lat:cy, h:hOrg, ground, gSrc, cutOn, tm, tmXY:tmO, tE }, fp, bbox:{ mn, mx }, lod:opt.lod, buf:+opt.buf, frame, geom };
+  }
+
+  /* ---- 쓰기: GLB ---- */
+  const enc = new TextEncoder();
+  function concat(parts){ const n = parts.reduce((s,p)=>s+p.length,0); const o = new Uint8Array(n); let k = 0; for(const p of parts){ o.set(p,k); k += p.length; } return o; }
+  function meta(R, S){ const o = R.origin; return { 원점_경도: +o.lon.toFixed(8), 원점_위도: +o.lat.toFixed(8), 원점_타원체고_m: +o.h.toFixed(3), 기준지면_타원체고_m: +o.ground.toFixed(3), 기준지면_추정: '외곽선 밖 1~4 m 메시 높이 20% 분위 ('+o.gSrc+')', 지면제거: o.cutOn, 원점_EPSG: o.tm, 원점_TM_X: +o.tmXY[0].toFixed(3), 원점_TM_Y: +o.tmXY[1].toFixed(3),
+    좌표: 'ENU 미터 (glTF Y-up: x=동, y=위, z=-북)', 건물명: (S.B && S.B.names.join(' / ')) || '', 해상도: LOD[R.lod].name, 외곽선_여유_m: R.buf, 타일수: R.nTiles, 삼각형수: R.nTri, '3D모델': R.project, 원본: 'SISTECH 3D-View 드론 3D Tiles', 외곽선: '브이월드 건축물정보 LT_C_BLDGINFO', 만든곳: 'SISTECH EARTH addon '+VER, 만든시각: new Date().toISOString() }; }
+  function writeGlb(R, S){
+    const bins = []; let off = 0; const views = [], acc = [], prims = [], images = [], textures = [], materials = [];
+    const add = (u8, target) => { const pad = (4 - (off % 4)) % 4; if(pad){ bins.push(new Uint8Array(pad)); off += pad; } bins.push(u8); const v = { buffer:0, byteOffset:off, byteLength:u8.length }; if(target) v.target = target; views.push(v); off += u8.length; return views.length-1; };
+    let capMat = -1;
+    for(const p of R.parts){
+      const n = p.pos.length/3, P = new Float32Array(n*3); const mn = [Infinity,Infinity,Infinity], mx = [-Infinity,-Infinity,-Infinity];
+      for(let i=0;i<n;i++){ const x = p.pos[i*3], y = p.pos[i*3+2], z = -p.pos[i*3+1]; P[i*3] = x; P[i*3+1] = y; P[i*3+2] = z; if(x<mn[0])mn[0]=x; if(y<mn[1])mn[1]=y; if(z<mn[2])mn[2]=z; if(x>mx[0])mx[0]=x; if(y>mx[1])mx[1]=y; if(z>mx[2])mx[2]=z; }
+      acc.push({ bufferView:add(new Uint8Array(P.buffer), 34962), componentType:5126, count:n, type:'VEC3', min:mn, max:mx }); const aP = acc.length-1;
+      acc.push({ bufferView:add(new Uint8Array(new Float32Array(p.uv).buffer), 34962), componentType:5126, count:n, type:'VEC2' }); const aU = acc.length-1;
+      acc.push({ bufferView:add(new Uint8Array(p.idx.buffer.slice(p.idx.byteOffset, p.idx.byteOffset+p.idx.byteLength)), 34963), componentType:5125, count:p.idx.length, type:'SCALAR' }); const aI = acc.length-1;
+      let mat;
+      if(p.jpg){ images.push({ bufferView:add(p.jpg), mimeType:'image/jpeg' }); textures.push({ source:images.length-1, sampler:0 }); materials.push({ name:'m'+String(materials.length).padStart(3,'0'), pbrMetallicRoughness:{ baseColorTexture:{ index:textures.length-1 }, metallicFactor:0, roughnessFactor:1 }, extensions:{ KHR_materials_unlit:{} }, doubleSided:true }); mat = materials.length-1; }
+      else { if(capMat < 0){ materials.push({ name: p.cap ? '바닥면' : '무늬없음', pbrMetallicRoughness:{ baseColorFactor:[0.62,0.64,0.66,1], metallicFactor:0, roughnessFactor:1 }, extensions:{ KHR_materials_unlit:{} }, doubleSided:true }); capMat = materials.length-1; } mat = capMat; }
+      prims.push({ attributes: p.cap ? { POSITION:aP } : { POSITION:aP, TEXCOORD_0:aU }, indices:aI, material:mat, mode:4 });
+    }
+    const pad = (4 - (off % 4)) % 4; if(pad){ bins.push(new Uint8Array(pad)); off += pad; }
+    const name = (S.B && S.B.names[0]) || '건물';
+    const gl = { asset:{ version:'2.0', generator:'SISTECH EARTH addon '+VER+' (3D 모델 잘라 내보내기)', extras: meta(R, S) }, extensionsUsed:['KHR_materials_unlit'], scene:0, scenes:[{ nodes:[0] }], nodes:[{ name, mesh:0 }], meshes:[{ name, primitives:prims }], materials, accessors:acc, bufferViews:views, buffers:[{ byteLength:off }], samplers:[{ magFilter:9729, minFilter:9729, wrapS:33071, wrapT:33071 }] };
+    if(images.length){ gl.images = images; gl.textures = textures; }
+    let js = enc.encode(JSON.stringify(gl)); const jp = (4 - js.length % 4) % 4; if(jp) js = concat([js, enc.encode(' '.repeat(jp))]);
+    const bin = concat(bins); const total = 12 + 8 + js.length + 8 + bin.length;
+    const h = new DataView(new ArrayBuffer(20)); h.setUint32(0,0x46546C67,true); h.setUint32(4,2,true); h.setUint32(8,total,true); h.setUint32(12,js.length,true); h.setUint32(16,0x4E4F534A,true);
+    const h2 = new DataView(new ArrayBuffer(8)); h2.setUint32(0,bin.length,true); h2.setUint32(4,0x004E4942,true);
+    return concat([new Uint8Array(h.buffer), js, new Uint8Array(h2.buffer), bin]);
+  }
+
+  /* ---- 쓰기: OBJ + MTL + JPG + 기준점.txt + 외곽선.geojson → ZIP ---- */
+  const CRC_T = (()=>{ const t = new Uint32Array(256); for(let n=0;n<256;n++){ let c = n; for(let k=0;k<8;k++) c = c&1 ? 0xEDB88320^(c>>>1) : c>>>1; t[n] = c>>>0; } return t; })();
+  const crc32 = u8 => { let c = 0xFFFFFFFF; for(let i=0;i<u8.length;i++) c = CRC_T[(c^u8[i])&255]^(c>>>8); return (c^0xFFFFFFFF)>>>0; };
+  async function deflate(u8){ const cs = new CompressionStream('deflate-raw'); const w = cs.writable.getWriter(); w.write(u8); w.close(); return new Uint8Array(await new Response(cs.readable).arrayBuffer()); }
+  async function zip(files){
+    const locals = [], cents = []; let off = 0; const d = new Date(); const dt = ((d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1)) & 0xFFFF, dd = (((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate()) & 0xFFFF;
+    for(const f of files){ const nm = enc.encode(f.name), crc = crc32(f.data), sz = f.data.length; let body = f.data, meth = 0; if(!f.stored){ try{ const c = await deflate(f.data); if(c.length < sz){ body = c; meth = 8; } }catch(e){} } const csz = body.length;
+      const h = new DataView(new ArrayBuffer(30)); h.setUint32(0,0x04034b50,true); h.setUint16(4,20,true); h.setUint16(6,0x0800,true); h.setUint16(8,meth,true); h.setUint16(10,dt,true); h.setUint16(12,dd,true); h.setUint32(14,crc,true); h.setUint32(18,csz,true); h.setUint32(22,sz,true); h.setUint16(26,nm.length,true);
+      locals.push(new Uint8Array(h.buffer), nm, body);
+      const c = new DataView(new ArrayBuffer(46)); c.setUint32(0,0x02014b50,true); c.setUint16(4,20,true); c.setUint16(6,20,true); c.setUint16(8,0x0800,true); c.setUint16(10,meth,true); c.setUint16(12,dt,true); c.setUint16(14,dd,true); c.setUint32(16,crc,true); c.setUint32(20,csz,true); c.setUint32(24,sz,true); c.setUint16(28,nm.length,true); c.setUint32(42,off,true);
+      cents.push(new Uint8Array(c.buffer), nm); off += 30 + nm.length + csz; }
+    const cd = concat(cents); const e = new DataView(new ArrayBuffer(22)); e.setUint32(0,0x06054b50,true); e.setUint16(8,files.length,true); e.setUint16(10,files.length,true); e.setUint32(12,cd.length,true); e.setUint32(16,off,true);
+    return concat([...locals, cd, new Uint8Array(e.buffer)]);
+  }
+  async function writeObjZip(R, S, base){
+    const o = R.origin, [a, b, c, d, e0, f0] = o.tE; const files = []; const mtl = ['# SISTECH EARTH '+VER+' · 재질', ''];
+    const chunks = ['# SISTECH EARTH addon '+VER+' · 3D 모델 잘라 내보내기\n# 좌표: EPSG:'+o.tm+' ('+CRS[o.tm].name+') 원점 기준 상대값 · X=동(m) Y=북(m) Z=위(m, 0=절단 높이)\n# 원점 TM X='+o.tmXY[0].toFixed(3)+' Y='+o.tmXY[1].toFixed(3)+' · 타원체고 '+o.h.toFixed(3)+' m · 기준점.txt 참고\nmtllib '+base+'.mtl\n'];
+    let vb = 1; let capDone = false; const fx = v => (Math.round(v*1e4)/1e4).toString();
+    for(let pi=0; pi<R.parts.length; pi++){ const p = R.parts[pi]; const n = p.pos.length/3; let s = '';
+      const mname = p.cap ? 'floor' : 'm'+String(pi).padStart(3,'0');
+      if(p.jpg){ const tn = 'tex_'+String(pi).padStart(3,'0')+'.jpg'; files.push({ name:tn, data:p.jpg, stored:true }); mtl.push('newmtl '+mname, 'Ka 1 1 1', 'Kd 1 1 1', 'Ks 0 0 0', 'd 1', 'illum 1', 'map_Kd '+tn, ''); }
+      else if(!capDone){ mtl.push('newmtl '+mname, 'Ka 0.62 0.64 0.66', 'Kd 0.62 0.64 0.66', 'Ks 0 0 0', 'd 1', 'illum 1', ''); capDone = true; }
+      s += 'g '+(p.cap ? 'floor' : 'part_'+String(pi).padStart(3,'0'))+'\nusemtl '+mname+'\n';
+      const lines = [];
+      for(let i=0;i<n;i++){ const x = p.pos[i*3], y = p.pos[i*3+1]; lines.push('v '+fx(a*x + c*y + e0)+' '+fx(b*x + d*y + f0)+' '+fx(p.pos[i*3+2])); }
+      if(!p.cap) for(let i=0;i<n;i++) lines.push('vt '+(Math.round(p.uv[i*2]*1e6)/1e6)+' '+(Math.round((1-p.uv[i*2+1])*1e6)/1e6));
+      for(let i=0;i<p.idx.length;i+=3){ const A = p.idx[i]+vb, B = p.idx[i+1]+vb, Cc = p.idx[i+2]+vb; lines.push(p.cap ? 'f '+A+' '+B+' '+Cc : 'f '+A+'/'+A+' '+B+'/'+B+' '+Cc+'/'+Cc); }
+      if(p.cap){ /* vt 없는 면: vt 번호가 어긋나지 않도록 cap은 맨 끝에만 둠 */ }
+      chunks.push(s + lines.join('\n') + '\n'); vb += n;
+      if(pi % 20 === 0) await new Promise(r=>setTimeout(r,0)); }
+    const M = meta(R, S);
+    const txt = ['SISTECH EARTH · 건물 3D 모델 잘라 내보내기 (OBJ)', '',
+      '건물: '+M.건물명, '3D 모델: '+M['3D모델']+' (SISTECH 3D-View 드론 3D Tiles)', '외곽선: 브이월드 건축물정보 (건축물대장 기반) · 바깥 여유 '+R.buf+' m', '해상도: '+M.해상도+' · 타일 '+R.nTiles+'개 · 삼각형 '+R.nTri.toLocaleString()+'개', '',
+      '[좌표계]', 'EPSG:'+o.tm+' '+CRS[o.tm].name+' (GRS80 TM), 단위 미터', 'OBJ 좌표 = 원점 기준 상대값 → 절대 좌표 = 원점 + 파일 좌표', '  원점 X(동) = '+o.tmXY[0].toFixed(3), '  원점 Y(북) = '+o.tmXY[1].toFixed(3),
+      '  Z = 0 이 절단 높이 (타원체고 '+o.h.toFixed(3)+' m'+(o.cutOn ? ' = 기준 지면 '+o.ground.toFixed(3)+' m + '+(o.h-o.ground).toFixed(2)+' m' : ' = 기준 지면')+')',
+      '  참고: 타원체고는 표고(해발)보다 약 20~30 m 큽니다 (한국 지오이드고). 해발 표고가 필요하면 국토지리정보원 지오이드 모델로 보정하세요.',
+      '원점 경위도(WGS84): '+o.lon.toFixed(8)+', '+o.lat.toFixed(8), '', '[파일]', base+'.obj  형상(그룹 part_### = 원본 타일 1개, floor = 바닥면)', base+'.mtl  재질', 'tex_###.jpg  텍스처(원본 타일 텍스처 중 남은 부분만 잘라 저장)', '외곽선.geojson  절단에 쓴 건물 외곽선(WGS84)', '',
+      '[프로그램별 열기]', '- Blender: 파일 › 가져오기 › Wavefront(.obj) · 앞쪽 축 Y, 위쪽 축 Z 로 지정', '- Rhino / 3ds Max / SketchUp: OBJ 가져오기 · 단위 미터 · Z 위', '- MeshLab / CloudCompare: 바로 열림 (CloudCompare는 원점 이동 값을 위 원점으로 입력하면 절대 좌표)', '',
+      '[한계]', '- 드론 메시는 건물·나무·지면이 한 덩어리라 외곽선 안의 나무·차량도 함께 잘립니다.', '- 외곽선 밖으로 나온 처마·발코니는 여유 폭만큼만 남습니다.', '- 대장 외곽선과 실제 건물이 다르면(증축·신축) 결과도 어긋납니다.', '- 참고용 자료입니다 (측량 성과 아님).', '', '만든 시각: '+M.만든시각].join('\r\n');
+    files.unshift({ name:base+'.obj', data:enc.encode(chunks.join('')) }, { name:base+'.mtl', data:enc.encode(mtl.join('\n')) }, { name:'기준점.txt', data:enc.encode('\ufeff'+txt) },
+      { name:'외곽선.geojson', data:enc.encode(JSON.stringify({ type:'FeatureCollection', features:[{ type:'Feature', properties:{ 건물명:M.건물명, 출처:'브이월드 LT_C_BLDGINFO' }, geometry:R.geom }] })) });
+    return zip(files);
+  }
+
+  /* ---- 미리보기 ---- */
+  function prevOff(){ if(!X.prev) return; try{ X.prev.rm(); }catch(e){} try{ scene.primitives.remove(X.prev.model); }catch(e){} for(const p of X.prev.hidden){ try{ p.ts.show = p.was; }catch(e){} } for(const e of X.prev.ents){ try{ e.show = true; }catch(err){} } try{ URL.revokeObjectURL(X.prev.url); }catch(e){} X.prev = null; const b = document.querySelector('[data-bx="prev"]'); if(b) b.textContent = '결과 미리보기'; }
+  async function prevOn(R, glb){
+    prevOff(); const url = URL.createObjectURL(new Blob([glb], { type:'model/gltf-binary' }));
+    const model = await C.Model.fromGltfAsync({ url, modelMatrix: R.frame.enu, upAxis: C.Axis.Y, forwardAxis: C.Axis.Z });
+    scene.primitives.add(model); const hidden = (typeof PROJECTS!=='undefined' ? PROJECTS : []).filter(p=>p.ts).map(p=>({ ts:p.ts, was:p.ts.show }));
+    const ents = viewer.entities.values.filter(e => e._bd49 && e.show); for(const e of ents) e.show = false;
+    const rm = scene.preRender.addEventListener(() => { for(const h of hidden) if(h.ts.show) h.ts.show = false; }); // 다른 코드가 타일을 다시 켜도 미리보기 중에는 숨김 유지
+    X.prev = { model, url, hidden, ents, rm };
+  }
+
+  /* ---- 카드 UI ---- */
+  function fileBase(S){ const nm = ((S.B && S.B.names[0]) || 'building').replace(/[\\/:*?"<>|\s]+/g,'_'); const d = new Date(); return '건물_'+nm+'_3D_'+d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0'); }
+  function dl(name, data, type){ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([data], { type })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 4000); }
+  const sel = (k, opts, v) => `<select data-bxo="${k}" style="flex:1;min-width:0;background:var(--panel-2,#0d2238);color:inherit;border:1px solid rgba(255,255,255,.18);border-radius:6px;padding:4px 6px;font:inherit;font-size:12px">${opts.map(([val,lab])=>`<option value="${val}"${String(val)===String(v)?' selected':''}>${lab}</option>`).join('')}</select>`;
+  const OPT = { lod:'max', buf:'0.8', ground:'0.3', cap:true };
+  function inject(){
+    const body = document.getElementById('cardBody'); if(!body || !document.getElementById('bd49h') || document.getElementById('bx52')) return;
+    const S = B49.BD && B49.BD.sel; if(!S || !S.B || !S.B.geom) return;
+    const secs = body.querySelectorAll('.sec'); const anchor = secs[secs.length-1];
+    const d = document.createElement('div'); d.className = 'sec'; d.id = 'bx52';
+    d.innerHTML = `<h3 style="margin:0 0 6px;font-size:13px;color:var(--lime-bright)">3D 모델 잘라 내보내기 <span style="font-weight:400;color:var(--text-dim);font-size:11px">건물 외곽선(바닥면) 기준</span></h3>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:5px 8px;align-items:center;font-size:12px;color:var(--text-dim)">
+        <span>해상도</span><div style="display:flex">${sel('lod', Object.entries(LOD).map(([k,v])=>[k,v.name]), OPT.lod)}</div>
+        <span>외곽선 여유</span><div style="display:flex">${sel('buf', [['0','0 m (외곽선 그대로)'],['0.5','0.5 m'],['0.8','0.8 m (처마 포함)'],['1.5','1.5 m'],['3','3 m']], OPT.buf)}</div>
+        <span>지면 제거</span><div style="display:flex">${sel('ground', [['off','안 함 (지면 포함)'],['0','기준 지면 높이에서 자름'],['0.3','기준 지면 + 0.3 m'],['1','기준 지면 + 1 m']], OPT.ground)}</div>
+        <span>바닥면</span><label style="display:flex;gap:6px;align-items:center;color:inherit"><input type="checkbox" data-bxo="cap"${OPT.cap?' checked':''}> 절단면에 바닥판 닫기</label>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px"><button class="cta" data-bx="glb" style="flex:1">GLB 저장</button><button class="cta ghost" data-bx="obj" style="flex:1">OBJ (캐드용 ZIP)</button></div>
+      <div style="display:flex;gap:6px;margin-top:6px"><button class="cta ghost" data-bx="prev" style="flex:1" disabled>결과 미리보기</button><button class="cta ghost" data-bx="stop" style="flex:1;display:none">중지</button></div>
+      <div class="meta" id="bx52s" style="margin-top:6px">GLB = 파일 1개(웹·Blender·게임엔진, 위치정보 포함) · OBJ = 캐드·편집 프로그램용(TM 좌표, ZIP)</div>`;
+    if(anchor) body.insertBefore(d, anchor); else body.appendChild(d);
+    d.querySelectorAll('[data-bxo]').forEach(el => el.onchange = () => { const k = el.dataset.bxo; OPT[k] = el.type==='checkbox' ? el.checked : el.value; });
+    d.querySelectorAll('[data-bx]').forEach(el => el.onclick = () => run(el.dataset.bx, S));
+    if(X.last && X.last.S === S) d.querySelector('[data-bx="prev"]').disabled = false;
+  }
+  const st = (h) => { const el = document.getElementById('bx52s'); if(el) el.innerHTML = h; };
+  async function run(kind, S){
+    if(kind === 'stop'){ X.abort = true; return; }
+    if(kind === 'prev'){ if(X.prev){ prevOff(); return; } if(X.last && X.last.S === S){ try{ await prevOn(X.last.R, X.last.glb || (X.last.glb = writeGlb(X.last.R, S))); const b = document.querySelector('[data-bx="prev"]'); if(b) b.textContent = '미리보기 끄기 (원본 타일 다시 보기)'; toast('잘린 결과만 표시 중 · 원본 3D 타일은 잠시 숨김', 2500); }catch(e){ toast('미리보기 실패: '+e.message, 3000); } } return; }
+    if(X.busy){ toast('이미 내보내는 중입니다', 1500); return; }
+    X.busy = true; X.abort = false; prevOff();
+    const btns = [...document.querySelectorAll('#bx52 [data-bx]')]; btns.forEach(b => { if(b.dataset.bx==='stop'){ b.style.display=''; b.disabled=false; } else b.disabled = true; });
+    try{
+      let R = X.last && X.last.S === S && X.last.key === JSON.stringify(OPT) ? X.last.R : null;
+      if(!R){ X.last = null; R = await cut(S, OPT, st); X.last = { S, R, key:JSON.stringify(OPT), glb:null }; }
+      const base = fileBase(S);
+      if(kind === 'glb'){ st('GLB 만드는 중…'); const g = X.last.glb || (X.last.glb = writeGlb(R, S)); dl(base+'.glb', g, 'model/gltf-binary');
+        st(`<b>GLB 저장</b> ${esc(base)}.glb · ${(g.length/1048576).toFixed(1)} MB · 삼각형 ${R.nTri.toLocaleString()} · 타일 ${R.nTiles}개 (${(R.ms/1000).toFixed(1)}초)<br>원점 ${R.origin.lat.toFixed(6)}, ${R.origin.lon.toFixed(6)} · 타원체고 ${R.origin.h.toFixed(2)} m · 크기 ${(R.bbox.mx[0]-R.bbox.mn[0]).toFixed(1)}×${(R.bbox.mx[1]-R.bbox.mn[1]).toFixed(1)}×${(R.bbox.mx[2]-R.bbox.mn[2]).toFixed(1)} m`);
+        toast('GLB 저장: '+base+'.glb', 2500); }
+      else { st('OBJ ZIP 만드는 중… (압축)'); const z = await writeObjZip(R, S, base); dl(base+'_OBJ.zip', z, 'application/zip');
+        st(`<b>OBJ ZIP 저장</b> ${esc(base)}_OBJ.zip · ${(z.length/1048576).toFixed(1)} MB · 삼각형 ${R.nTri.toLocaleString()} · 텍스처 ${R.parts.filter(p=>p.jpg).length}장<br>EPSG:${R.origin.tm} 원점 X ${R.origin.tmXY[0].toFixed(2)} · Y ${R.origin.tmXY[1].toFixed(2)} (기준점.txt)`);
+        toast('OBJ ZIP 저장: '+base+'_OBJ.zip', 2500); }
+      window.__BX52.lastResult = { nTri:R.nTri, nTiles:R.nTiles, parts:R.parts.length, ms:R.ms, origin:R.origin, bbox:R.bbox, MB:R.nBytes/1048576, jpgMB:R.jpgBytes/1048576 };
+    }catch(e){ console.error(e); st('<span class="warn">'+esc(e.message)+'</span>'); if(e.message !== '취소함' && e.message !== '중지함') toast('3D 내보내기 실패: '+e.message, 3500); }
+    finally{ X.busy = false; btns.forEach(b => { if(b.dataset.bx==='stop') b.style.display='none'; else b.disabled = false; }); const pv = document.querySelector('#bx52 [data-bx="prev"]'); if(pv) pv.disabled = !(X.last && X.last.S === S); }
+  }
+  try{ new MutationObserver(() => { inject(); if(X.prev && !document.getElementById('bx52')) prevOff(); }).observe(document.getElementById('cardBody'), { childList:true }); }catch(e){}
+  const cc = document.getElementById('cardClose'); if(cc) cc.addEventListener('click', () => prevOff());
+  const _t50 = toggleLayer; toggleLayer = async function(id, force){ const r = await _t50.apply(this, arguments); if(!STATE.on.has('bldg')) prevOff(); return r; };
+  inject();
+  window.__BX52 = { X, cut, writeGlb, writeObjZip, libs, prevOn, prevOff, OPT, version:VER };
+})();
+
+</script>
 
 </body>
 </html>
