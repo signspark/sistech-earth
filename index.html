@@ -2990,8 +2990,9 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     <h4>단면 구역 (사각형 · 한 변 최대 500 m)<label class="chk"><input type="checkbox" id="xsRegionOn" checked> 구역 안만</label></h4>
     <div class="row"><label>가로</label><input type="number" id="xsW" min="5" max="500" step="5"><label>m</label><label>세로</label><input type="number" id="xsD" min="5" max="500" step="5"><label>m</label><span id="xsAreaTxt" style="font-size:11.5px;color:var(--text-dim);white-space:nowrap;margin-left:auto"></span></div>
     <div class="row"><label style="color:var(--text);font-weight:600">회전하기</label><input type="range" id="xsARange" min="-180" max="180" step="1" style="flex:1" aria-label="구역 회전하기 (왼쪽·오른쪽으로 끌기)" title="왼쪽·오른쪽으로 끌어 구역을 회전"><input type="number" id="xsA" min="-180" max="180" step="5" style="width:58px" aria-label="회전 각도"><label>°</label><button id="xsA0" title="회전 0°(정북)로">0°</button></div>
+    <div class="row"><label style="display:flex;align-items:center;gap:6px;color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer"><input type="checkbox" id="xsBld" style="accent-color:var(--lime)"> 건물만 표시 (나무·수목·지면 제외)</label><span id="xsBldInfo" style="font-size:11px;color:var(--text-dim);margin-left:auto;text-align:right"></span></div>
     <div class="btns"><button id="xsDraw">▭ 구역 새로 그리기 (지도에서 끌기)</button><button id="xsCenter">구역 중심 = 기준점</button></div>
-    <div class="hint">연두색 사각형이 단면 구역 (처음 200 × 200 m, 화면 중심) · <b>모서리 점을 끌면</b> 크기 조정 (최대 500 m) · <b>테두리 선을 끌면</b> 구역 이동 · <b>회전하기</b> 슬라이더를 왼쪽·오른쪽으로 끌면 회전 · 구역 밖 건물은 자르지 않음</div>
+    <div class="hint">연두색 사각형이 단면 구역 (처음 200 × 200 m, 화면 중심) · <b>모서리 점을 끌면</b> 크기 조정 (최대 500 m) · <b>테두리 선을 끌면</b> 구역 이동 · <b>회전하기</b> 슬라이더를 왼쪽·오른쪽으로 끌면 회전 · <b>건물만 표시</b>: 구역 안 나무·수목·지면을 숨기고 건물만 (건물 외곽선: 인천시 도로명주소 건물 / 그 밖 OpenStreetMap · 자료에 없는 신축 건물은 빠질 수 있음) · 구역 밖 건물은 자르지 않음</div>
   </div>
   <div class="btns"><button id="xsTop">⬇ 위에서 보기 (평면도)</button><button id="xsBack">원래 시점</button><button id="xsPick">기준 지면 다시 찍기</button></div>
   <div class="hint"><b>Ctrl + 마우스 휠</b>: 단면을 0.5 m씩 스크롤 · <b>↑ ↓</b>: 한 층씩 · <b>Shift+↑↓</b>: 0.5 m씩<br>절단선은 연두색 테두리 · 단면 안쪽 벽면(메쉬 뒷면)도 표시 · 층고 기본 2.9 m (아파트) · 단면은 각 층 바닥 +1.5 m</div>
@@ -3022,13 +3023,77 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
       ts.clippingPlanes = new C.ClippingPlaneCollection({ planes, modelMatrix: mm, unionClippingRegions: false, edgeColor: C.Color.fromCssColorString('#BFE33A'), edgeWidth: 2.5, enabled: true }); return; }
     cp.enabled = true; cp.modelMatrix = mm; for(let i=0;i<planes.length;i++){ const p = cp.get(i); p.normal = planes[i].normal; p.distance = planes[i].distance; }
   }
-  function applyAll(){ for(const p of PROJECTS) if(p.ts) applyTo(p.ts); drawRegion(); }
+  function applyAll(){ for(const p of PROJECTS) if(p.ts) applyTo(p.ts); drawRegion(); scheduleBld(); }
+
+  /* ---- 건물만 표시 (2026-10-09): 구역 안에서 건물 외곽선 밖(나무·수목·지면·도로)을 잘라냄 ----
+     건물 외곽선: 인천 = 인천시 지도포털(I-MAP) 도로명주소 건물(WFS, 공개) · 그 밖 = OpenStreetMap(Overpass)
+     방법: (구역 − 건물) 영역을 가로 띠(사다리꼴)로 분해 → 같은 경계선끼리 세로로 병합 → ClippingPolygonCollection(구역 크기 안에서만 계산해 0.1 m급 정밀도)
+     바닥은 어두운 면(지형에만 덧칠)으로 덮어 건물만 보이게 함 */
+  XS.bld = false; XS.bldKey = null; XS.bldCache = null; XS._bldT = 0; XS._bldSeq = 0;
+  const INC_BB = [124.5, 36.9, 126.95, 37.85];
+  function bldInfo(t){ const el = q('#xsBldInfo'); if(el) el.textContent = t||''; }
+  async function fetchBld(bb){
+    const rings = []; let src = '';
+    const inInc = bb[0]>INC_BB[0] && bb[2]<INC_BB[2] && bb[1]>INC_BB[1] && bb[3]<INC_BB[3];
+    if(inInc){ try{ const j = await (await fetch('https://imap.incheon.go.kr/MapPrimeServer/map/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=incheon:por_tl_spbd_buld&SRSNAME=EPSG:4326&OUTPUTFORMAT=application/json&COUNT=5000&BBOX='+bb.map(v=>v.toFixed(6)).join(',')+',EPSG:4326')).json();
+      for(const f of (j.features||[])){ const g = f.geometry; if(!g) continue; const rs = g.type==='Polygon' ? [g.coordinates[0]] : g.type==='MultiPolygon' ? g.coordinates.map(p=>p[0]) : []; for(const r of rs) rings.push(r); } src = '인천시 도로명주소 건물'; }catch(e){} }
+    if(!rings.length){ const qq = '[out:json][timeout:25];(way["building"]('+bb[1]+','+bb[0]+','+bb[3]+','+bb[2]+');relation["building"]('+bb[1]+','+bb[0]+','+bb[3]+','+bb[2]+'););out geom;';
+      for(const ep of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){ try{ const r = await fetch(ep+'?data='+encodeURIComponent(qq)); if(!r.ok) continue; const j = await r.json();
+        for(const el of (j.elements||[])){ if(el.type==='way' && el.geometry) rings.push(el.geometry.map(p=>[p.lon,p.lat])); else if(el.type==='relation' && el.members) for(const m of el.members) if(m.role==='outer' && m.geometry) rings.push(m.geometry.map(p=>[p.lon,p.lat])); }
+        src = 'OpenStreetMap 건물'; break; }catch(e){} } }
+    return { rings, src };
+  }
+  function clearBld(ts){ if(ts && ts.clippingPolygons){ try{ ts.clippingPolygons = undefined; }catch(e){} } }
+  function scheduleBld(){
+    const tsl = PROJECTS.filter(p=>p.ts).map(p=>p.ts);
+    if(!XS.on || !XS.bld || !XS.region || XS.lon==null){ if(XS.bldKey!==null || tsl.some(t=>t.clippingPolygons)){ for(const ts of tsl) clearBld(ts); XS.bldKey = null; bldInfo(''); } return; }
+    const key = [XS.lon.toFixed(7), XS.lat.toFixed(7), Math.round(XS.w*10), Math.round(XS.d*10), Math.round(XS.ang*10), tsl.length].join('|');
+    if(key === XS.bldKey) return;
+    if(XS.drag || XS.move){ for(const ts of tsl) if(ts.clippingPolygons) ts.clippingPolygons.enabled = false; }
+    clearTimeout(XS._bldT); XS._bldT = setTimeout(()=>rebuildBld(key), (XS.drag||XS.move) ? 350 : 120);
+  }
+  async function rebuildBld(key){
+    const seq = ++XS._bldSeq; const tsl = PROJECTS.filter(p=>p.ts).map(p=>p.ts);
+    if(!tsl.length){ bldInfo('3D 모델 없음'); return; }
+    const cs = corners(); const lons = cs.map(c=>c[0]), lats = cs.map(c=>c[1]);
+    const bb = [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)];
+    let cc = XS.bldCache;
+    if(!cc || bb[0]<cc.bb[0] || bb[1]<cc.bb[1] || bb[2]>cc.bb[2] || bb[3]>cc.bb[3]){ const m = 0.0015; const big = [bb[0]-m, bb[1]-m, bb[2]+m, bb[3]+m]; bldInfo('건물 외곽선 불러오는 중…'); const r = await fetchBld(big); if(seq !== XS._bldSeq) return; cc = XS.bldCache = { bb: big, rings: r.rings, src: r.src }; }
+    const hw = XS.w/2, hd = XS.d/2, BUF = 0.8;
+    const rings = []; let nIn = 0;
+    for(const r0 of cc.rings){ let r = r0.slice(); if(r.length>1 && Math.abs(r[0][0]-r[r.length-1][0])<1e-9 && Math.abs(r[0][1]-r[r.length-1][1])<1e-9) r.pop(); if(r.length<3) continue;
+      let pts = r.map(([lo,la])=>toUV(lo,la)); if(!pts.some(p=>Math.abs(p[0])<hw+5 && Math.abs(p[1])<hd+5)) continue;
+      let A = 0; for(let i=0;i<pts.length;i++){ const p = pts[i], o = pts[(i+1)%pts.length]; A += p[0]*o[1]-o[0]*p[1]; } if(A<0) pts.reverse();
+      const cx = pts.reduce((s,p)=>s+p[0],0)/pts.length, cy = pts.reduce((s,p)=>s+p[1],0)/pts.length; pts = pts.map(([x,y])=>{ const dx=x-cx, dy=y-cy, L=Math.hypot(dx,dy)||1; return [x+dx/L*BUF, y+dy/L*BUF]; });
+      rings.push(pts); if(pts.some(p=>Math.abs(p[0])<hw && Math.abs(p[1])<hd)) nIn++; }
+    const edges = []; let eid = 0; for(const pts of rings) for(let i=0;i<pts.length;i++){ const a = pts[i], b = pts[(i+1)%pts.length]; if(Math.abs(a[1]-b[1])<1e-9) continue; edges.push({ id:'e'+(eid++), x0:a[0], y0:a[1], x1:b[0], y1:b[1], dir:Math.sign(b[1]-a[1]) }); }
+    const ys = [-hd, hd]; for(const pts of rings) for(const p of pts) if(p[1]>-hd && p[1]<hd) ys.push(p[1]);
+    ys.sort((a,b)=>a-b); const yu = []; for(const y of ys) if(!yu.length || y-yu[yu.length-1]>0.01) yu.push(y);
+    const LB = {id:'L'}, RB = {id:'R'};
+    const X = (e,y)=> e.id==='L' ? -hw : e.id==='R' ? hw : e.x0 + (e.x1-e.x0)*(y-e.y0)/(e.y1-e.y0);
+    const cl = v => Math.max(-hw, Math.min(hw, v)); const out = [];
+    const close = o => { const pts = [[cl(X(o.l,o.y0)),o.y0],[cl(X(o.r,o.y0)),o.y0],[cl(X(o.r,o.y1)),o.y1],[cl(X(o.l,o.y1)),o.y1]]; const d = []; for(const p of pts){ const z = d[d.length-1]; if(!z || Math.hypot(z[0]-p[0], z[1]-p[1])>0.02) d.push(p); } if(d.length>3 && Math.hypot(d[0][0]-d[d.length-1][0], d[0][1]-d[d.length-1][1])<0.02) d.pop(); if(d.length>=3) out.push(d); };
+    let open = new Map();
+    for(let s=0; s<yu.length-1; s++){ const ya = yu[s], yb = yu[s+1], ym = (ya+yb)/2;
+      const cr = edges.filter(e=>Math.min(e.y0,e.y1)<ym && Math.max(e.y0,e.y1)>ym).sort((a,b)=>X(a,ym)-X(b,ym));
+      const ivs = []; let w = 0, L = LB; for(const c of cr){ if(w===0 && X(c,ym)>-hw) ivs.push([L,c]); w += c.dir; if(w===0) L = c; } if(w===0) ivs.push([L,RB]);
+      const nopen = new Map();
+      for(const [l,r] of ivs){ if(Math.min(X(r,ym),hw) - Math.max(X(l,ym),-hw) < 0.05) continue; const k = l.id+'|'+r.id; const o = open.get(k); if(o && Math.abs(o.y1-ya)<1e-6){ o.y1 = yb; nopen.set(k,o); open.delete(k); } else nopen.set(k, { l, r, y0:ya, y1:yb }); }
+      for(const o of open.values()) close(o); open = nopen; }
+    for(const o of open.values()) close(o);
+    const world = out.map(pts=>pts.map(([u,v])=>{ const ll = toLL(u,v); return C.Cartesian3.fromDegrees(ll[0], ll[1]); }));
+    for(const ts of tsl){ try{ ts.clippingPolygons = new C.ClippingPolygonCollection({ polygons: world.map(p=>new C.ClippingPolygon({ positions: p })), inverse: false }); }catch(e){ console.warn('xsBld', e); } }
+    XS.bldKey = key;
+    bldInfo(cc.rings.length ? ('건물 '+nIn+'동 · '+cc.src) : '건물 외곽선 없음 (이 구역)');
+    if(STATE.on.has('xsec')) updateSrc();
+  }
 
   /* ---- 구역 표시 (절단 높이의 반투명 면 + 바닥 점선 + 모서리 핸들) ---- */
   function drawRegion(){ for(const e of XS.ents) viewer.entities.remove(e); XS.ents = []; XS.handles = []; if(!XS.on || !XS.region || XS.lon==null) return;
     const cs = corners(); const hAbs = XS.base + XS.h; const top = cs.map(c=>C.Cartesian3.fromDegrees(c[0], c[1], hAbs)); const col = C.Color.fromCssColorString('#BFE33A');
     XS.ents.push(viewer.entities.add({ polygon:{ hierarchy: new C.PolygonHierarchy(top), perPositionHeight: true, material: col.withAlpha(.10) } }));
     XS.ents.push(viewer.entities.add({ polyline:{ positions: top.concat([top[0]]), width: 2.5, material: col.withAlpha(.9), arcType: C.ArcType.NONE } }));
+    if(XS.bld) XS.ents.push(viewer.entities.add({ polygon:{ hierarchy: new C.PolygonHierarchy(cs.map(c=>C.Cartesian3.fromDegrees(c[0], c[1]))), material: C.Color.fromCssColorString('#0B1B2E').withAlpha(.85), classificationType: C.ClassificationType.TERRAIN } }));
     XS.ents.push(viewer.entities.add({ polyline:{ positions: cs.concat([cs[0]]).map(c=>C.Cartesian3.fromDegrees(c[0], c[1])), width: 2, clampToGround: true, classificationType: C.ClassificationType.BOTH, material: new C.PolylineDashMaterialProperty({ color: col.withAlpha(.8), dashLength: 12 }) } }));
     for(let i=0;i<4;i++){ XS.ents.push(viewer.entities.add({ id:'xsEdge'+i, polyline:{ positions:[top[i], top[(i+1)%4]], width: 14, material: col.withAlpha(.02), arcType: C.ArcType.NONE } })); }
     for(let i=0;i<4;i++){ const e = viewer.entities.add({ id:'xsHandle'+i, position: top[i], point:{ pixelSize: 12, color: col, outlineColor: C.Color.fromCssColorString('#06224A'), outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY } }); XS.ents.push(e); XS.handles.push(e); }
@@ -3040,7 +3105,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   function setH(h, fromFloor){ h = Math.max(0, Math.min(+q('#xsRange').max, h)); XS.h = h; if(!fromFloor) XS.floor = floorOf(h); render(); applyAll(); }
   function setFloor(f){ f = Math.max(1, Math.min(80, Math.round(f))); XS.floor = f; const need = hOfFloor(f); if(need > +q('#xsRange').max) q('#xsRange').max = Math.ceil(need/10)*10 + 10; setH(need, true); }
   function render(){ q('#xsFloor').textContent = XS.floor+'층'; q('#xsH').textContent = '지상 '+fmt(XS.h)+' m · 절단면 (바닥 +1.5 m)'; q('#xsRange').value = XS.h; q('#xsFloorIn').value = XS.floor; q('#xsFH').value = XS.floorH; q('#xsBase').textContent = XS.lon!=null ? '표고 '+fmt(XS.base)+' m' : '-';
-    q('#xsW').value = Math.round(XS.w); q('#xsD').value = Math.round(XS.d); q('#xsA').value = Math.round(XS.ang); q('#xsARange').value = Math.round(XS.ang); q('#xsRegionOn').checked = XS.region;
+    q('#xsW').value = Math.round(XS.w); q('#xsD').value = Math.round(XS.d); q('#xsA').value = Math.round(XS.ang); q('#xsARange').value = Math.round(XS.ang); q('#xsRegionOn').checked = XS.region; q('#xsBld').checked = !!XS.bld;
     q('#xsAreaTxt').innerHTML = XS.region ? Math.round(XS.w)+' × '+Math.round(XS.d)+' m · '+(XS.w*XS.d/10000).toFixed(2)+' ha'+((XS.w>=MAXS||XS.d>=MAXS)?' <span class="warn">· 최대 500 m</span>':'') : '구역 없음 · 모델 전체 절단';
     q('#xsSub').textContent = XS.region ? '구역 안에서 절단 높이 위는 숨김' : '절단 높이 위는 숨김 · 아래만 표시';
     const mx = +q('#xsRange').max, sc = q('#xsScale'); let html=''; const step = mx>120? 20 : 10; for(let v=0; v<=mx; v+=step){ if(Math.abs(v-XS.h)/mx < 0.05) continue; html += '<i style="bottom:'+(v/mx*100)+'%">'+v+' m · '+floorOf(v)+'층</i>'; } html += '<i class="cur" style="bottom:'+(XS.h/mx*100)+'%">'+XS.floor+'층 · '+fmt(XS.h)+' m</i>'; sc.innerHTML = html;
@@ -3061,7 +3126,8 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   q('#xsA').onchange = e => { XS.ang = ((+e.target.value||0)+540)%360-180; render(); applyAll(); };
   q('#xsARange').oninput = e => { XS.ang = +e.target.value; render(); applyAll(); };
   q('#xsA0').onclick = () => { XS.ang = 0; render(); applyAll(); };
-  q('#xsRegionOn').onchange = e => { XS.region = e.target.checked; render(); applyAll(); };
+  q('#xsRegionOn').onchange = e => { XS.region = e.target.checked; if(!XS.region) XS.bld = false; render(); applyAll(); };
+  q('#xsBld').onchange = e => { if(e.target.checked && !(C.ClippingPolygonCollection && scene.context.webgl2)){ e.target.checked = false; toast('이 브라우저(그래픽)에서는 건물만 표시를 쓸 수 없습니다 (WebGL2 필요)', 3500); return; } XS.bld = e.target.checked; if(XS.bld) XS.region = true; XS.bldKey = null; render(); applyAll(); };
   q('#xsCenter').onclick = () => { render(); applyAll(); toast('구역 중심을 기준점에 맞췄습니다', 1800); };
   q('#xsDraw').onclick = () => { XS.drawing = 'wait'; q('#xsDraw').classList.add('on'); toast('지도에서 사각형의 한 모서리를 누른 채 반대 모서리까지 끌어 놓으세요 (최대 500 m)', 4500); };
   q('#xsClose').onclick = () => toggleLayer('xsec', false);
@@ -3101,9 +3167,9 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     const cv = scene.canvas; const pt = pickGround(new C.Cartesian2(cv.clientWidth/2, cv.clientHeight/2)); if(pt) setBase(pt); XS.savedCam = null; XS.top = false; q('#xsTop').classList.remove('on');
     setFloor(XS.floor); scene.canvas.addEventListener('wheel', onWheel, { capture:true, passive:false }); window.addEventListener('keydown', onKey);
     if(!PROJECTS.some(p=>p.ts && p.ts.show)) toast('3D 모델이 보이는 곳으로 이동한 뒤 사용하세요 (SITE › 3D 모델 › 이동)', 4500); else toast('수평 단면 · 연두색 구역('+Math.round(XS.w)+'×'+Math.round(XS.d)+' m) 안에서 '+XS.floor+'층 위를 숨겼습니다 · 모서리를 끌어 구역 조정', 4500); }
-  function off(){ XS.on = false; XS.picking = false; XS.drawing = false; XS.drag = null; XS.move = null; if(XS._cur){ scene.canvas.style.cursor = ''; XS._cur = false; } scene.screenSpaceCameraController.enableInputs = true; P.classList.remove('open'); q('#xsDraw').classList.remove('on'); for(const p of PROJECTS) if(p.ts){ if(p.ts.clippingPlanes) p.ts.clippingPlanes.enabled = false; if(p.ts._xsBfc!==undefined){ p.ts.backFaceCulling = p.ts._xsBfc; p.ts._xsBfc = undefined; } } drawRegion(); scene.canvas.removeEventListener('wheel', onWheel, { capture:true }); window.removeEventListener('keydown', onKey); if(XS.savedCam){ camera.flyTo({ destination: XS.savedCam.pos, orientation: XS.savedCam.hpr, duration: 1 }); XS.savedCam = null; } XS.top = false; }
-  L3.xsec = { on, off, src:()=> XS.on ? '<b>수평 단면</b> '+XS.floor+'층 · 지상 '+fmt(XS.h)+' m'+(XS.region? ' · 구역 '+Math.round(XS.w)+'×'+Math.round(XS.d)+' m':'')+' (DERIVED)' : '' };
-  const _ensX = ensureTileset; ensureTileset = async function(p){ const ts = await _ensX(p); if(ts && XS.on) applyTo(ts); return ts; };
+  function off(){ XS.on = false; XS.picking = false; XS.drawing = false; XS.drag = null; XS.move = null; clearTimeout(XS._bldT); XS._bldSeq++; for(const p of PROJECTS) if(p.ts) clearBld(p.ts); XS.bldKey = null; bldInfo(''); if(XS._cur){ scene.canvas.style.cursor = ''; XS._cur = false; } scene.screenSpaceCameraController.enableInputs = true; P.classList.remove('open'); q('#xsDraw').classList.remove('on'); for(const p of PROJECTS) if(p.ts){ if(p.ts.clippingPlanes) p.ts.clippingPlanes.enabled = false; if(p.ts._xsBfc!==undefined){ p.ts.backFaceCulling = p.ts._xsBfc; p.ts._xsBfc = undefined; } } drawRegion(); scene.canvas.removeEventListener('wheel', onWheel, { capture:true }); window.removeEventListener('keydown', onKey); if(XS.savedCam){ camera.flyTo({ destination: XS.savedCam.pos, orientation: XS.savedCam.hpr, duration: 1 }); XS.savedCam = null; } XS.top = false; }
+  L3.xsec = { on, off, src:()=> XS.on ? '<b>수평 단면</b> '+XS.floor+'층 · 지상 '+fmt(XS.h)+' m'+(XS.region? ' · 구역 '+Math.round(XS.w)+'×'+Math.round(XS.d)+' m':'')+(XS.bld? ' · 건물만':'')+' (DERIVED)' : '' };
+  const _ensX = ensureTileset; ensureTileset = async function(p){ const ts = await _ensX(p); if(ts && XS.on){ applyTo(ts); XS.bldKey = null; scheduleBld(); } return ts; };
   const _smX = setMode; setMode = function(m){ if(m==='earth' && STATE.on.has('xsec')) try{ toggleLayer('xsec', false); }catch(e){} return _smX(m); };
   window.sistechXsec = XS;
 })();
