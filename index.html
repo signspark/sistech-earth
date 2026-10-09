@@ -7379,7 +7379,492 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
 })();
 </script>
 <script>
-/* ---------- 54. SITE › 분석 › 화재 연기 확산 (2026-10-10) ----------
+/* ---------- 54. SITE › 시설물 › 시설물 배치 (라이브러리 10종 · 엑셀/CSV 좌표 자동 입력 · 오른쪽 클릭 수동 설치) (2026-10-10) ----------
+   - 라이브러리 10종: 가로등 · 가로수 · 신호등 · 교통안전표지 · 버스정류장 · 벤치 · 파고라 · 휴지통 · 볼라드 · 소화전 (코드 L01~L10)
+     · 3D 모양은 페이지 안에서 절차적으로 만든 glTF (상자·원기둥·타원체 조합 · 실제 치수 m · 외부 모델 파일 없음)
+   - 표시: 종류별 1개 모델 + EXT_mesh_gpu_instancing (수백 개도 그리기 호출 10여 회) · 2 km 격자별 원점 ENU
+   - 수동 설치: 라이브러리에서 고르고 "수동 설치" → 마우스를 따라 반투명 미리보기 → 오른쪽 클릭으로 설치 (3D 모델·지형 표면)
+     R / Shift+R 방향 ±15° · Esc 종료 · 왼쪽 클릭으로 선택 → 회전·이동(다시 오른쪽 클릭)·삭제 · Delete · Ctrl+Z 되돌리기
+   - 자동 입력: 엑셀(.xlsx/.xls)·CSV 불러오기 · 열 이름 자동 인식 (종류/코드 · 경도·위도 또는 TM X·Y(EPSG:5186 등) · 방향 · 배율 · 높이보정 · 관리번호 · 이름)
+     · 높이는 3D 모델 표면 최저값(중심+반경 2.5 m 4점, 가로수 수관 위에 뜨지 않게) · 3D 모델이 없으면 지형
+   - 송도 샘플: OSM 도로·버스정류장·공원 보행로 기준 475개 (센트럴파크 일대) · 처음 켤 때 자동 배치
+   - 저장: 브라우저(localStorage) 자동 저장 · 목록 내보내기 엑셀/CSV/GeoJSON (WGS84 + EPSG:5186) · 양식 엑셀 받기
+*/
+(function(){
+  const C = Cesium;
+  const VER = '54.1', LS = 'sistech.fac54.v1';
+  const rad = d=>d*Math.PI/180, deg = r=>r*180/Math.PI;
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  /* ---------- 라이브러리 정의 ---------- */
+  const LIB = [
+    { c:'L01', n:'가로등', g:'교통', d:'8 m 단주 · 1.8 m 암 · LED 등기구', fp:0.6 },
+    { c:'L02', n:'가로수', g:'조경', d:'수고 약 6 m · 수관폭 3.6 m · 보호덮개', fp:1.8 },
+    { c:'L03', n:'신호등', g:'교통', d:'6.5 m 지주 · 5 m 암 · 3구 신호기', fp:0.8 },
+    { c:'L04', n:'교통안전표지', g:'교통', d:'2.8 m 지주 · 원형 규제표지 Ø0.9 m', fp:0.5 },
+    { c:'L05', n:'버스정류장', g:'휴게', d:'쉘터 4.4×2.0 m · 유리 벽 · 벤치', fp:2.4 },
+    { c:'L06', n:'벤치', g:'휴게', d:'1.8 m 등받이 벤치', fp:1.0 },
+    { c:'L07', n:'파고라', g:'휴게', d:'3.4×3.4 m 목재 퍼걸러 · 벤치 2', fp:2.0 },
+    { c:'L08', n:'휴지통', g:'휴게', d:'Ø0.6 × 0.95 m', fp:0.4 },
+    { c:'L09', n:'볼라드', g:'교통', d:'Ø0.2 × 0.9 m · 반사띠', fp:0.3 },
+    { c:'L10', n:'소화전', g:'안전', d:'지상식 소화전 0.85 m', fp:0.4 },
+  ];
+  const LIBM = Object.fromEntries(LIB.map(l=>[l.c, l]));
+  const ICON = {
+    L01:'<path d="M9 21h6M12 21V5h5"/><path d="M15 5h5v2h-5z"/>',
+    L02:'<circle cx="12" cy="9" r="6"/><path d="M12 15v6M9 21h6"/>',
+    L03:'<path d="M5 21V4h14"/><rect x="13" y="6" width="7" height="3" rx="1"/><path d="M3 21h4"/>',
+    L04:'<circle cx="12" cy="8" r="5"/><path d="M12 13v8M9 21h6M9 8h6"/>',
+    L05:'<path d="M3 6h18M5 6v14M19 6v14M7 15h10M7 10v10"/>',
+    L06:'<path d="M3 13h18M4 13v5M20 13v5M4 9h16v4"/>',
+    L07:'<path d="M3 6h18M3 9h18M5 9v12M19 9v12M8 6V4M12 6V4M16 6V4"/>',
+    L08:'<path d="M6 7h12l-1 14H7z"/><path d="M5 7h14M10 4h4"/>',
+    L09:'<path d="M9 21V6a3 3 0 0 1 6 0v15M9 10h6M7 21h10"/>',
+    L10:'<path d="M8 21V9a4 4 0 0 1 8 0v12M5 13h3M16 13h3M6 21h12"/>',
+  };
+  const svg = c => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICON[c]||''}</svg>`;
+
+  /* ---------- 절차적 메시 (Z-up 로컬 m · 앞쪽 = +Y(북)) ---------- */
+  const MAT = {
+    pole:{ c:[0.23,0.25,0.28,1], m:0.6, r:0.45 }, poleL:{ c:[0.55,0.58,0.62,1], m:0.5, r:0.5 }, lamp:{ c:[1,0.96,0.82,1], e:[1,0.92,0.7] },
+    bark:{ c:[0.36,0.25,0.15,1], r:0.9 }, leaf:{ c:[0.24,0.47,0.21,1], r:0.85 }, leaf2:{ c:[0.31,0.55,0.25,1], r:0.85 }, grate:{ c:[0.18,0.18,0.18,1], m:0.7, r:0.6 },
+    black:{ c:[0.06,0.06,0.07,1], r:0.6 }, red:{ c:[0.9,0.12,0.1,1], e:[0.8,0.05,0.03] }, amber:{ c:[0.95,0.65,0.1,1], e:[0.5,0.3,0.0] }, green:{ c:[0.1,0.8,0.35,1], e:[0.0,0.6,0.2] },
+    white:{ c:[0.95,0.95,0.95,1], r:0.5 }, sred:{ c:[0.85,0.1,0.1,1], r:0.5 }, navy:{ c:[0.12,0.23,0.37,1], m:0.3, r:0.5 }, glass:{ c:[0.7,0.85,0.95,0.32], r:0.1, blend:true },
+    wood:{ c:[0.63,0.43,0.24,1], r:0.8 }, woodD:{ c:[0.5,0.32,0.17,1], r:0.85 }, bin:{ c:[0.18,0.36,0.23,1], m:0.3, r:0.5 }, steel:{ c:[0.5,0.52,0.55,1], m:0.7, r:0.4 },
+    yel:{ c:[1,0.82,0.1,1], r:0.4 }, hyd:{ c:[0.78,0.13,0.1,1], m:0.2, r:0.5 }, lime:{ c:[0.64,0.78,0.11,1], r:0.5 },
+  };
+  function Mesh(){ const parts = {}; const P = k => parts[k] || (parts[k] = { p:[], n:[], i:[] });
+    const xf = (T, v) => [T[0]*v[0]+T[1]*v[1]+T[2]*v[2]+T[9], T[3]*v[0]+T[4]*v[1]+T[5]*v[2]+T[10], T[6]*v[0]+T[7]*v[1]+T[8]*v[2]+T[11]];
+    const xn = (T, v) => { const r = [T[0]*v[0]+T[1]*v[1]+T[2]*v[2], T[3]*v[0]+T[4]*v[1]+T[5]*v[2], T[6]*v[0]+T[7]*v[1]+T[8]*v[2]]; const l = Math.hypot(...r)||1; return r.map(x=>x/l); };
+    // T: 회전(3x3, 행 우선) + 이동 · rx/ry/rz 각도(도) 순서 Z·Y·X
+    const T = (tx=0, ty=0, tz=0, ax=0, ay=0, az=0) => { const [cx,sx,cy,sy,cz,sz] = [Math.cos(rad(ax)),Math.sin(rad(ax)),Math.cos(rad(ay)),Math.sin(rad(ay)),Math.cos(rad(az)),Math.sin(rad(az))];
+      // R = Rz * Ry * Rx
+      return [cz*cy, cz*sy*sx - sz*cx, cz*sy*cx + sz*sx,  sz*cy, sz*sy*sx + cz*cx, sz*sy*cx - cz*sx,  -sy, cy*sx, cy*cx, tx, ty, tz]; };
+    const push = (mat, verts, norms, idx, Tm) => { const q = P(mat), b = q.p.length/3; for(let k=0;k<verts.length;k++){ const v = xf(Tm, verts[k]), n = xn(Tm, norms[k]); q.p.push(...v); q.n.push(...n); } for(const i of idx) q.i.push(b+i); };
+    return {
+      parts, T,
+      box(mat, sx, sy, sz, Tm){ const x = sx/2, y = sy/2, z = sz/2; const F = [[[1,0,0],[[x,-y,-z],[x,y,-z],[x,y,z],[x,-y,z]]],[[-1,0,0],[[-x,y,-z],[-x,-y,-z],[-x,-y,z],[-x,y,z]]],[[0,1,0],[[x,y,-z],[-x,y,-z],[-x,y,z],[x,y,z]]],[[0,-1,0],[[-x,-y,-z],[x,-y,-z],[x,-y,z],[-x,-y,z]]],[[0,0,1],[[-x,-y,z],[x,-y,z],[x,y,z],[-x,y,z]]],[[0,0,-1],[[-x,y,-z],[x,y,-z],[x,-y,-z],[-x,-y,-z]]]];
+        const v = [], n = [], idx = []; for(const [nn, q] of F){ const b = v.length; v.push(...q); n.push(nn,nn,nn,nn); idx.push(b,b+1,b+2,b,b+2,b+3); } push(mat, v, n, idx, Tm||T()); },
+      // 원기둥(원뿔대): 아래 중심 원점, +Z 방향 높이 h
+      cyl(mat, r0, r1, h, seg, Tm, caps=true){ seg = seg||16; const v = [], n = [], idx = []; const sl = (r0-r1)/h;
+        for(let k=0;k<=seg;k++){ const a = k/seg*Math.PI*2, c = Math.cos(a), s = Math.sin(a); const nl = Math.hypot(1, sl); v.push([r0*c, r0*s, 0], [r1*c, r1*s, h]); n.push([c/nl, s/nl, sl/nl], [c/nl, s/nl, sl/nl]); }
+        for(let k=0;k<seg;k++){ const a = k*2; idx.push(a, a+2, a+3, a, a+3, a+1); }
+        if(caps){ for(const [z, r, nz] of [[0, r0, -1], [h, r1, 1]]){ if(r <= 0) continue; const b = v.length; v.push([0,0,z]); n.push([0,0,nz]); for(let k=0;k<=seg;k++){ const a = k/seg*Math.PI*2; v.push([r*Math.cos(a), r*Math.sin(a), z]); n.push([0,0,nz]); } for(let k=0;k<seg;k++) nz>0 ? idx.push(b, b+1+k, b+2+k) : idx.push(b, b+2+k, b+1+k); } }
+        push(mat, v, n, idx, Tm||T()); },
+      ell(mat, rx, ry, rz, Tm, seg){ seg = seg||14; const v = [], n = [], idx = []; const st = Math.ceil(seg/2);
+        for(let i=0;i<=st;i++){ const ph = i/st*Math.PI, sp = Math.sin(ph), cp = Math.cos(ph); for(let k=0;k<=seg;k++){ const th = k/seg*Math.PI*2; const x = sp*Math.cos(th), y = sp*Math.sin(th), z = cp; v.push([rx*x, ry*y, rz*z]); const nn = [x/rx, y/ry, z/rz]; const l = Math.hypot(...nn)||1; n.push(nn.map(q=>q/l)); } }
+        for(let i=0;i<st;i++) for(let k=0;k<seg;k++){ const a = i*(seg+1)+k, b = a+seg+1; idx.push(a, b, a+1, a+1, b, b+1); }
+        push(mat, v, n, idx, Tm||T()); },
+    };
+  }
+  const BUILD = {
+    L01(m){ const T = m.T; m.box('pole', .36, .36, .5, T(0,0,.25)); m.cyl('pole', .1, .065, 8, 14, T(0,0,.5)); m.cyl('pole', .045, .045, 1.85, 10, T(0,0,8.25, -90,0,0)); m.box('pole', .55, .28, .14, T(0,1.95,8.25)); m.box('lamp', .46, .22, .03, T(0,1.95,8.17)); },
+    L02(m){ const T = m.T; m.box('grate', 1.2, 1.2, .05, T(0,0,.025)); m.cyl('bark', .16, .11, 3.0, 10, T(0,0,0)); m.cyl('bark', .06, .03, 1.2, 6, T(0,0,2.3, 0,35,20)); m.ell('leaf', 1.8, 1.7, 1.6, T(0,0,4.1)); m.ell('leaf2', 1.25, 1.2, 1.15, T(.55,-.35,5.3)); m.ell('leaf', 1.0, 1.0, .9, T(-.6,.5,4.9)); },
+    L03(m){ const T = m.T; m.box('poleL', .4, .4, .4, T(0,0,.2)); m.cyl('poleL', .14, .1, 6.6, 14, T(0,0,.4)); m.cyl('poleL', .07, .05, 5.2, 10, T(0,0,6.3, -90,0,0)); m.box('black', .32, 1.25, .42, T(0,4.6,6.0)); m.box('black', .34, .28, .9, T(.3,.22,3.2));
+      for(const [k, mat] of [[-1,'red'],[0,'amber'],[1,'green']]){ m.cyl(mat, .13, .13, .04, 14, T(.16, 4.6+k*.38, 6.0, 0,90,0)); m.cyl(mat, .13, .13, .04, 14, T(-.16, 4.6+k*.38, 6.0, 0,-90,0)); }
+      m.cyl('red', .1, .1, .04, 12, T(.47,.22,3.45, 0,90,0)); m.cyl('green', .1, .1, .04, 12, T(.47,.22,2.95, 0,90,0)); },
+    L04(m){ const T = m.T; m.cyl('poleL', .045, .04, 2.95, 10, T(0,0,0)); m.cyl('sred', .45, .45, .03, 24, T(0,.06,2.5, 90,0,0).map((v,i)=>i===10? v+.015 : v)); m.cyl('white', .34, .34, .04, 24, T(0,.06,2.5, 90,0,0).map((v,i)=>i===10? v+.03 : v)); m.box('black', .42, .02, .1, T(0,.1,2.5)); m.box('steel', .08, .08, .3, T(0,-.02,2.5)); },
+    L05(m){ const T = m.T; for(const x of [-2,2]) for(const y of [-.75,.75]) m.box('navy', .09, .09, 2.6, T(x,y,1.3)); m.box('navy', 4.5, 2.1, .12, T(0,.05,2.66)); m.box('lime', 4.5, .06, .18, T(0,1.1,2.62)); m.box('glass', 4.0, .03, 2.05, T(0,-.76,1.35)); m.box('glass', .03, 1.3, 2.05, T(-2,-.1,1.35));
+      m.box('steel', 3.0, .38, .05, T(.2,-.5,.46)); for(const x of [-1.1,1.5]) m.box('steel', .05, .3, .44, T(x,-.5,.22)); m.box('white', .9, .05, 1.2, T(1.5,-.73,1.6)); },
+    L06(m){ const T = m.T; for(let k=0;k<4;k++) m.box('wood', 1.8, .1, .045, T(0,-.17+k*.11,.45)); for(let k=0;k<3;k++) m.box('wood', 1.8, .045, .09, T(0,-.25,.62+k*.12, 12,0,0)); for(const x of [-.75,.75]){ m.box('steel', .06, .45, .06, T(x,0,.4)); m.box('steel', .06, .06, .42, T(x,.17,.21)); m.box('steel', .06, .06, .8, T(x,-.24,.42)); } },
+    L07(m){ const T = m.T; for(const x of [-1.5,1.5]) for(const y of [-1.5,1.5]) m.box('woodD', .2, .2, 2.7, T(x,y,1.35)); for(const y of [-1.5,1.5]) m.box('woodD', 3.6, .14, .22, T(0,y,2.75)); for(let k=-3;k<=3;k++) m.box('wood', .09, 3.7, .14, T(k*.55,0,2.93));
+      for(const y of [-1.1,1.1]){ m.box('wood', 2.4, .4, .06, T(0,y,.45)); for(const x of [-1,1]) m.box('woodD', .08, .35, .42, T(x,y,.21)); } },
+    L08(m){ const T = m.T; m.cyl('bin', .28, .3, .88, 18, T(0,0,0)); m.cyl('steel', .32, .32, .07, 18, T(0,0,.88)); m.box('black', .22, .04, .08, T(0,.31,.8)); },
+    L09(m){ const T = m.T; m.cyl('steel', .1, .09, .9, 14, T(0,0,0)); m.ell('steel', .09, .09, .05, T(0,0,.9)); m.cyl('yel', .102, .102, .07, 14, T(0,0,.68), false); m.cyl('yel', .102, .102, .07, 14, T(0,0,.52), false); },
+    L10(m){ const T = m.T; m.cyl('hyd', .16, .16, .1, 16, T(0,0,0)); m.cyl('hyd', .13, .12, .62, 16, T(0,0,.1)); m.cyl('hyd', .16, .16, .06, 16, T(0,0,.7)); m.ell('hyd', .12, .12, .1, T(0,0,.76)); m.cyl('steel', .03, .03, .08, 8, T(0,0,.84));
+      for(const s of [-1,1]) m.cyl('hyd', .05, .05, .2, 10, T(s*.11,0,.5, 0,s*90,0)); m.cyl('hyd', .07, .07, .16, 12, T(0,.11,.4, -90,0,0)); },
+  };
+
+  /* ---------- glTF 쓰기 (인스턴싱) ---------- */
+  const enc = new TextEncoder();
+  const concat = parts => { const n = parts.reduce((s,p)=>s+p.length,0); const o = new Uint8Array(n); let k = 0; for(const p of parts){ o.set(p,k); k += p.length; } return o; };
+  const GEO = {}; // 종류별 메시 캐시
+  function geo(code){ if(!GEO[code]){ const m = Mesh(); BUILD[code](m); GEO[code] = m.parts; } return GEO[code]; }
+  // inst: [{x,y,z(로컬 ENU m), b(방위°), s(배율)}] · null이면 인스턴싱 없이 1개
+  function makeGlb(code, inst){
+    const parts = geo(code); const bins = []; let off = 0; const views = [], acc = [], prims = [], mats = [];
+    const add = (u8, target) => { const pad = (4 - off%4)%4; if(pad){ bins.push(new Uint8Array(pad)); off += pad; } bins.push(u8); const v = { buffer:0, byteOffset:off, byteLength:u8.length }; if(target) v.target = target; views.push(v); off += u8.length; return views.length-1; };
+    for(const [mk, q] of Object.entries(parts)){
+      const n = q.p.length/3, P = new Float32Array(n*3), N = new Float32Array(n*3); const mn = [Infinity,Infinity,Infinity], mx = [-Infinity,-Infinity,-Infinity];
+      // 좌표는 그대로 ENU(x=동, y=북, z=위) · Model을 upAxis Z · forwardAxis X로 열어 축 보정 없음 (인스턴싱 위치가 축 보정과 어긋나는 문제 회피)
+      for(let i=0;i<n;i++){ const x = q.p[i*3], y = q.p[i*3+1], z = q.p[i*3+2]; P[i*3] = x; P[i*3+1] = y; P[i*3+2] = z; N[i*3] = q.n[i*3]; N[i*3+1] = q.n[i*3+1]; N[i*3+2] = q.n[i*3+2]; const a = [x,y,z]; for(let k=0;k<3;k++){ if(a[k]<mn[k]) mn[k]=a[k]; if(a[k]>mx[k]) mx[k]=a[k]; } }
+      acc.push({ bufferView:add(new Uint8Array(P.buffer), 34962), componentType:5126, count:n, type:'VEC3', min:mn, max:mx });
+      acc.push({ bufferView:add(new Uint8Array(N.buffer), 34962), componentType:5126, count:n, type:'VEC3' });
+      const I = n > 65535 ? new Uint32Array(q.i) : new Uint16Array(q.i); acc.push({ bufferView:add(new Uint8Array(I.buffer.slice(0)), 34963), componentType: n > 65535 ? 5125 : 5123, count:q.i.length, type:'SCALAR' });
+      const M = MAT[mk]; const mat = { name:mk, pbrMetallicRoughness:{ baseColorFactor:M.c, metallicFactor:M.m||0, roughnessFactor:M.r==null?0.6:M.r }, doubleSided:true };
+      if(M.e) mat.emissiveFactor = M.e; if(M.blend) mat.alphaMode = 'BLEND';
+      mats.push(mat); prims.push({ attributes:{ POSITION:acc.length-3, NORMAL:acc.length-2 }, indices:acc.length-1, material:mats.length-1, mode:4 });
+    }
+    const node = { mesh:0, name:LIBM[code].n };
+    const gl = { asset:{ version:'2.0', generator:'SISTECH EARTH addon '+VER }, scene:0, scenes:[{ nodes:[0] }], nodes:[node], meshes:[{ primitives:prims }], materials:mats, accessors:acc, bufferViews:views, buffers:[{ byteLength:0 }] };
+    if(inst){
+      const k = inst.length, Tr = new Float32Array(k*3), Ro = new Float32Array(k*4), Sc = new Float32Array(k*3);
+      inst.forEach((o, i) => { Tr[i*3] = o.x; Tr[i*3+1] = o.y; Tr[i*3+2] = o.z; const th = -rad(o.b||0); Ro[i*4] = 0; Ro[i*4+1] = 0; Ro[i*4+2] = Math.sin(th/2); Ro[i*4+3] = Math.cos(th/2); const s = o.s||1; Sc[i*3] = s; Sc[i*3+1] = s; Sc[i*3+2] = s; });
+      acc.push({ bufferView:add(new Uint8Array(Tr.buffer)), componentType:5126, count:k, type:'VEC3' }); const aT = acc.length-1;
+      acc.push({ bufferView:add(new Uint8Array(Ro.buffer)), componentType:5126, count:k, type:'VEC4' }); const aR = acc.length-1;
+      acc.push({ bufferView:add(new Uint8Array(Sc.buffer)), componentType:5126, count:k, type:'VEC3' }); const aS = acc.length-1;
+      node.extensions = { EXT_mesh_gpu_instancing:{ attributes:{ TRANSLATION:aT, ROTATION:aR, SCALE:aS } } };
+      gl.extensionsUsed = ['EXT_mesh_gpu_instancing']; gl.extensionsRequired = ['EXT_mesh_gpu_instancing'];
+    }
+    const pad = (4 - off%4)%4; if(pad){ bins.push(new Uint8Array(pad)); off += pad; } gl.buffers[0].byteLength = off;
+    let js = enc.encode(JSON.stringify(gl)); const jp = (4 - js.length%4)%4; if(jp) js = concat([js, enc.encode(' '.repeat(jp))]);
+    const bin = concat(bins); const h = new DataView(new ArrayBuffer(20)); h.setUint32(0,0x46546C67,true); h.setUint32(4,2,true); h.setUint32(8,20+js.length+8+bin.length,true); h.setUint32(12,js.length,true); h.setUint32(16,0x4E4F534A,true);
+    const h2 = new DataView(new ArrayBuffer(8)); h2.setUint32(0,bin.length,true); h2.setUint32(4,0x004E4942,true);
+    return concat([new Uint8Array(h.buffer), js, new Uint8Array(h2.buffer), bin]);
+  }
+
+  /* ---------- TM (GRS80) ---------- */
+  const A_ = 6378137.0, F_ = 1/298.257222101, E2 = F_*(2-F_), EP2 = E2/(1-E2), FE = 200000, FN = 600000, K0 = 1;
+  const LON0 = { 5185:125, 5186:127, 5187:129, 5188:131 };
+  const Mf = phi => A_*((1-E2/4-3*E2*E2/64-5*E2**3/256)*phi - (3*E2/8+3*E2*E2/32+45*E2**3/1024)*Math.sin(2*phi) + (15*E2*E2/256+45*E2**3/1024)*Math.sin(4*phi) - (35*E2**3/3072)*Math.sin(6*phi));
+  const M0 = Mf(rad(38)), E1 = (1-Math.sqrt(1-E2))/(1+Math.sqrt(1-E2));
+  function tmFwd(lon, lat, code){ const l0 = rad(LON0[code]), p = rad(lat), s = Math.sin(p), c = Math.cos(p), t = Math.tan(p); const N = A_/Math.sqrt(1-E2*s*s), T = t*t, Cc = EP2*c*c, A = (rad(lon)-l0)*c;
+    return [FE + K0*N*(A + (1-T+Cc)*A**3/6 + (5-18*T+T*T+72*Cc-58*EP2)*A**5/120), FN + K0*(Mf(p) - M0 + N*t*(A*A/2 + (5-T+9*Cc+4*Cc*Cc)*A**4/24 + (61-58*T+T*T+600*Cc-330*EP2)*A**6/720))]; }
+  function tmInv(x, y, code){ const l0 = rad(LON0[code]); const Mi = M0 + (y-FN)/K0, mu = Mi/(A_*(1-E2/4-3*E2*E2/64-5*E2**3/256));
+    const p1 = mu + (3*E1/2-27*E1**3/32)*Math.sin(2*mu) + (21*E1*E1/16-55*E1**4/32)*Math.sin(4*mu) + (151*E1**3/96)*Math.sin(6*mu) + (1097*E1**4/512)*Math.sin(8*mu);
+    const s = Math.sin(p1), c = Math.cos(p1), t = Math.tan(p1), C1 = EP2*c*c, T1 = t*t, N1 = A_/Math.sqrt(1-E2*s*s), R1 = A_*(1-E2)/(1-E2*s*s)**1.5, D = (x-FE)/(N1*K0);
+    const lat = p1 - (N1*t/R1)*(D*D/2 - (5+3*T1+10*C1-4*C1*C1-9*EP2)*D**4/24 + (61+90*T1+298*C1+45*T1*T1-252*EP2-3*C1*C1)*D**6/720);
+    const lon = l0 + (D - (1+2*T1+C1)*D**3/6 + (5-2*C1+28*T1-3*C1*C1+8*EP2+24*T1*T1)*D**5/120)/c; return [deg(lon), deg(lat)]; }
+
+  /* ---------- 상태 ---------- */
+  const F = { on:false, objs:[], seq:0, sel:null, mode:null /* 'place' | 'move' */, cur:'L01', bear:0, scale:1, hide:new Set(), groups:new Map(), ghost:null, ghostCode:null, undo:[], selEnt:null, busy:false, urls:{} };
+  const CELL = 0.02;
+  const cellKey = o => Math.floor(o.lon/CELL)+'_'+Math.floor(o.lat/CELL);
+  const nid = code => { let n = 0; for(const o of F.objs) if(o.t===code){ const k = +String(o.id||'').split('-')[1]; if(k > n) n = k; } return code+'-'+String(n+1).padStart(3,'0'); };
+  function save(){ try{ localStorage.setItem(LS, JSON.stringify(F.objs.map(o=>({ id:o.id, t:o.t, lon:+o.lon.toFixed(8), lat:+o.lat.toFixed(8), h:o.h==null?null:+o.h.toFixed(3), b:o.b, s:o.s, dz:o.dz, name:o.name, src:o.src })))); }catch(e){} }
+  function load(){ try{ const a = JSON.parse(localStorage.getItem(LS)||'null'); return Array.isArray(a) ? a : null; }catch(e){ return null; } }
+  function pushUndo(){ F.undo.push(JSON.stringify(F.objs)); if(F.undo.length > 40) F.undo.shift(); }
+
+  /* ---------- 높이 (3D 모델 표면 최저값) ---------- */
+  function excl(){ const a = []; for(const g of F.groups.values()) if(g.model) a.push(g.model); if(F.ghost) a.push(F.ghost); if(F.selEnt) a.push(F.selEnt); return a; }
+  // 화면에 올라온 3D 타일에서 동기 샘플(점당 수 ms) · 중심+반경 2.5 m 2점 최저값 · 30개마다 쉬어 화면 멈춤 없음
+  // (sampleHeightMostDetailed는 점당 약 0.15초 + 렌더 루프 점유 → 수백 개에 부적합) · 타일이 없는 점만 정밀 샘플 1점, 그래도 없으면 지형
+  async function heights(list, prog){
+    const need = list.filter(o => o.h == null); if(!need.length) return;
+    const exl = excl(); const ex = exl.length ? exl : undefined; const miss = [];
+    const sh = (lon, lat) => { try{ const h = scene.sampleHeight(C.Cartographic.fromDegrees(lon, lat), ex); return (h !== undefined && isFinite(h)) ? h : null; }catch(e){ return null; } };
+    const t0 = performance.now();
+    // 8 m 격자마다 한 번만 샘플 (볼라드 3개·벤치+휴지통처럼 붙어 있는 시설물은 같은 높이)
+    const cells = new Map(); for(const o of need){ const k = Math.round(o.lon*111320*Math.cos(rad(o.lat))/8)+'_'+Math.round(o.lat*111320/8); if(!cells.has(k)) cells.set(k, []); cells.get(k).push(o); }
+    let i = 0; for(const list of cells.values()){ const o = list[0]; const h = sh(o.lon, o.lat); if(h != null) for(const q of list) q.h = h; else miss.push(...list);
+      if(++i % 15 === 0){ if(prog) prog('높이 맞추는 중… '+i+'/'+cells.size+' 지점'); await new Promise(r=>setTimeout(r, 0)); } }
+    if(miss.length && scene.sampleHeightSupported){ if(prog) prog('화면 밖 '+miss.length+'개 높이 정밀 샘플 중…');
+      try{ const r = await Promise.race([ scene.sampleHeightMostDetailed(miss.slice(0, 120).map(o => C.Cartographic.fromDegrees(o.lon, o.lat)), ex), new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), 20000)) ]); r.forEach((c, i) => { if(c && isFinite(c.height)) miss[i].h = c.height; }); }catch(e){} }
+    for(const o of need) if(o.h == null){ const g = globe.getHeight(C.Cartographic.fromDegrees(o.lon, o.lat)); o.h = isFinite(g) ? g : 0; o.hs = 'terrain'; }
+    // 가로수 수관·건물에 맞은 점 보정: 반경 70 m 안 다른 시설물 높이의 25% 분위보다 1.5 m 넘게 높으면 그 값으로 (주변 3개 이상일 때)
+    const pool = F.objs.concat(need).filter(o => o.h != null && o.hs !== 'terrain');
+    for(const o of need){ if(o.hs === 'terrain') continue; const mLon = 111320*Math.cos(rad(o.lat)); const nb = []; for(const q of pool){ if(q === o) continue; if(Math.hypot((q.lon-o.lon)*mLon, (q.lat-o.lat)*111320) < 70) nb.push(q.h); }
+      if(nb.length < 3) continue; nb.sort((a,b)=>a-b); const ref = nb[Math.floor(nb.length*0.25)]; if(o.h > ref + 1.5){ o.h = ref; o.hs = 'adj'; } }
+    F.lastHms = performance.now() - t0;
+  }
+
+  /* ---------- 그리기 ---------- */
+  function frameOf(lon, lat, h){ return C.Transforms.eastNorthUpToFixedFrame(C.Cartesian3.fromDegrees(lon, lat, h)); }
+  function rebuild(only){
+    const want = new Map(); // key → {code, cell, list}
+    for(const o of F.objs){ if(o.h == null) continue; const k = o.t+'|'+cellKey(o); if(!want.has(k)) want.set(k, { code:o.t, list:[] }); want.get(k).list.push(o); }
+    for(const [k, g] of F.groups){ if(!want.has(k)){ try{ scene.primitives.remove(g.model); }catch(e){} F.groups.delete(k); } }
+    for(const [k, w] of want){
+      if(only && !only.has(w.code)) continue;
+      const o0 = w.list[0]; const [cx, cy] = cellKey(o0).split('_').map(Number); const lon0 = (cx+.5)*CELL, lat0 = (cy+.5)*CELL; const h0 = o0.h;
+      const fr = frameOf(lon0, lat0, h0), inv = C.Matrix4.inverse(fr, new C.Matrix4()); const tmp = new C.Cartesian3();
+      const inst = w.list.map(o => { const p = C.Matrix4.multiplyByPoint(inv, C.Cartesian3.fromDegrees(o.lon, o.lat, o.h + (o.dz||0)), tmp); return { x:p.x, y:p.y, z:p.z, b:o.b, s:o.s }; });
+      const sig = JSON.stringify(inst.map(i=>[+i.x.toFixed(3),+i.y.toFixed(3),+i.z.toFixed(3),i.b,i.s]));
+      const old = F.groups.get(k); if(old && old.sig === sig){ old.model.show = F.on && !F.hide.has(w.code); continue; }
+      const url = URL.createObjectURL(new Blob([makeGlb(w.code, inst)], { type:'model/gltf-binary' }));
+      const p = C.Model.fromGltfAsync({ url, modelMatrix: fr, upAxis: C.Axis.Z, forwardAxis: C.Axis.X, show: F.on && !F.hide.has(w.code), id:{ fac54g:k } });
+      const g = { sig, url, model:null, code:w.code };
+      F.groups.set(k, g);
+      p.then(model => { if(F.groups.get(k) !== g){ return; } g.model = model; scene.primitives.add(model);
+        const swap = () => { if(old && old.model){ try{ scene.primitives.remove(old.model); }catch(e){} } try{ URL.revokeObjectURL(old && old.url); }catch(e){} };
+        if(model.ready) swap(); else model.readyEvent.addEventListener(swap);
+        model.errorEvent && model.errorEvent.addEventListener(err => console.warn('fac54 model', err));
+      }).catch(err => { console.error(err); toast('시설물 모델 오류: '+err.message, 3000); });
+    }
+    updateList(); try{ scene.requestRender(); }catch(e){}
+  }
+  function setShow(){ for(const g of F.groups.values()) if(g.model) g.model.show = F.on && !F.hide.has(g.code); if(F.ghost) F.ghost.show = F.on && !!F.mode; if(F.selEnt) F.selEnt.show = F.on; }
+
+  /* ---------- 고스트(미리보기) ---------- */
+  function ghostUrl(code){ if(!F.urls[code]) F.urls[code] = URL.createObjectURL(new Blob([makeGlb(code, null)], { type:'model/gltf-binary' })); return F.urls[code]; }
+  async function ensureGhost(code){
+    if(F.ghost && F.ghostCode === code) return F.ghost;
+    if(F.ghost){ try{ scene.primitives.remove(F.ghost); }catch(e){} F.ghost = null; }
+    F.ghostCode = code;
+    const m = await C.Model.fromGltfAsync({ url: ghostUrl(code), upAxis: C.Axis.Z, forwardAxis: C.Axis.X, color: C.Color.fromCssColorString('#BFE33A').withAlpha(.6), colorBlendMode: C.ColorBlendMode.MIX, colorBlendAmount: .45, show:false });
+    if(F.ghostCode !== code){ return null; } F.ghost = scene.primitives.add(m); return m;
+  }
+  function ghostMatrix(lon, lat, h, b, s){ const fr = frameOf(lon, lat, h); const R = C.Matrix4.fromRotationTranslation(C.Matrix3.fromRotationZ(-rad(b||0))); const S = C.Matrix4.fromUniformScale(s||1); return C.Matrix4.multiply(C.Matrix4.multiply(fr, R, new C.Matrix4()), S, new C.Matrix4()); }
+  function pickSurface(pos){
+    const ray = camera.getPickRay(pos); if(!ray) return null; let c = null;
+    try{ const r = scene.pickFromRay(ray, excl()); if(r && r.position) c = r.position; }catch(e){}
+    if(!c){ c = globe.pick(ray, scene); }
+    if(!c) return null; const ct = C.Cartographic.fromCartesian(c); return { lon:deg(ct.longitude), lat:deg(ct.latitude), h:ct.height };
+  }
+
+  /* ---------- 선택 ---------- */
+  function select(o){
+    F.sel = o || null;
+    if(F.selEnt){ try{ viewer.entities.remove(F.selEnt); }catch(e){} F.selEnt = null; }
+    if(o){ const r = (LIBM[o.t].fp||1)*(o.s||1) + .4;
+      F.selEnt = viewer.entities.add({ position: C.Cartesian3.fromDegrees(o.lon, o.lat, o.h + (o.dz||0) + .05), ellipse:{ semiMajorAxis:r, semiMinorAxis:r, height:o.h + (o.dz||0) + .05, material: C.Color.fromCssColorString('#BFE33A').withAlpha(.28), outline:true, outlineColor: C.Color.fromCssColorString('#BFE33A') },
+        label:{ text: o.id+' · '+LIBM[o.t].n, font:'600 12px Inter, "Noto Sans KR", sans-serif', fillColor: C.Color.WHITE, outlineColor: C.Color.fromCssColorString('#03122A'), outlineWidth:4, style: C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin: C.VerticalOrigin.BOTTOM, pixelOffset: new C.Cartesian2(0,-8), showBackground:true, backgroundColor: C.Color.fromCssColorString('#03122A').withAlpha(.7), disableDepthTestDistance: Number.POSITIVE_INFINITY, eyeOffset: new C.Cartesian3(0,0,-5) } });
+      F.selEnt.position = C.Cartesian3.fromDegrees(o.lon, o.lat, o.h + (o.dz||0) + Math.max(1.2, 3*(o.s||1)));
+      F.selEnt.ellipse.height = o.h + (o.dz||0) + .05; }
+    renderSel();
+  }
+  function nearestAt(lon, lat){ const mLon = 111320*Math.cos(rad(lat)); let best = null; for(const o of F.objs){ if(F.hide.has(o.t)) continue; const d = Math.hypot((o.lon-lon)*mLon, (o.lat-lat)*111320); const lim = Math.max(1.2, (LIBM[o.t].fp||1)*(o.s||1)+.6); if(d < lim && (!best || d < best.d)) best = { o, d }; } return best && best.o; }
+
+  /* ---------- 패널 ---------- */
+  const css = document.createElement('style'); css.textContent = `
+#facPanel{position:fixed;right:14px;top:72px;width:350px;max-height:calc(100vh - 150px);z-index:21;display:none;flex-direction:column;overflow:hidden;font-size:13px}
+#facPanel.open{display:flex}
+#facPanel .hd{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line)}
+#facPanel .hd h2{margin:0;font-size:15px;flex:1}#facPanel .hd h2 small{font-weight:400;color:var(--text-dim);font-size:12px;margin-left:6px}
+#facPanel .hd button{color:var(--text-dim);font-size:18px}
+#facPanel .bd{overflow:auto;padding:10px 14px 14px}
+#facPanel h3{margin:12px 0 6px;font-size:12px;color:var(--lime-bright);font-weight:700;letter-spacing:.02em}#facPanel h3:first-child{margin-top:0}
+#facPanel .lib{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+#facPanel .lib button{display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 2px 5px;border:1px solid var(--line);border-radius:8px;font-size:11px;line-height:1.15;color:var(--text);background:rgba(255,255,255,.02);position:relative}
+#facPanel .lib button svg{width:24px;height:24px}
+#facPanel .lib button.on{border-color:var(--lime);background:var(--lime-dim);color:var(--lime-bright)}
+#facPanel .lib button i{position:absolute;top:2px;right:4px;font-style:normal;font-size:10px;color:var(--text-dim)}
+#facPanel .lib button.off{opacity:.38}
+#facPanel .row{display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap}
+#facPanel .btn{flex:1;padding:8px 6px;border-radius:8px;border:1px solid var(--line-strong);font-weight:600;font-size:12.5px;text-align:center;white-space:nowrap}
+#facPanel .btn.pri{background:var(--lime);color:var(--navy-950);border-color:var(--lime);font-weight:800}
+#facPanel .btn.act{background:var(--amber);border-color:var(--amber);color:var(--navy-950)}
+#facPanel .btn.sm{flex:0 0 auto;padding:6px 9px}
+#facPanel .btn:disabled{opacity:.4}
+#facPanel input[type=number]{width:56px;background:rgba(0,0,0,.25);color:var(--text);border:1px solid var(--line-strong);border-radius:6px;padding:5px 6px;font:inherit}
+#facPanel .meta{color:var(--text-dim);font-size:11.5px;line-height:1.45;margin-top:6px}
+#facPanel .kv{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:12px}#facPanel .kv span{color:var(--text-dim)}
+#facPanel .tip{background:rgba(164,200,28,.1);border:1px solid rgba(164,200,28,.35);border-radius:8px;padding:7px 9px;margin-top:8px;font-size:12px;line-height:1.5}
+#facPanel kbd{border:1px solid var(--line-strong);border-radius:4px;padding:0 4px;font-size:11px;font-family:inherit}
+#facPanel .cnt{display:flex;flex-wrap:wrap;gap:4px}#facPanel .cnt b{font-weight:600}
+@media (max-width:600px){#facPanel{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:55vh}}`;
+  document.head.appendChild(css);
+  const P = document.createElement('div'); P.id = 'facPanel'; P.className = 'panel';
+  P.innerHTML = `<div class="hd"><h2>시설물 배치<small id="facN"></small></h2><button id="facX" title="닫기 (시설물 끄기)">✕</button></div>
+  <div class="bd">
+    <h3>라이브러리 (10종) · 눌러서 선택 · 길게(우클릭) 눌러 숨김</h3>
+    <div class="lib" id="facLib">${LIB.map(l=>`<button data-c="${l.c}" title="${l.c} ${l.n} · ${l.d}">${svg(l.c)}<span>${l.n}</span><i></i></button>`).join('')}</div>
+    <div class="meta" id="facDesc"></div>
+    <h3>수동 설치</h3>
+    <div class="row"><button class="btn pri" id="facPlace">＋ 수동 설치 (오른쪽 클릭)</button></div>
+    <div class="row"><span style="color:var(--text-dim);font-size:12px">방향</span><input type="number" id="facBear" value="0" step="15"><span style="color:var(--text-dim);font-size:12px">°</span>
+      <button class="btn sm" data-rot="-15">⟲</button><button class="btn sm" data-rot="15">⟳</button>
+      <span style="color:var(--text-dim);font-size:12px;margin-left:auto">배율 ×</span><input type="number" id="facScale" value="1" step="0.1" min="0.2" max="5"></div>
+    <div class="tip" id="facTip" style="display:none"></div>
+    <h3>자동 입력 (좌표 파일)</h3>
+    <div class="row"><button class="btn" id="facFileB">엑셀·CSV 불러오기</button><button class="btn" id="facTpl">양식 받기</button><input type="file" id="facFile" accept=".xlsx,.xls,.csv,.txt" style="display:none"></div>
+    <div class="row"><button class="btn" id="facSample">송도 샘플 배치 (475개)</button><button class="btn sm" id="facGo" title="배치된 곳으로 이동">이동</button></div>
+    <div class="meta" id="facMsg">열 이름 자동 인식: 종류(코드 L01~L10 또는 이름) · 경도/위도 또는 X/Y(TM, EPSG:5186 등) · 방향 · 배율 · 높이보정 · 관리번호</div>
+    <div id="facSel"></div>
+    <h3>배치 현황</h3>
+    <div class="cnt meta" id="facCnt"></div>
+    <div class="row"><button class="btn" data-ex="xlsx">엑셀 저장</button><button class="btn" data-ex="csv">CSV</button><button class="btn" data-ex="geojson">GeoJSON</button></div>
+    <div class="row"><button class="btn sm" id="facUndo">↶ 되돌리기</button><button class="btn sm" id="facReH" title="모든 시설물 높이를 3D 모델 표면에 다시 맞춤">높이 다시 맞추기</button><button class="btn sm" id="facClear" style="margin-left:auto;color:var(--red)">전체 지우기</button></div>
+  </div>`;
+  document.body.appendChild(P);
+  const $p = s => P.querySelector(s);
+  const msg = h => { $p('#facMsg').innerHTML = h; };
+
+  function renderLib(){ P.querySelectorAll('#facLib button').forEach(b => { const c = b.dataset.c; b.classList.toggle('on', c === F.cur); b.classList.toggle('off', F.hide.has(c)); const n = F.objs.filter(o=>o.t===c).length; b.querySelector('i').textContent = n || ''; });
+    const l = LIBM[F.cur]; $p('#facDesc').innerHTML = '<b style="color:var(--text)">'+l.c+' '+l.n+'</b> · '+l.g+' · '+l.d; }
+  function updateList(){ $p('#facN').textContent = F.objs.length ? F.objs.length+'개' : ''; renderLib();
+    const by = {}; for(const o of F.objs) by[o.t] = (by[o.t]||0)+1;
+    $p('#facCnt').innerHTML = F.objs.length ? LIB.filter(l=>by[l.c]).map(l=>`<span>${l.n} <b>${by[l.c]}</b></span>`).join(' · ') : '배치된 시설물이 없습니다'; }
+  function tip(){ const t = $p('#facTip'); const b = $p('#facPlace');
+    if(F.mode === 'place'){ t.style.display = ''; t.innerHTML = `<b>${LIBM[F.cur].n}</b> 설치 중 · 지도에서 <b>오른쪽 클릭</b>으로 설치<br><kbd>R</kbd>/<kbd>Shift</kbd>+<kbd>R</kbd> 방향 ±15° · <kbd>Esc</kbd> 종료 · 왼쪽 드래그로 화면 이동`; b.textContent = '■ 설치 끝내기 (Esc)'; b.classList.add('act'); b.classList.remove('pri'); }
+    else if(F.mode === 'move'){ t.style.display = ''; t.innerHTML = `<b>${esc(F.sel && F.sel.id)}</b> 옮기는 중 · 새 위치에서 <b>오른쪽 클릭</b> · <kbd>Esc</kbd> 취소`; b.textContent = '＋ 수동 설치 (오른쪽 클릭)'; b.classList.remove('act'); b.classList.add('pri'); }
+    else { t.style.display = 'none'; b.textContent = '＋ 수동 설치 (오른쪽 클릭)'; b.classList.remove('act'); b.classList.add('pri'); } }
+  function renderSel(){ const el = $p('#facSel'); const o = F.sel; if(!o){ el.innerHTML = ''; return; }
+    const [x, y] = tmFwd(o.lon, o.lat, 5186);
+    el.innerHTML = `<h3>선택: ${esc(o.id)} · ${LIBM[o.t].n}</h3><div class="kv"><span>이름</span><b>${esc(o.name||'-')}</b><span>경위도</span><b>${o.lat.toFixed(7)}, ${o.lon.toFixed(7)}</b><span>EPSG:5186</span><b>X ${x.toFixed(2)} · Y ${y.toFixed(2)}</b>
+      <span>설치 높이</span><b>${o.h!=null? o.h.toFixed(2)+' m (타원체고)'+(o.dz? ' + '+o.dz+' m':'') : '-'}${o.hs==='terrain'?' · 지형':o.hs==='adj'?' · 주변 지면으로 보정':''}</b><span>방향 · 배율</span><b>${o.b}° · ×${o.s||1}</b><span>입력</span><b>${({sample:'송도 샘플',excel:'파일',manual:'수동'})[o.src]||esc(o.src||'-')}</b></div>
+      <div class="row"><button class="btn sm" data-so="-15">⟲ 15°</button><button class="btn sm" data-so="15">⟳ 15°</button><button class="btn sm" data-so="move">옮기기</button><button class="btn sm" data-so="del" style="color:var(--red)">삭제</button><button class="btn sm" data-so="x">선택 해제</button></div>`;
+    el.querySelectorAll('[data-so]').forEach(b => b.onclick = () => selAct(b.dataset.so)); }
+  function selAct(a){ const o = F.sel; if(!o) return;
+    if(a === 'x'){ select(null); return; }
+    if(a === 'del'){ pushUndo(); F.objs = F.objs.filter(q => q !== o); select(null); save(); rebuild(new Set([o.t])); toast(o.id+' 삭제', 1400); return; }
+    if(a === 'move'){ F.mode = 'move'; ensureGhost(o.t); tip(); return; }
+    const d = +a; pushUndo(); o.b = ((o.b + d) % 360 + 360) % 360; save(); rebuild(new Set([o.t])); select(o); }
+
+  /* ---------- 수동 설치 · 이벤트 ---------- */
+  function startPlace(){ if(F.mode === 'place'){ stopMode(); return; } F.mode = 'place'; ensureGhost(F.cur); tip(); viewer.canvas.style.cursor = 'crosshair'; }
+  function stopMode(){ F.mode = null; if(F.ghost) F.ghost.show = false; tip(); if(viewer.canvas.style.cursor === 'crosshair') viewer.canvas.style.cursor = ''; }
+  async function placeAt(pos){
+    const s = pickSurface(pos); if(!s){ toast('설치할 위치를 찾지 못했습니다', 1500); return; }
+    if(F.mode === 'move' && F.sel){ pushUndo(); const o = F.sel; o.lon = s.lon; o.lat = s.lat; o.h = s.h; delete o.hs; save(); F.mode = null; tip(); if(F.ghost) F.ghost.show = false; rebuild(new Set([o.t])); select(o); toast(o.id+' 옮김', 1400); return; }
+    pushUndo(); const o = { id:nid(F.cur), t:F.cur, lon:s.lon, lat:s.lat, h:s.h, b:F.bear, s:F.scale, dz:0, name:LIBM[F.cur].n, src:'manual' };
+    F.objs.push(o); save(); rebuild(new Set([o.t])); select(o);
+  }
+  let lastMove = 0, moveT = null;
+  function onMove(e){ if(!F.on || !F.mode) return; const now = performance.now(); const pos = C.Cartesian2.clone(e.endPosition);
+    const run = async () => { lastMove = performance.now(); const code = F.mode === 'move' && F.sel ? F.sel.t : F.cur; const g = await ensureGhost(code); if(!g || !F.mode) return; const s = pickSurface(pos); if(!s){ g.show = false; return; }
+      const b = F.mode === 'move' && F.sel ? F.sel.b : F.bear, sc = F.mode === 'move' && F.sel ? F.sel.s : F.scale; g.modelMatrix = ghostMatrix(s.lon, s.lat, s.h, b, sc); g.show = true; };
+    clearTimeout(moveT); if(now - lastMove > 70) run(); else moveT = setTimeout(run, 70); }
+  const _mv = handler.getInputAction(C.ScreenSpaceEventType.MOUSE_MOVE);
+  handler.setInputAction(e => { try{ onMove(e); }catch(err){} if(_mv) _mv(e); }, C.ScreenSpaceEventType.MOUSE_MOVE);
+  const _rc = handler.getInputAction(C.ScreenSpaceEventType.RIGHT_CLICK);
+  handler.setInputAction(e => { if(F.on && F.mode && STATE.mode === 'site'){ placeAt(e.position); return; } if(_rc) _rc(e); }, C.ScreenSpaceEventType.RIGHT_CLICK);
+  const _lc = handler.getInputAction(C.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction(e => {
+    if(F.on && STATE.mode === 'site' && F.objs.length && !STATE.measure){
+      const s = pickSurface(e.position); const o = s && nearestAt(s.lon, s.lat);
+      if(o){ select(o); return; }
+      if(F.sel && !F.mode){ select(null); }
+    }
+    if(_lc) _lc(e);
+  }, C.ScreenSpaceEventType.LEFT_CLICK);
+  document.addEventListener('keydown', e => {
+    if(!F.on || /INPUT|TEXTAREA|SELECT/.test((e.target && e.target.tagName)||'')) return;
+    if(e.key === 'Escape' && F.mode){ stopMode(); e.preventDefault(); }
+    else if((e.key === 'r' || e.key === 'R') && F.mode === 'place'){ F.bear = ((F.bear + (e.shiftKey ? -15 : 15)) % 360 + 360) % 360; $p('#facBear').value = F.bear; if(F.ghost && F.ghost.show){ const m = F.ghost.modelMatrix; const t = C.Matrix4.getTranslation(m, new C.Cartesian3()); const ct = C.Cartographic.fromCartesian(t); F.ghost.modelMatrix = ghostMatrix(deg(ct.longitude), deg(ct.latitude), ct.height, F.bear, F.scale); } }
+    else if(e.key === 'Delete' && F.sel){ selAct('del'); }
+    else if((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')){ doUndo(); e.preventDefault(); }
+  });
+  function doUndo(){ const s = F.undo.pop(); if(!s){ toast('되돌릴 작업이 없습니다', 1200); return; } F.objs = JSON.parse(s); select(null); save(); rebuild(); toast('되돌림', 1000); }
+
+  P.querySelectorAll('#facLib button').forEach(b => { b.onclick = () => { F.cur = b.dataset.c; renderLib(); if(F.mode === 'place'){ ensureGhost(F.cur); tip(); } };
+    b.oncontextmenu = ev => { ev.preventDefault(); const c = b.dataset.c; F.hide.has(c) ? F.hide.delete(c) : F.hide.add(c); setShow(); renderLib(); toast(LIBM[c].n+(F.hide.has(c)?' 숨김':' 표시'), 1000); }; });
+  $p('#facPlace').onclick = startPlace;
+  $p('#facX').onclick = () => toggleLayer('fac', false);
+  $p('#facBear').onchange = e => { F.bear = ((+e.target.value||0) % 360 + 360) % 360; };
+  $p('#facScale').onchange = e => { F.scale = Math.min(5, Math.max(.2, +e.target.value || 1)); e.target.value = F.scale; };
+  P.querySelectorAll('[data-rot]').forEach(b => b.onclick = () => { F.bear = ((F.bear + +b.dataset.rot) % 360 + 360) % 360; $p('#facBear').value = F.bear; });
+  $p('#facUndo').onclick = doUndo;
+  $p('#facClear').onclick = () => { if(!F.objs.length) return; if(!confirm('배치된 시설물 '+F.objs.length+'개를 모두 지울까요? (되돌리기 가능)')) return; pushUndo(); F.objs = []; select(null); save(); rebuild(); };
+  $p('#facReH').onclick = async () => { if(F.busy || !F.objs.length) return; F.busy = true; try{ const vis = F.objs; for(const o of vis){ o.h = null; delete o.hs; } await heights(vis, msg); save(); rebuild(); msg('높이를 3D 모델 표면에 다시 맞췄습니다 ('+F.objs.length+'개)'); }finally{ F.busy = false; } };
+  $p('#facGo').onclick = () => flyTo(F.objs);
+  $p('#facSample').onclick = () => loadSample(true);
+  $p('#facFileB').onclick = () => $p('#facFile').click();
+  $p('#facFile').onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if(f) importFile(f); };
+  $p('#facTpl').onclick = () => template();
+  P.querySelectorAll('[data-ex]').forEach(b => b.onclick = () => exportAs(b.dataset.ex));
+
+  function flyTo(list){ if(!list || !list.length) return; const pts = list.map(o => C.Cartesian3.fromDegrees(o.lon, o.lat, (o.h||0))); const bs = C.BoundingSphere.fromPoints(pts); camera.flyToBoundingSphere(bs, { offset: new C.HeadingPitchRange(rad(20), rad(-38), Math.max(150, bs.radius*2.2)), duration:1.6 }); }
+
+  // 배치 지역을 덮는 SISTECH 3D 모델(20 km 안)이 꺼져 있으면 안내 · 로드 전이면 불러옴(3D 모델 패널에서 꺼 둔 경우는 그대로 둠)
+  async function coverNote(list){ if(!list.length) return ''; const lon = list.reduce((s,o)=>s+o.lon,0)/list.length, lat = list.reduce((s,o)=>s+o.lat,0)/list.length;
+    const near = (typeof PROJECTS!=='undefined' ? PROJECTS : []).filter(p=>p.tsId).map(p=>({ p, d: Math.hypot((p.lon-lon)*88, (p.lat-lat)*111) })).sort((a,b)=>a.d-b.d)[0];
+    if(!near || near.d > 20) return '<br><span style="color:var(--text-dim)">이 지역에는 SISTECH 3D 모델이 없어 지형 높이에 놓았습니다</span>';
+    const p = near.p; if(!p.ts){ try{ await ensureTileset(p); }catch(e){} }
+    if(p.ts && !p.ts.show) return '<br><span class="warn">'+esc(p.name)+' 3D 모델이 꺼져 있습니다 · 시설물은 3D 모델 표면 높이에 있어 떠 보일 수 있음 (왼쪽 3D 모델 › '+esc(p.name)+' 켜기)</span>';
+    return ''; }
+  // 카메라 이동(1.6초) 후 3D 타일이 다 올라올 때까지 최대 10초 대기
+  async function waitTiles(prog){ await new Promise(r=>setTimeout(r, 1900)); const t0 = performance.now();
+    while(performance.now() - t0 < 10000){ const ts = (typeof PROJECTS!=='undefined' ? PROJECTS : []).filter(p=>p.ts && p.ts.show); if(!ts.length || ts.every(p=>p.ts.tilesLoaded)) break; if(prog) prog('3D 모델 불러오는 중… '+Math.round((performance.now()-t0)/1000)+'초'); await new Promise(r=>setTimeout(r, 400)); } }
+
+  /* ---------- 송도 샘플 ---------- */
+  const SAMPLE = [[3,0.0423061,0.0031117,270,"교차로 신호등",6.4],[4,0.0423734,0.0030865,225,"교통안전표지",6.34],[9,0.0422248,0.0031501,0,"횡단보도 볼라드",6.41],[9,0.0422368,0.0031405,0,"횡단보도 볼라드",6.41],[9,0.0422488,0.003131,0,"횡단보도 볼라드",6.41],[3,0.0423061,0.0028322,0,"교차로 신호등",6.46],[4,0.0422745,0.0027788,315,"교통안전표지",6.43],[9,0.0423544,0.0028968,0,"횡단보도 볼라드",6.59],[9,0.0423424,0.0028873,0,"횡단보도 볼라드",6.61],[9,0.0423304,0.0028778,0,"횡단보도 볼라드",6.55],[3,0.0419544,0.0028322,90,"교차로 신호등",7],[4,0.0418871,0.0028574,45,"교통안전표지",6.95],[9,0.0420357,0.0027938,0,"횡단보도 볼라드",6.95],[9,0.0420237,0.0028034,0,"횡단보도 볼라드",6.92],[9,0.0420117,0.0028129,0,"횡단보도 볼라드",6.94],[3,0.0419544,0.0031117,180,"교차로 신호등",6.65],[4,0.041986,0.0031651,135,"교통안전표지",6.58],[9,0.0419061,0.0030471,0,"횡단보도 볼라드",6.59],[9,0.0419181,0.0030566,0,"횡단보도 볼라드",6.59],[9,0.0419301,0.0030661,0,"횡단보도 볼라드",6.59],[3,0.0362273,0.0017673,270,"교차로 신호등",7.42],[4,0.0362945,0.0017422,225,"교통안전표지",7.3],[9,0.036146,0.0018057,0,"횡단보도 볼라드",7.33],[9,0.036158,0.0017962,0,"횡단보도 볼라드",7.86],[9,0.03617,0.0017867,0,"횡단보도 볼라드",7.97],[3,0.0362273,0.0014879,0,"교차로 신호등",7.38],[4,0.0361956,0.0014344,315,"교통안전표지",7.38],[9,0.0362756,0.0015525,0,"횡단보도 볼라드",7.23],[9,0.0362636,0.0015429,0,"횡단보도 볼라드",7.24],[9,0.0362516,0.0015334,0,"횡단보도 볼라드",7.25],[3,0.0358755,0.0014879,90,"교차로 신호등",7.33],[4,0.0358083,0.001513,45,"교통안전표지",7.33],[9,0.0359568,0.0014495,0,"횡단보도 볼라드",7.33],[9,0.0359448,0.001459,0,"횡단보도 볼라드",7.33],[9,0.0359328,0.0014685,0,"횡단보도 볼라드",7.33],[3,0.0358755,0.0017673,180,"교차로 신호등",7.96],[4,0.0359072,0.0018208,135,"교통안전표지",7.46],[9,0.0358272,0.0017027,0,"횡단보도 볼라드",7.36],[9,0.0358392,0.0017123,0,"횡단보도 볼라드",7.36],[9,0.0358512,0.0017218,0,"횡단보도 볼라드",8.31],[3,0.0365985,0.001225,270,"교차로 신호등",7.65],[4,0.0366657,0.0011999,225,"교통안전표지",7.06],[9,0.0365172,0.0012634,0,"횡단보도 볼라드",7.23],[9,0.0365292,0.0012539,0,"횡단보도 볼라드",7.22],[9,0.0365412,0.0012444,0,"횡단보도 볼라드",7.22],[3,0.0365985,0.0009456,0,"교차로 신호등",7.19],[4,0.0365668,0.0008921,315,"교통안전표지",7.26],[9,0.0366468,0.0010102,0,"횡단보도 볼라드",6.94],[9,0.0366348,0.0010006,0,"횡단보도 볼라드",7.38],[9,0.0366228,0.0009911,0,"횡단보도 볼라드",7.34],[3,0.0362467,0.0009456,90,"교차로 신호등",7.29],[4,0.0361795,0.0009707,45,"교통안전표지",7.31],[9,0.036328,0.0009072,0,"횡단보도 볼라드",7.31],[9,0.036316,0.0009167,0,"횡단보도 볼라드",7.29],[9,0.036304,0.0009262,0,"횡단보도 볼라드",7.29],[3,0.0362467,0.001225,180,"교차로 신호등",7.38],[4,0.0362784,0.0012785,135,"교통안전표지",7.33],[9,0.0361984,0.0011604,0,"횡단보도 볼라드",7.55],[9,0.0362104,0.00117,0,"횡단보도 볼라드",7.59],[9,0.0362224,0.0011795,0,"횡단보도 볼라드",7.57],[3,0.0433937,0.0040962,270,"교차로 신호등",6.3],[4,0.0434609,0.0040711,225,"교통안전표지",6.29],[9,0.0433124,0.0041346,0,"횡단보도 볼라드",6.22],[9,0.0433244,0.0041251,0,"횡단보도 볼라드",6.33],[9,0.0433364,0.0041156,0,"횡단보도 볼라드",6.33],[3,0.0433937,0.0038168,0,"교차로 신호등",6.36],[4,0.043362,0.0037633,315,"교통안전표지",6.22],[9,0.043442,0.0038814,0,"횡단보도 볼라드",6.38],[9,0.04343,0.0038718,0,"횡단보도 볼라드",6.37],[9,0.043418,0.0038623,0,"횡단보도 볼라드",6.36],[3,0.0430419,0.0038168,90,"교차로 신호등",6.19],[4,0.0429747,0.0038419,45,"교통안전표지",6.15],[9,0.0431232,0.0037784,0,"횡단보도 볼라드",6.26],[9,0.0431112,0.0037879,0,"횡단보도 볼라드",6.24],[9,0.0430992,0.0037974,0,"횡단보도 볼라드",6.23],[3,0.0430419,0.0040962,180,"교차로 신호등",6.44],[4,0.0430736,0.0041497,135,"교통안전표지",6.22],[9,0.0429936,0.0040316,0,"횡단보도 볼라드",6.13],[9,0.0430056,0.0040412,0,"횡단보도 볼라드",6.22],[9,0.0430176,0.0040507,0,"횡단보도 볼라드",6.22],[5,0.0444891,0.0001432,311,"쉐라톤호텔 정류장",6.27],[5,0.0432334,0.002299,37,"버스정류장",6.18],[8,0.0432624,0.0022818,37,"정류장 휴지통",6.19],[5,0.035716,0.0023249,242,"센트럴파크역 정류장",7.59],[8,0.0356989,0.0023503,242,"정류장 휴지통",7.62],[5,0.0444066,0.0000311,311,"포스코타워앤쉐라톤호텔 정류장",6.34],[8,0.0444304,0.0000528,311,"정류장 휴지통",6.34],[5,0.0437116,0.0042487,310,"송도자이하버뷰2단지(정문) 정류장",6.31],[8,0.0437348,0.0042708,310,"정류장 휴지통",6.3],[5,0.0435424,0.0044139,130,"송도자이하버뷰2단지(정문) 정류장",6.36],[8,0.0435192,0.0043918,130,"정류장 휴지통",6.63],[5,0.0418972,0.0048424,218,"송도자이하버뷰2단지(205동) 정류장",12.45],[8,0.0418686,0.0048601,218,"정류장 휴지통",12.12],[5,0.0442457,0.0056216,40,"송도자이하버뷰2단지(202동) 정류장",10.44],[8,0.0442733,0.0056031,40,"정류장 휴지통",10.62],[5,0.043206,0.0026802,217,"센트럴파크푸르지오아파트 정류장",6.62],[8,0.043177,0.0026974,217,"정류장 휴지통",6.75],[5,0.0428871,0.0023176,36,"센트럴파크푸르지오아파트 정류장",6.1],[8,0.0429164,0.0023007,36,"정류장 휴지통",6.24],[5,0.0410102,0.0052357,218,"센트럴파크2 정류장",6.31],[8,0.0409816,0.0052534,218,"정류장 휴지통",6.34],[5,0.0437979,0.0002771,130,"센트럴공원 정류장",6.45],[8,0.0437747,0.0002551,130,"정류장 휴지통",6.58],[5,0.0444294,0.0058187,220,"더샵하버뷰 정류장",6.5],[8,0.0444018,0.0058373,220,"정류장 휴지통",6.5],[1,0.0386903,0.0049284,38,"센트럴로 가로등",7.12],[1,0.0389649,0.0047571,38,"센트럴로 가로등",6.91],[1,0.0392315,0.0045905,38,"센트럴로 가로등",6.95],[1,0.039498,0.0044238,38,"센트럴로 가로등",6.88],[1,0.0397646,0.0042571,38,"센트럴로 가로등",7.05],[1,0.0400401,0.0040849,38,"센트럴로 가로등",6.86],[1,0.0403066,0.0039183,38,"센트럴로 가로등",6.84],[1,0.0405734,0.0037515,38,"센트럴로 가로등",6.85],[1,0.04084,0.0035849,38,"센트럴로 가로등",6.93],[1,0.0411066,0.0034182,38,"센트럴로 가로등",6.81],[1,0.0413732,0.0032516,38,"센트럴로 가로등",7.42],[1,0.0416398,0.003085,38,"센트럴로 가로등",6.86],[1,0.0444084,0.0057476,220,"해돋이로 가로등",6.5],[1,0.0441497,0.0059219,220,"해돋이로 가로등",6.5],[1,0.0440107,0.0057918,40,"해돋이로 가로등",6.5],[1,0.0437521,0.0059661,40,"해돋이로 가로등",6.09],[1,0.0423159,0.0030099,312,"도로 가로등",6.46],[1,0.0425441,0.003215,311,"도로 가로등",6.34],[1,0.0427685,0.0034171,311,"도로 가로등",6.18],[1,0.042993,0.0036191,311,"도로 가로등",6.05],[1,0.043227,0.0038319,310,"도로 가로등",6.28],[1,0.0439338,0.0045069,310,"도로 가로등",6.22],[1,0.0441593,0.0047073,312,"도로 가로등",6.19],[1,0.0443881,0.0049063,312,"도로 가로등",6.08],[1,0.0421551,0.0031231,132,"도로 가로등",6.49],[1,0.042383,0.0033279,131,"도로 가로등",6.68],[1,0.0426075,0.00353,131,"도로 가로등",6.17],[1,0.0428319,0.0037321,131,"도로 가로등",6.12],[1,0.0430619,0.003941,130,"도로 가로등",6.14],[1,0.0437687,0.004616,130,"도로 가로등",6.21],[1,0.0440007,0.0048225,132,"도로 가로등",6.19],[1,0.0442296,0.0050214,132,"도로 가로등",6.19],[1,0.0444584,0.0052204,132,"도로 가로등",6.19],[1,0.0444194,0.000829,130,"도로 가로등",6.2],[1,0.0442014,0.0006225,130,"도로 가로등",6.83],[1,0.0439834,0.0004161,130,"도로 가로등",6.2],[1,0.0437654,0.0002096,130,"도로 가로등",6.22],[1,0.0444032,0.0001772,311,"컨벤시아대로 가로등",6.21],[1,0.0444933,0.00026,310,"컨벤시아대로 가로등",6.19],[1,0.0419375,0.0032831,218,"센트럴로 가로등",6.56],[1,0.0416696,0.0034484,218,"센트럴로 가로등",6.63],[1,0.0414017,0.0036137,218,"센트럴로 가로등",6.63],[1,0.0411339,0.003779,218,"센트럴로 가로등",6.8],[1,0.040866,0.0039444,218,"센트럴로 가로등",6.81],[1,0.040596,0.004111,218,"센트럴로 가로등",6.76],[1,0.0403281,0.0042764,218,"센트럴로 가로등",6.91],[1,0.0400602,0.0044417,218,"센트럴로 가로등",6.97],[1,0.0397923,0.004607,218,"센트럴로 가로등",6.88],[1,0.0395245,0.0047724,218,"센트럴로 가로등",6.96],[1,0.0392522,0.0049404,218,"센트럴로 가로등",6.92],[1,0.0389774,0.0051098,218,"센트럴로 가로등",6.97],[1,0.0386809,0.0053037,220,"센트럴로 가로등",7.08],[1,0.0384221,0.005478,220,"센트럴로 가로등",7.13],[1,0.0381607,0.0056541,220,"센트럴로 가로등",7.19],[1,0.0379019,0.0058284,220,"센트럴로 가로등",7.23],[1,0.0372717,0.0059091,40,"센트럴로 가로등",7.3],[1,0.0375336,0.00573,41,"센트럴로 가로등",7.23],[1,0.0377888,0.0055524,41,"센트럴로 가로등",7.24],[1,0.038049,0.0053713,41,"센트럴로 가로등",7.17],[1,0.0383042,0.0051937,41,"센트럴로 가로등",7.21],[1,0.0385894,0.0049958,42,"센트럴로 가로등",7.18],[1,0.0361032,0.0017006,242,"인천타워대로 가로등",7.36],[1,0.035943,0.0019382,242,"인천타워대로 가로등",7.43],[1,0.0357793,0.0021811,242,"인천타워대로 가로등",7.69],[1,0.0356191,0.0024186,242,"인천타워대로 가로등",7.56],[1,0.0362696,0.0001064,62,"인천타워대로 가로등",7.3],[1,0.0369418,0.0004616,242,"인천타워대로 가로등",7.12],[1,0.0367823,0.0006994,242,"인천타워대로 가로등",7.34],[1,0.0364576,0.0011822,241,"인천타워대로 가로등",7.25],[1,0.0362956,0.001419,241,"인천타워대로 가로등",7.33],[1,0.0371228,0.0002059,240,"인천타워대로 가로등",7.08],[1,0.0356478,0.0010307,61,"인천타워대로 가로등",7.41],[1,0.035812,0.0007949,61,"인천타워대로 가로등",7.29],[1,0.0359817,0.0005512,61,"인천타워대로 가로등",7.36],[1,0.0361459,0.0003154,61,"인천타워대로 가로등",7.31],[1,0.036725,0.0014589,218,"테크노파크로 가로등",6.94],[1,0.0388913,0.0001325,218,"테크노파크로 가로등",6.44],[1,0.0386242,0.0002985,218,"테크노파크로 가로등",6.55],[1,0.0383358,0.000478,218,"테크노파크로 가로등",6.44],[1,0.0380621,0.0006477,218,"테크노파크로 가로등",6.36],[1,0.0377949,0.0008137,218,"테크노파크로 가로등",6.31],[1,0.0375276,0.0009796,218,"테크노파크로 가로등",6.44],[1,0.0372582,0.0011463,218,"테크노파크로 가로등",6.64],[1,0.0369892,0.0013133,218,"테크노파크로 가로등",6.84],[1,0.0384918,0.0001641,38,"테크노파크로 가로등",6.45],[1,0.0382039,0.0003433,38,"테크노파크로 가로등",6.31],[1,0.0379299,0.0005132,38,"테크노파크로 가로등",6.06],[1,0.0376626,0.0006792,38,"테크노파크로 가로등",6.21],[1,0.0373953,0.0008451,38,"테크노파크로 가로등",6.51],[1,0.0371263,0.0010116,38,"테크노파크로 가로등",6.54],[1,0.0368568,0.0011788,38,"테크노파크로 가로등",6.71],[1,0.0423345,0.0026663,36,"센트럴로 가로등",6.68],[1,0.0426087,0.0025077,36,"센트럴로 가로등",6.45],[1,0.0431573,0.0021906,36,"센트럴로 가로등",6.1],[1,0.0434315,0.002032,36,"센트럴로 가로등",6.03],[1,0.0437058,0.0018734,36,"센트럴로 가로등",5.97],[1,0.0439801,0.0017149,36,"센트럴로 가로등",5.86],[1,0.0442543,0.0015563,36,"센트럴로 가로등",5.74],[1,0.0443645,0.0018323,217,"센트럴로 가로등",5.5],[1,0.044093,0.0019939,217,"센트럴로 가로등",5.95],[1,0.0438215,0.0021554,217,"센트럴로 가로등",5.95],[1,0.04355,0.0023169,217,"센트럴로 가로등",5.77],[1,0.0432784,0.0024785,217,"센트럴로 가로등",6.1],[1,0.0430069,0.00264,217,"센트럴로 가로등",6.21],[1,0.0427354,0.0028016,217,"센트럴로 가로등",6.15],[1,0.0424033,0.0029991,217,"센트럴로 가로등",6.39],[1,0.0421804,0.0028882,311,"도로 가로등",6.53],[1,0.0420194,0.0030012,131,"도로 가로등",6.61],[2,0.0388943,0.0047875,139,"센트럴로 가로수",6.91],[2,0.0391076,0.0046542,204,"센트럴로 가로수",6.89],[2,0.0393208,0.0045209,52,"센트럴로 가로수",6.95],[2,0.0399695,0.0041153,324,"센트럴로 가로수",6.86],[2,0.0401827,0.003982,86,"센트럴로 가로수",7.45],[2,0.0404495,0.0038152,168,"센트럴로 가로수",7.37],[2,0.0406628,0.0036819,39,"센트럴로 가로수",6.83],[2,0.0413026,0.003282,143,"센트럴로 가로수",6.81],[2,0.0415159,0.0031487,40,"센트럴로 가로수",6.78],[2,0.0417292,0.0030154,307,"센트럴로 가로수",6.86],[2,0.0444947,0.0057035,21,"해돋이로 가로수",10.44],[2,0.0442792,0.0058488,118,"해돋이로 가로수",6.05],[2,0.0440723,0.0059883,241,"해돋이로 가로수",6.5],[2,0.0443382,0.0055569,319,"해돋이로 가로수",6.03],[2,0.0441227,0.0057022,110,"해돋이로 가로수",10.98],[2,0.0439157,0.0058417,212,"해돋이로 가로수",6.5],[2,0.0425019,0.0031607,117,"도로 가로수",6.28],[2,0.0426814,0.0033224,169,"도로 가로수",6.16],[2,0.042861,0.003484,64,"도로 가로수",6.02],[2,0.0434048,0.0039848,48,"도로 가로수",6.34],[2,0.0435784,0.0041505,83,"도로 가로수",6.26],[2,0.0441159,0.0046537,189,"도로 가로수",6.19],[2,0.044299,0.0048128,75,"도로 가로수",6.19],[2,0.0444821,0.004972,286,"도로 가로수",6.03],[2,0.0423205,0.0032879,36,"도로 가로수",6.62],[2,0.0425,0.0034496,293,"도로 가로수",6.23],[2,0.0426796,0.0036112,205,"도로 가로수",6.13],[2,0.0432188,0.0041077,103,"도로 가로수",6.73],[2,0.0433924,0.0042735,213,"도로 가로수",6.41],[2,0.0439373,0.0047833,110,"도로 가로수",6.19],[2,0.0441204,0.0049425,87,"도로 가로수",6.19],[2,0.0443035,0.0051016,127,"도로 가로수",6.19],[2,0.044329,0.0007602,31,"도로 가로수",6.3],[2,0.0436315,0.0000995,246,"도로 가로수",6.43],[2,0.0442571,0.000028,330,"컨벤시아대로 가로수",6.12],[2,0.0420083,0.003253,78,"센트럴로 가로수",6.56],[2,0.0417851,0.0033908,156,"센트럴로 가로수",6.63],[2,0.0415708,0.003523,1,"센트럴로 가로수",6.58],[2,0.0413565,0.0036553,105,"센트럴로 가로수",6.71],[2,0.0409279,0.0039198,214,"센트럴로 가로수",6.77],[2,0.0407136,0.0040521,288,"센트럴로 가로수",6.91],[2,0.0404971,0.0041857,183,"센트럴로 가로수",6.83],[2,0.0402828,0.0043179,237,"센트럴로 가로수",6.84],[2,0.0398542,0.0045825,42,"센트럴로 가로수",6.88],[2,0.03964,0.0047147,246,"센트럴로 가로수",6.97],[2,0.0393945,0.0048662,39,"센트럴로 가로수",6.93],[2,0.0391802,0.0049985,147,"센트럴로 가로수",6.91],[2,0.0384913,0.0054455,139,"센트럴로 가로수",7.09],[2,0.0382816,0.0055868,254,"센트럴로 가로수",7.05],[2,0.0380746,0.0057262,286,"센트럴로 가로수",7.2],[2,0.0371588,0.0059699,258,"센트럴로 가로수",7.33],[2,0.0373971,0.0058107,156,"센트럴로 가로수",7.28],[2,0.0376012,0.0056686,242,"센트럴로 가로수",7.27],[2,0.0382187,0.0052389,328,"센트럴로 가로수",7.2],[2,0.0384228,0.0050968,199,"센트럴로 가로수",7.21],[2,0.0359924,0.0018878,340,"인천타워대로 가로수",7.45],[2,0.0358642,0.0020779,220,"인천타워대로 가로수",7.43],[2,0.0368315,0.000649,22,"인천타워대로 가로수",7.33],[2,0.0367039,0.0008393,148,"인천타워대로 가로수",7.34],[2,0.0361778,0.0016135,355,"인천타워대로 가로수",7.3],[2,0.0372072,0.0001097,177,"인천타워대로 가로수",7.05],[2,0.0370732,0.0002972,178,"인천타워대로 가로수",7.09],[2,0.0355319,0.0011748,138,"인천타워대로 가로수",7.41],[2,0.0359315,0.000601,313,"인천타워대로 가로수",7.34],[2,0.0360628,0.0004123,22,"인천타워대로 가로수",7.31],[2,0.0361942,0.0002237,5,"인천타워대로 가로수",7.33],[2,0.0365086,0.0011425,237,"테크노파크로 가로수",7.31],[2,0.0365513,0.0013281,132,"테크노파크로 가로수",7.12],[2,0.036353,0.0016419,221,"테크노파크로 가로수",7.22],[2,0.038962,0.0001022,71,"테크노파크로 가로수",6.49],[2,0.0387483,0.0002351,315,"테크노파크로 가로수",6.51],[2,0.0385346,0.0003679,198,"테크노파크로 가로수",6.58],[2,0.0378834,0.0007724,38,"테크노파크로 가로수",6.44],[2,0.0376696,0.0009051,287,"테크노파크로 가로수",6.41],[2,0.0374272,0.0010555,6,"테크노파크로 가로수",6.55],[2,0.0371578,0.0012221,106,"테크노파크로 가로수",6.77],[2,0.0369441,0.001355,115,"테크노파크로 가로수",6.85],[2,0.0385992,0.0000837,73,"테크노파크로 가로수",6.45],[2,0.0383855,0.0002165,279,"테크노파크로 가로수",6.41],[2,0.0377344,0.0006209,259,"테크노파크로 가로수",6.15],[2,0.0375206,0.0007537,77,"테크노파크로 가로수",6.38],[2,0.0372786,0.0009038,155,"테크노파크로 가로수",6.57],[2,0.0370087,0.0010707,30,"테크노파크로 가로수",6.61],[2,0.036795,0.0012036,258,"테크노파크로 가로수",6.74],[2,0.0422625,0.0026946,95,"센트럴로 가로수",6.63],[2,0.042491,0.0025624,19,"센트럴로 가로수",6.41],[2,0.0427105,0.0024356,343,"센트럴로 가로수",6.46],[2,0.0433687,0.002055,220,"센트럴로 가로수",6.03],[2,0.0435881,0.0019281,202,"센트럴로 가로수",6],[2,0.0438075,0.0018013,19,"센트럴로 가로수",5.95],[2,0.0440269,0.0016744,333,"센트럴로 가로수",5.85],[2,0.0444658,0.0014207,166,"센트럴로 가로수",5.74],[2,0.0444269,0.0018087,255,"센트럴로 가로수",5.62],[2,0.0442097,0.0019379,175,"센트럴로 가로수",5.99],[2,0.0439925,0.0020671,153,"센트럴로 가로수",5.99],[2,0.0437753,0.0021963,335,"센트럴로 가로수",6.03],[2,0.0433409,0.0024548,203,"센트럴로 가로수",5.98],[2,0.0431237,0.002584,27,"센트럴로 가로수",6.08],[2,0.0429065,0.0027133,31,"센트럴로 가로수",6.45],[2,0.0426893,0.0028425,326,"센트럴로 가로수",6.32],[10,0.0394368,0.0044346,38,"센트럴로 소화전",6.89],[10,0.0407699,0.0036012,38,"센트럴로 소화전",6.78],[10,0.0443639,0.0055255,40,"해돋이로 소화전",6.5],[10,0.0429759,0.0035712,311,"도로 소화전",6.1],[10,0.0440726,0.0046,312,"도로 소화전",6.24],[10,0.0427742,0.0037126,131,"도로 소화전",6.71],[10,0.0438739,0.0047442,132,"도로 소화전",6.22],[10,0.0442169,0.0006708,130,"도로 소화전",6.3],[10,0.041463,0.0036032,218,"센트럴로 소화전",6.68],[10,0.0401215,0.0044312,218,"센트럴로 소화전",6.84],[10,0.0386639,0.0053434,220,"센트럴로 소화전",7.05],[10,0.0380056,0.0053728,41,"센트럴로 소화전",7.27],[10,0.0356698,0.0023892,242,"인천타워대로 소화전",7.56],[10,0.0355967,0.0010595,61,"인천타워대로 소화전",7.51],[10,0.0381947,0.0005928,218,"테크노파크로 소화전",6.39],[10,0.038029,0.0004244,38,"테크노파크로 소화전",6.19],[10,0.0428213,0.0023581,36,"센트럴로 소화전",6.15],[10,0.0441927,0.0015653,36,"센트럴로 소화전",5.78],[10,0.0428784,0.0027434,217,"센트럴로 소화전",6.4],[6,0.038577,0.0027822,308,"공원 벤치",6.62],[8,0.0385881,0.0027936,308,"공원 휴지통",6.62],[6,0.0385807,0.0032346,99,"공원 벤치",6.91],[6,0.0388003,0.0040713,279,"공원 벤치",8.54],[8,0.0388031,0.0040855,279,"공원 휴지통",6.95],[6,0.0365477,0.0056843,347,"공원 벤치",7.33],[8,0.0365653,0.0056876,347,"공원 휴지통",7.32],[7,0.0414162,0.001018,21,"공원 파고라",5.87],[6,0.0410737,0.002449,63,"공원 벤치",9.77],[6,0.0441709,0.0011555,172,"공원 벤치",5.86],[8,0.044153,0.0011534,172,"공원 휴지통",5.86],[6,0.0432178,0.0013222,71,"공원 벤치",7.56],[7,0.0423875,0.0017405,271,"공원 파고라",11.14],[6,0.0415375,0.0021662,7,"공원 벤치",10.08],[6,0.038714,0.0027534,20,"공원 벤치",6.32],[8,0.0387311,0.0027486,20,"공원 휴지통",6.44],[6,0.0396187,0.0023624,210,"공원 벤치",8.45],[6,0.0381615,0.0032437,220,"공원 벤치",6.92],[8,0.0381477,0.003253,220,"공원 휴지통",6.91],[7,0.0374677,0.0038522,9,"공원 파고라",6.13],[6,0.0372581,0.0045853,221,"공원 벤치",7.55],[8,0.0372444,0.0045947,221,"공원 휴지통",7.55],[6,0.036405,0.00512,41,"공원 벤치",6.9],[6,0.0358861,0.0047801,34,"공원 벤치",7.53],[7,0.0363243,0.0043221,157,"공원 파고라",7.87],[6,0.0368901,0.0037021,269,"공원 벤치",6.92],[6,0.0384107,0.0022617,98,"공원 벤치",6.62],[8,0.0384082,0.0022474,98,"공원 휴지통",6.62],[6,0.0385819,0.0015073,206,"공원 벤치",7.94],[6,0.0395967,0.0012028,18,"공원 벤치",6.87],[8,0.0396139,0.0011983,18,"공원 휴지통",6.87],[7,0.0406983,0.0010812,126,"공원 파고라",5.96],[6,0.0410357,0.003337,222,"공원 벤치",6.84],[6,0.041423,0.0026617,157,"공원 벤치",6.81],[6,0.0419274,0.002337,96,"공원 벤치",6.63],[8,0.0419257,0.0023227,96,"공원 휴지통",6.68],[6,0.0403603,0.0030573,114,"공원 벤치",8.15],[6,0.0413935,0.0029125,317,"공원 벤치",6.59],[8,0.0414068,0.0029222,317,"공원 휴지통",6.59],[7,0.0379458,0.0025475,252,"공원 파고라",7.04],[6,0.0369257,0.0022566,155,"공원 벤치",8.1],[8,0.0369092,0.0022506,155,"공원 휴지통",8.1],[6,0.0366562,0.0028499,128,"공원 벤치",10.62],[6,0.0363587,0.0021173,153,"공원 벤치",7.55],[8,0.0363426,0.0021108,153,"공원 휴지통",7.43],[6,0.0361473,0.0042287,257,"공원 벤치",6.89],[6,0.0416993,0.0006617,25,"공원 벤치",6.82],[8,0.0417156,0.0006556,25,"공원 휴지통",6.84],[6,0.0427603,0.0004467,207,"공원 벤치",6.68],[6,0.0402108,0.0027438,245,"공원 벤치",8.15],[8,0.040203,0.0027568,245,"공원 휴지통",8.19],[7,0.0394183,0.0030183,245,"공원 파고라",6.44],[6,0.0425797,0.0012141,2,"공원 벤치",11.14],[8,0.0425977,0.0012135,2,"공원 휴지통",11.14],[6,0.0416095,0.0018942,250,"공원 벤치",9.93],[6,0.0417076,0.0014426,177,"공원 벤치",13.91],[8,0.0416896,0.0014419,177,"공원 휴지통",14.17],[6,0.0409611,0.0020346,260,"공원 벤치",9.93],[7,0.0412872,0.0012397,155,"공원 파고라",9.84],[6,0.0422895,0.0009606,199,"공원 벤치",6.82],[6,0.0424532,0.001585,217,"공원 벤치",17.06],[8,0.0424387,0.0015935,217,"공원 휴지통",18.07],[6,0.0417311,0.0003991,199,"공원 벤치",8.14],[6,0.0427608,0.0000974,2,"공원 벤치",9.11],[8,0.0427788,0.0000968,2,"공원 휴지통",9.04],[7,0.040931,0.0005359,288,"공원 파고라",6.82],[6,0.0407656,0.0007701,18,"공원 벤치",9.86],[8,0.0407828,0.0007657,18,"공원 휴지통",9.84],[6,0.039845,0.0025447,64,"공원 벤치",8.77],[6,0.0393712,0.0028333,296,"공원 벤치",6.44],[8,0.039379,0.0028463,296,"공원 휴지통",6.44],[6,0.0390194,0.0035353,135,"공원 벤치",8.46],[7,0.0391451,0.0042523,16,"공원 파고라",6.91],[6,0.0358491,0.0038784,55,"공원 벤치",8.05],[8,0.0358595,0.0038667,55,"공원 휴지통",8.03],[6,0.0361731,0.0030922,241,"공원 벤치",8.09],[6,0.0385371,0.0022843,95,"공원 벤치",6.62],[8,0.0385356,0.00227,95,"공원 휴지통",6.62],[6,0.0385462,0.0008991,127,"공원 벤치",7.08],[6,0.0374533,0.0031303,211,"공원 벤치",6.07],[6,0.0382233,0.0026371,27,"공원 벤치",6.62],[8,0.0382394,0.0026305,27,"공원 휴지통",6.62],[7,0.0375993,0.0024708,244,"공원 파고라",7.05],[6,0.0377143,0.0029189,198,"공원 벤치",7.04],[8,0.0376971,0.0029233,198,"공원 휴지통",7.05],[6,0.0357634,0.0047045,80,"공원 벤치",7.81],[6,0.0412797,0.0004101,109,"공원 벤치",8.14],[6,0.0416805,0.0000585,288,"공원 벤치",8.14],[8,0.0416862,0.0000721,288,"공원 휴지통",8.14],[6,0.040907,0.0001886,95,"공원 벤치",9.86],[6,0.0395382,0.0001964,20,"공원 벤치",6.44],[6,0.0403542,0.0003937,119,"공원 벤치",9.86],[8,0.0403455,0.0003811,119,"공원 휴지통",9.86],[7,0.0402696,0.0009008,107,"공원 파고라",8.08],[6,0.0408537,0.0006906,197,"공원 벤치",8.08],[8,0.0408364,0.0006949,197,"공원 휴지통",8.08],[6,0.0422821,0.0003166,199,"공원 벤치",6.82],[6,0.0421911,0.0003909,19,"공원 벤치",6.84],[8,0.0422083,0.0003862,19,"공원 휴지통",6.84],[7,0.0435916,0.0003592,42,"공원 파고라",6.3],[6,0.0442413,0.001043,132,"공원 벤치",7.4],[6,0.0439911,0.0006887,131,"공원 벤치",6.56],[8,0.0439791,0.0006779,131,"공원 휴지통",6.55],[7,0.0436337,0.0009898,346,"공원 파고라",6.91],[6,0.0433354,0.0007264,141,"공원 벤치",6.91],[8,0.0433215,0.0007172,141,"공원 휴지통",6.92],[6,0.0423166,0.0007635,11,"공원 벤치",6.11],[6,0.0410555,0.0013962,236,"공원 벤치",5.96],[8,0.0410455,0.0014082,236,"공원 휴지통",5.96],[6,0.0401946,0.0018342,89,"공원 벤치",6.74],[7,0.0412767,0.001743,293,"공원 파고라",13.91],[6,0.0414967,0.0024055,20,"공원 벤치",7],[6,0.0417303,0.0025607,36,"공원 벤치",6.61],[8,0.041745,0.0025523,36,"공원 휴지통",6.61],[6,0.0423842,0.0024494,274,"공원 벤치",6.45],[6,0.0426252,0.0018979,29,"공원 벤치",6.24],[8,0.042641,0.0018908,29,"공원 휴지통",6.24],[6,0.043777,0.0013778,304,"공원 벤치",5.86],[8,0.0437871,0.0013897,304,"공원 휴지통",5.86],[6,0.0438326,0.0015289,218,"공원 벤치",5.86],[6,0.0440878,0.001426,128,"공원 벤치",5.78],[8,0.0440767,0.0014146,128,"공원 휴지통",5.78],[6,0.0403839,0.0035476,357,"공원 벤치",6.81],[7,0.0396549,0.0037242,254,"공원 파고라",7.05],[6,0.0385858,0.0037428,279,"공원 벤치",7.78],[6,0.0387727,0.0043284,279,"공원 벤치",7.68],[8,0.0387756,0.0043426,279,"공원 휴지통",7.64],[6,0.0371754,0.0044713,35,"공원 벤치",6.73],[6,0.0360348,0.0052569,169,"공원 벤치",6.88],[8,0.0360171,0.0052542,169,"공원 휴지통",6.97],[6,0.0370992,0.0046252,219,"공원 벤치",7.3],[8,0.0370851,0.0046342,219,"공원 휴지통",7.61],[7,0.0382523,0.0038205,309,"공원 파고라",8.24],[6,0.0377622,0.0044477,92,"공원 벤치",7.55],[6,0.0374996,0.0050444,310,"공원 벤치",7.2],[8,0.0375112,0.0050554,310,"공원 휴지통",7.24],[6,0.0381171,0.0039308,37,"공원 벤치",8.71],[6,0.0383252,0.0042361,266,"공원 벤치",7.78],[8,0.0383241,0.0042504,266,"공원 휴지통",7.78],[7,0.0384453,0.0039652,5,"공원 파고라",7.78],[6,0.0381761,0.0045778,246,"공원 벤치",7.21],[8,0.0381688,0.0045909,246,"공원 휴지통",7.21],[6,0.0377817,0.004733,315,"공원 벤치",7.21]];
+  async function loadSample(ask){
+    if(F.busy) return; if(ask && F.objs.some(o=>o.src==='sample') && !confirm('송도 샘플이 이미 있습니다. 샘플을 다시 배치할까요? (기존 샘플은 지우고 다시 놓음)')) return;
+    F.busy = true; try{
+      pushUndo(); F.objs = F.objs.filter(o => o.src !== 'sample');
+      const seq = {}; const add = SAMPLE.map(([t, dl, dt, b, name, h]) => { const c = 'L'+String(t).padStart(2,'0'); seq[c] = (seq[c]||0)+1; return { id:'S'+c.slice(1)+'-'+String(seq[c]).padStart(3,'0'), t:c, lon:126.6+dl, lat:37.39+dt, h: h==null ? null : h, b, s: c==='L02' ? +(0.85 + ((seq[c]*37)%30)/100).toFixed(2) : 1, dz:0, name, src:'sample' }; });
+      flyTo(add);
+      if(add.some(o=>o.h==null)){ msg('송도 샘플 '+add.length+'개 · 3D 모델 불러오는 중…'); await waitTiles(msg); await heights(add, msg); }
+      F.objs.push(...add); save(); rebuild();
+      const t = add.filter(o=>o.hs==='terrain').length; const note = await coverNote(add);
+      msg('송도 샘플 <b>'+add.length+'개</b> 배치 (OSM 도로·버스정류장·공원 보행로 기준 임의 좌표 · 높이는 인천 3D 모델 표면 실측값 내장)'+(t? ' · '+t+'개는 지형 높이':'')+note);
+    }catch(e){ console.error(e); msg('<span class="warn">샘플 배치 오류: '+esc(e.message)+'</span>'); } finally{ F.busy = false; }
+  }
+
+  /* ---------- 엑셀 / CSV ---------- */
+  let xlsxP = null;
+  const xlsx = () => xlsxP || (xlsxP = new Promise((res, rej) => { if(window.XLSX) return res(window.XLSX); const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'; s.onload = () => res(window.XLSX); s.onerror = () => { xlsxP = null; rej(new Error('엑셀 라이브러리(SheetJS) 로드 실패')); }; document.head.appendChild(s); }));
+  function parseCsv(txt){ const rows = []; let row = [], cell = '', q = false; for(let i=0;i<txt.length;i++){ const ch = txt[i]; if(q){ if(ch === '"'){ if(txt[i+1] === '"'){ cell += '"'; i++; } else q = false; } else cell += ch; } else if(ch === '"') q = true; else if(ch === ',' || ch === '\t'){ row.push(cell); cell = ''; } else if(ch === '\n'){ row.push(cell); rows.push(row); row = []; cell = ''; } else if(ch !== '\r') cell += ch; } if(cell !== '' || row.length){ row.push(cell); rows.push(row); } return rows.filter(r => r.some(c => String(c).trim() !== '')); }
+  const norm = s => String(s==null?'':s).toLowerCase().replace(/[\s_()\[\]°.\-/]/g,'');
+  const COLS = { type:['종류코드','코드','종류','유형','시설물','시설','type','code','category','kind','분류'], lon:['경도','lon','lng','long','longitude','x경도'], lat:['위도','lat','latitude','y위도'], x:['x','tmx','x좌표','동경','easting','e'], y:['y','tmy','y좌표','북위','northing','n'],
+    bear:['방향','방위','각도','회전','heading','bearing','rotation','angle','방향도'], scale:['배율','크기','scale','size'], dz:['높이보정','높이보정m','dz','offset','보정'], id:['관리번호','번호','id','no','시설번호'], name:['이름','명칭','name','비고','설명','memo'], crs:['좌표계','epsg','crs'] };
+  function findCol(hdr, keys){ const H = hdr.map(norm); for(const k of keys){ const i = H.indexOf(norm(k)); if(i >= 0) return i; } for(const k of keys){ if(norm(k).length < 2) continue; const i = H.findIndex(h => h.includes(norm(k))); if(i >= 0) return i; } return -1; }
+  function typeOf(v){ const s = String(v==null?'':v).trim(); if(!s) return null; const m = s.toUpperCase().match(/^L?0*(\d{1,2})$/); if(m){ const c = 'L'+String(+m[1]).padStart(2,'0'); if(LIBM[c]) return c; }
+    const n = norm(s); const alias = { L01:['가로등','보안등','조명','streetlight','lamp'], L02:['가로수','나무','수목','tree'], L03:['신호등','신호기','signal','trafficlight'], L04:['표지','표지판','교통안전표지','sign'], L05:['버스정류장','정류장','쉘터','셸터','busstop','shelter'], L06:['벤치','의자','bench'], L07:['파고라','퍼걸러','정자','그늘막','pergola'], L08:['휴지통','쓰레기통','bin','trash'], L09:['볼라드','차량진입방지','bollard'], L10:['소화전','hydrant'] };
+    for(const [c, a] of Object.entries(alias)) if(a.some(x => n.includes(norm(x)))) return c; return null; }
+  async function importFile(f){
+    if(F.busy) return; F.busy = true; msg('파일 읽는 중… '+esc(f.name));
+    try{
+      let rows;
+      if(/\.(xlsx|xls)$/i.test(f.name)){ const X = await xlsx(); const wb = X.read(await f.arrayBuffer(), { type:'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; rows = X.utils.sheet_to_json(ws, { header:1, raw:true, defval:'' }); }
+      else { const buf = await f.arrayBuffer(); let txt = new TextDecoder('utf-8').decode(buf); if(txt.includes('\uFFFD')) try{ txt = new TextDecoder('euc-kr').decode(buf); }catch(e){} rows = parseCsv(txt.replace(/^\ufeff/,'')); }
+      rows = rows.filter(r => r && r.some(c => String(c).trim() !== ''));
+      if(rows.length < 2) throw new Error('데이터 행이 없습니다');
+      const hdr = rows[0].map(String); const ci = {}; for(const k in COLS) ci[k] = findCol(hdr, COLS[k]);
+      if(ci.lon >= 0 && ci.x === ci.lon) ci.x = -1; if(ci.lat >= 0 && ci.y === ci.lat) ci.y = -1;
+      if(ci.type < 0) throw new Error('종류(코드) 열을 찾지 못했습니다 · 열 이름 예: 종류, 코드');
+      if(!((ci.lon >= 0 && ci.lat >= 0) || (ci.x >= 0 && ci.y >= 0))) throw new Error('좌표 열을 찾지 못했습니다 · 경도/위도 또는 X/Y');
+      const out = [], bad = []; const seqBase = {};
+      for(let r=1; r<rows.length; r++){ const row = rows[r]; const t = typeOf(row[ci.type]); let lon = ci.lon >= 0 ? parseFloat(row[ci.lon]) : NaN, lat = ci.lat >= 0 ? parseFloat(row[ci.lat]) : NaN;
+        if(!(isFinite(lon) && isFinite(lat)) && ci.x >= 0 && ci.y >= 0){ const x = parseFloat(row[ci.x]), y = parseFloat(row[ci.y]); if(isFinite(x) && isFinite(y)){
+          if(Math.abs(x) <= 180 && Math.abs(y) <= 90){ lon = x; lat = y; } else { let code = 5186; const cv = ci.crs >= 0 ? String(row[ci.crs]).match(/518[5-8]/) : null; if(cv) code = +cv[0]; [lon, lat] = tmInv(x, y, code); } } }
+        if(isFinite(lon) && isFinite(lat) && lon < 90 && lat > 100){ const s = lon; lon = lat; lat = s; } // 경위도 열이 뒤바뀐 경우
+        if(!t || !isFinite(lon) || !isFinite(lat) || lon < 120 || lon > 135 || lat < 30 || lat > 45){ bad.push(r+1); continue; }
+        const b = ci.bear >= 0 ? (((parseFloat(row[ci.bear])||0) % 360) + 360) % 360 : 0; const sc = ci.scale >= 0 ? Math.min(5, Math.max(.2, parseFloat(row[ci.scale]) || 1)) : 1; const dz = ci.dz >= 0 ? (parseFloat(row[ci.dz]) || 0) : 0;
+        let id = ci.id >= 0 ? String(row[ci.id]).trim() : ''; if(!id){ seqBase[t] = (seqBase[t]||0)+1; id = 'F'+t.slice(1)+'-'+String(seqBase[t]).padStart(3,'0'); }
+        out.push({ id, t, lon, lat, h:null, b:Math.round(b*10)/10, s:sc, dz, name: ci.name >= 0 ? String(row[ci.name]).trim() : LIBM[t].n, src:'excel' }); }
+      if(!out.length) throw new Error('읽을 수 있는 행이 없습니다 (종류·좌표 확인)'+(bad.length? ' · 오류 행 '+bad.slice(0,8).join(', '):''));
+      const ids = new Set(F.objs.map(o=>o.id)); for(const o of out){ if(ids.has(o.id)) o.id = o.id+'-'+(f.name.replace(/\.[^.]+$/,'').slice(0,8)); ids.add(o.id); }
+      flyTo(out); msg(esc(f.name)+' · '+out.length+'개 읽음 · 3D 모델 불러오는 중…'); await waitTiles(msg);
+      await heights(out, msg); pushUndo(); F.objs.push(...out); save(); rebuild(); const note = await coverNote(out);
+      const by = {}; for(const o of out) by[o.t] = (by[o.t]||0)+1;
+      msg('<b>'+esc(f.name)+'</b> · <b>'+out.length+'개</b> 자동 배치 ('+LIB.filter(l=>by[l.c]).map(l=>l.n+' '+by[l.c]).join(', ')+')'+(bad.length? '<br><span class="warn">건너뛴 행 '+bad.length+'개: '+bad.slice(0,10).join(', ')+(bad.length>10?' …':'')+'</span>':'')
+        +'<br>인식한 열: '+Object.entries(ci).filter(([k,v])=>v>=0).map(([k,v])=>({type:'종류',lon:'경도',lat:'위도',x:'X',y:'Y',bear:'방향',scale:'배율',dz:'높이보정',id:'관리번호',name:'이름',crs:'좌표계'})[k]+'='+esc(hdr[v])).join(' · ')+note);
+    }catch(e){ console.error(e); msg('<span class="warn">불러오기 실패: '+esc(e.message)+'</span>'); } finally{ F.busy = false; }
+  }
+  function rowsOf(list){ return list.map(o => { const [x, y] = tmFwd(o.lon, o.lat, 5186); return { 관리번호:o.id, 종류코드:o.t, 종류:LIBM[o.t].n, 경도:+o.lon.toFixed(7), 위도:+o.lat.toFixed(7), 'X(EPSG5186)':+x.toFixed(3), 'Y(EPSG5186)':+y.toFixed(3), '방향(°)':o.b, 배율:o.s||1, '높이보정(m)':o.dz||0, '설치높이_타원체고(m)':o.h!=null?+o.h.toFixed(3):'', 이름:o.name||'', 입력:o.src||'' }; }); }
+  function dl(name, data, type){ const a = document.createElement('a'); a.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 3000); }
+  const stamp = () => { const d = new Date(); return d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0'); };
+  function libSheet(){ return LIB.map(l => ({ 코드:l.c, 종류:l.n, 분류:l.g, 규격:l.d })); }
+  async function exportAs(kind){
+    if(!F.objs.length){ toast('배치된 시설물이 없습니다', 1500); return; }
+    const rows = rowsOf(F.objs); const base = '시설물배치_'+stamp();
+    if(kind === 'csv'){ const keys = Object.keys(rows[0]); const cell = v => { v = String(v); return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }; dl(base+'.csv', '\ufeff'+keys.map(cell).join(',')+'\r\n'+rows.map(r=>keys.map(k=>cell(r[k])).join(',')).join('\r\n')+'\r\n', 'text/csv;charset=utf-8'); return; }
+    if(kind === 'geojson'){ dl(base+'.geojson', JSON.stringify({ type:'FeatureCollection', name:base, features: F.objs.map((o,i) => ({ type:'Feature', properties: rows[i], geometry:{ type:'Point', coordinates:[+o.lon.toFixed(8), +o.lat.toFixed(8)] } })) }), 'application/geo+json'); return; }
+    try{ const X = await xlsx(); const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(rows), '시설물'); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(libSheet()), '라이브러리'); X.writeFile(wb, base+'.xlsx'); }catch(e){ toast(e.message, 3000); }
+  }
+  async function template(){
+    const ex = SAMPLE.filter((_,i)=>i%24===0).slice(0,20).map(([t, dl, dt, b, name], i) => ({ 관리번호:'T'+String(i+1).padStart(3,'0'), 종류코드:'L'+String(t).padStart(2,'0'), 종류:LIBM['L'+String(t).padStart(2,'0')].n, 경도:+(126.6+dl).toFixed(7), 위도:+(37.39+dt).toFixed(7), '방향(°)':b, 배율:1, '높이보정(m)':0, 이름:name }));
+    const tm = ex.slice(0,5).map(r => { const [x,y] = tmFwd(r.경도, r.위도, 5186); return { 관리번호:r.관리번호+'TM', 종류:r.종류, X:+x.toFixed(2), Y:+y.toFixed(2), 좌표계:'EPSG:5186', 방향:r['방향(°)'], 이름:r.이름 }; });
+    const help = [{ 항목:'종류', 설명:'코드(L01~L10) 또는 이름(가로등, 가로수, 신호등, 표지판, 버스정류장, 벤치, 파고라, 휴지통, 볼라드, 소화전)' }, { 항목:'좌표', 설명:'경도·위도(WGS84) 열, 또는 X·Y 열(TM 미터 · 기본 EPSG:5186, 좌표계 열에 5185/5187 지정 가능)' }, { 항목:'방향(°)', 설명:'시설물 앞면 방위각 · 0=북, 90=동 (가로등 암·신호등 암·정류장 개방면이 향하는 쪽)' }, { 항목:'배율', 설명:'크기 배율 (기본 1, 0.2~5)' }, { 항목:'높이보정(m)', 설명:'자동으로 맞춘 3D 모델 표면 높이에 더할 값' }, { 항목:'관리번호·이름', 설명:'선택 · 없으면 자동 번호' }];
+    try{ const X = await xlsx(); const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(ex), '시설물(경위도)'); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(tm), 'TM좌표 예시'); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(libSheet()), '라이브러리'); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(help), '작성법'); X.writeFile(wb, '시설물배치_양식_'+stamp()+'.xlsx'); }catch(e){ toast(e.message, 3000); }
+  }
+
+  /* ---------- 메뉴 · 켜기/끄기 ---------- */
+  const icon = '<svg viewBox="0 0 24 24"><path d="M8 21h4M10 21V5h6"/><path d="M14 5h6v2h-6z"/><circle cx="18" cy="15" r="3"/><path d="M18 18v3"/></svg>';
+  const cat = { id:'facility', name:'시설물', icon, items:[
+    { id:'fac', q:'가로등·가로수·벤치를 놓아 보려면', name:'시설물 배치 · 라이브러리 10종', src:'오른쪽 클릭 수동 설치 · 엑셀/CSV 좌표 자동 입력 · 송도 샘플 475개 · 엑셀/CSV/GeoJSON 내보내기', type:'layer' } ]};
+  if(!MENUS.site.some(c=>c.id==='facility')){ const ei = MENUS.site.findIndex(c=>c.id==='export'); MENUS.site.splice(ei<0 ? MENUS.site.length : ei, 0, cat); }
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  async function on(){
+    F.on = true; P.classList.add('open'); try{ const c = document.getElementById('card'); if(c) c.classList.remove('open'); }catch(e){}
+    if(!F.objs.length){ const st = load(); if(st && st.length){ F.objs = st; } }
+    updateList(); tip(); setShow();
+    if(!F.objs.length){ await loadSample(false); return; }
+    const miss = F.objs.filter(o=>o.h==null); if(miss.length){ await heights(miss, msg); save(); }
+    rebuild(); msg('저장된 시설물 '+F.objs.length+'개를 불러왔습니다 · "이동"을 누르면 배치된 곳으로');
+  }
+  function off(){ F.on = false; stopMode(); select(null); P.classList.remove('open'); setShow(); }
+  const _t54 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(id === 'fac'){ const want = force !== undefined ? force : !STATE.on.has('fac');
+      if(want && STATE.mode !== 'site'){ toast('시설물 배치는 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ STATE.on.add('fac'); on(); } else { STATE.on.delete('fac'); off(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
+    return _t54.apply(this, arguments);
+  };
+  const _us54 = updateSrc;
+  updateSrc = function(){ _us54.apply(this, arguments); if(!F.on) return; const el = document.getElementById('hudSrc'); if(el && !el.innerHTML.includes('시설물 라이브러리')) el.innerHTML = '<b>시설물 라이브러리</b> SISTECH 절차 모델 10종 · 샘플 좌표 OSM 기반(임의) · ' + el.innerHTML; };
+  try{ const _cap54 = closeAllPanels; closeAllPanels = function(){ const r = _cap54.apply(this, arguments); if(F.on && F.mode) stopMode(); return r; }; }catch(e){}
+  if(STATE.on.has('fac')){ if(STATE.mode === 'site') setTimeout(() => on(), 1500); else STATE.on.delete('fac'); }
+  window.__FAC54 = { F, LIB, makeGlb, rebuild, heights, loadSample, importFile, exportAs, template, select, version:VER };
+})();
+
+</script>
+<script>
+/* ---------- 55. SITE › 분석 › 화재 연기 확산 (2026-10-10) ---------- (54는 시설물 배치가 먼저 사용 → 55로 번호 변경)
    - 켜고 건물(또는 지도)을 클릭 → 발화 지점 지정. 건물 층수·높이는 브이월드 건축물정보(LT_C_BLDGINFO) + 3D 모델 실측(49 measureHeight) · 없으면 층수 × 3 m
    - 바람: Open-Meteo 실황(풍향 = 바람이 불어오는 방향 · 연기는 풍향+180° 로 이동) · 패널에서 풍향/풍속 수정 가능
    - 대기안정도: Pasquill–Gifford 표(풍속 · 낮/밤 · 일사/운량)로 자동 → A~F 수정 가능
@@ -7809,7 +8294,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   updateSrc = function(){ _us54.apply(this, arguments); if(!SM.on) return; const el = document.getElementById('hudSrc'); if(el && !el.innerHTML.includes('연기 확산')) el.innerHTML = '<b>화재 연기 확산</b> 가우시안 플룸(Briggs 도심 계수 · DERIVED · 참고용) · <b>Open-Meteo</b> 바람 실황 · <b>브이월드</b> 건축물정보 · ' + el.innerHTML; };
   if(STATE.on.has('smoke')){ if(STATE.mode==='site') on(); else STATE.on.delete('smoke'); }
 
-  window.__SM54 = { version:'54.2', SM, CLS, sigmas, stability, emission, buoyFlux, riseFinal, rise, conc, model, massFlux, buildGrid, paint, setSource, setT, recompute, loadWind, travelDir, windVec, get grid(){ return SM.grid; }, get res(){ return SM.res; }, get show(){ return show; } };
+  window.__SM55 = window.__SM54 = { version:'55.1', SM, CLS, sigmas, stability, emission, buoyFlux, riseFinal, rise, conc, model, massFlux, buildGrid, paint, setSource, setT, recompute, loadWind, travelDir, windVec, get grid(){ return SM.grid; }, get res(){ return SM.res; }, get show(){ return show; } };
 })();
 
 </script>
