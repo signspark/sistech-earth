@@ -83,6 +83,20 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 #bar button.on small{color:rgba(255,255,255,.9)}
 #bar button:active{opacity:1;background:rgba(62,106,225,.85)}
 /* 출처(연한 표기) */
+/* 지명 라벨 (DOM 오버레이: 3D 타일에 묻히지 않음) */
+#labels{position:fixed;inset:0;z-index:3;pointer-events:none;overflow:hidden}
+.lb{position:absolute;left:0;top:0;transform:translate(-50%,-50%);white-space:nowrap;font-family:"Noto Sans KR",var(--font);font-size:13px;font-weight:600;line-height:1;opacity:0;transition:opacity .25s;will-change:transform}
+.lb.in{opacity:1}
+.lb.road{color:#fff;padding:4px 8px;border-radius:8px;background:rgba(8,12,20,.6);text-shadow:0 1px 2px rgba(0,0,0,.8)}
+.lb.road.cur{background:rgba(62,106,225,.75)}
+.lb.jct{color:#fff;padding:4px 9px;border-radius:999px;background:rgba(62,106,225,.9);box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.lb.jct::before{content:"";display:inline-block;width:9px;height:9px;margin-right:6px;vertical-align:-1px;background:conic-gradient(from 45deg,#fff 0 25%,transparent 0 50%,#fff 0 75%,transparent 0);border-radius:2px}
+.lb.bld{color:rgba(225,232,240,.92);font-weight:500;font-size:12px;text-shadow:0 0 3px #000,0 1px 2px #000,0 0 6px rgba(0,0,0,.9)}
+.lb.bld::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#cfd8e3;margin-right:5px;vertical-align:1px;box-shadow:0 0 2px #000}
+.lb.bld.land{font-weight:600;font-size:13px;color:#fff}
+#curRoad{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:5;pointer-events:none;padding:7px 14px;border-radius:999px;background:rgba(8,12,20,.72);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(8px);font-size:15px;font-weight:700;color:#fff;display:none;white-space:nowrap;transition:bottom .25s}
+#curRoad.show{display:block}
+#curRoad.up{bottom:86px}
 #attr{position:fixed;right:68px;bottom:6px;font-size:10px;color:rgba(220,232,245,.42);z-index:4;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.7);white-space:nowrap}
 /* 디버그 */
 #dbg{position:fixed;left:14px;bottom:14px;z-index:5;width:min(330px,calc(100vw - 110px));font-family:var(--font);color:#fff;background:rgba(18,20,24,.78);padding:10px 12px 8px;border-radius:16px;border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(12px);box-shadow:0 6px 20px rgba(0,0,0,.45);display:none;pointer-events:none}
@@ -134,8 +148,11 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 <div id="dest"><div class="box"><h2>목적지 <button id="dClose" aria-label="닫기">✕</button></h2>
   <div id="dRow"><input id="dQ" type="search" placeholder="목적지를 말하거나 입력하세요" autocomplete="off" enterkeyhint="search"><button id="dMic" aria-label="음성 입력">🎤</button><button id="dGo">검색</button></div>
   <div id="dMsg"></div><div id="dRes"></div></div></div>
+<div id="labels"></div>
+<div id="curRoad"></div>
 <div id="bar">
   <button id="bFollow">따라가기<small>재개</small></button>
+  <button id="bLbl" class="on">지명<small>표시</small></button>
   <button id="bDim">3D<small>2D 전환</small></button>
   <button id="bQ">화질<small>자동</small></button>
   <button id="bExp">기록<small>내보내기</small></button>
@@ -183,6 +200,8 @@ const CONFIG = {
   sim: { noiseSigma: 4, hdgSigma: 4, hz: 1 },
   // 메뉴 UI (2026-10-09 추가)
   ui: { zoomIn: 0.7, zoomOut: 1.4, zoomMin: 0.25, zoomMax: 4, modeTransSec: 0.8, northUpAnchorY: 0.5 },
+  // 지명 라벨 (도로명·교차로·건물)
+  labels: { maxRoads: 8, maxJunctions: 5, maxBuildings: 10, roadSpacingM: 250, updateMs: 500, viewMul: 2.4, minViewM: 400, maxViewM: 2500, aheadBonus: 0.55, speedFadeKmh: 160, minFactor: 0.4, carPad: 44, fetchGapMs: 20000, minLevels: 3 },
   nav: { offRouteM: 50, offRouteFixes: 3, rerouteGapMs: 20000, lineWidth: 8, lineColor: '#3E6AE1', nominatimGapMs: 1100, maxResults: 5, voiceStartTimeoutMs: 4000 },
 };
 const R = 6371008.8, rad = d=>d*Math.PI/180, deg = r=>r*180/Math.PI, clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -292,7 +311,7 @@ async function fetchRoads(lon,lat){
   for(const u of OVERPASS){ try{ const ac=new AbortController(); const tm=setTimeout(()=>ac.abort(),25000); const res=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(ql),headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ac.signal}); clearTimeout(tm); if(!res.ok) throw new Error(res.status); j=await res.json(); if(j && j.elements) break; j=null; }catch(e){ console.warn('overpass', u, e.message); } }
   ROADS.fetching=false;
   if(!j){ ROADS.fails=Math.min(ROADS.fails+1,4); return; }
-  ROADS.fails=0;
+  ROADS.fails=0; if(window.LBL) LBL.fetch(bb);
   for(const e of j.elements){ if(e.type!=='way'||!e.geometry||ROADS.ways.has(e.id)) continue; const tg=e.tags||{};
     let w=parseFloat(tg.width); const lanes=parseFloat(tg.lanes); if(!(w>0)) w = lanes>0? lanes*3.25 : (DEFW[tg.highway]||6);
     const one = ['yes','1','true'].includes(tg.oneway) || tg.highway==='motorway' || tg.junction==='roundabout';
@@ -418,7 +437,7 @@ function frame(){ const now=performance.now(); const dt=Math.min(0.1,(now-lastT)
   else { S.anchorY=tgtA; if(S.camHdg==null) S.camHdg=tgtH; else S.camHdg=(S.camHdg+angDiff(S.camHdg,tgtH)*Math.min(1,dt*CONFIG.camHeadingRate)+360)%360; }
   if(!S.follow && now-S.lastUser>CONFIG.autoResumeSec*1000) S.follow=true;
   if(S.follow) placeCamera();
-  TILES.tick(now); updHud(kmh); if(DEBUG) updDbg();
+  TILES.tick(now); updHud(kmh); if(DEBUG) updDbg(); if(window.LBL) LBL.tick(now);
 }
 // 차량이 (anchorX·W, anchorY·H) 에 오도록: lookAt 후 피치 상향 α = atan( tan(fovy/2) · (2·anchorY−1) )
 function placeCamera(){
@@ -673,6 +692,82 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
   };
   q('#nvClear').onclick=()=>{ NAV.clear(); toast('경로 안내 종료', 1200); };
   window.__teslaMenu = { setMode, openDest, search, SR: !!SRc };
+})();
+</script>
+
+<script>
+/* ---------- 지명 라벨 (2026-10-09): 도로명 · 교차로명 · 주요 건물명 — OSM(Overpass) 기반, 화면공간 겹침 제거, 0.5 s 갱신 ---------- */
+(function(){
+  const CL = CONFIG.labels;
+  const box = q('#labels'), pill = q('#curRoad');
+  const LBL = window.LBL = { on:true, pois:[], jcts:[], fetched:new Set(), lastFetch:0, fetching:false, active:new Map(), lastSel:0, mctx:null, count:{jct:0,bld:0}, fetchErr:null };
+  try{ LBL.on = localStorage.getItem('tesla.labels')!=='0'; }catch(e){}
+  const bBtn=q('#bLbl'); const renderBtn=()=>{ bBtn.classList.toggle('on', LBL.on); bBtn.innerHTML = LBL.on ? '지명<small>표시 중</small>' : '지명<small>숨김</small>'; }; renderBtn();
+  bBtn.onclick=()=>{ LBL.on=!LBL.on; try{ localStorage.setItem('tesla.labels', LBL.on?'1':'0'); }catch(e){} renderBtn(); if(!LBL.on) clearAll(); toast(LBL.on?'지명 표시':'지명 숨김', 1200); };
+  function measure(txt, font){ if(!LBL.mctx){ LBL.mctx=document.createElement('canvas').getContext('2d'); } LBL.mctx.font=font; return LBL.mctx.measureText(txt).width; }
+
+  /* ---- Overpass: 교차로 노드 + 이름 있는 건물/POI (도로 질의와 별도, 20 s 간격, 엔드포인트 폴백) ---- */
+  LBL.fetch = async function(bb){ const key=bb.map(v=>(+v).toFixed(3)).join(','); if(this.fetching || this.fetched.has(key) || performance.now()-this.lastFetch<CL.fetchGapMs) return; this.fetching=true; this.lastFetch=performance.now();
+    const B=bb.map(v=>(+v).toFixed(5)).join(',');
+    const ql=`[out:json][timeout:25];(node["name"]["highway"~"^(traffic_signals|crossing|motorway_junction)$"](${B});node["name"]["junction"](${B});node["name"~"(사거리|삼거리|오거리|교차로|나들목|분기점)$"](${B}););out tags;(way["building"]["name"](${B});relation["building"]["name"](${B});nwr["name"]["amenity"~"^(hospital|university|college|school|townhall|police|fire_station|bus_station|library|theatre|arts_centre|community_centre|marketplace|conference_centre|exhibition_centre)$"](${B});nwr["name"]["tourism"~"^(attraction|museum|hotel|aquarium|zoo|theme_park|viewpoint)$"](${B});nwr["name"]["shop"="mall"](${B});nwr["name"]["office"="government"](${B}););out tags center;`;
+    let j=null; for(const u of OVERPASS){ try{ const ac=new AbortController(); const tm=setTimeout(()=>ac.abort(),25000); const res=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(ql),headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ac.signal}); clearTimeout(tm); if(!res.ok) throw new Error(res.status); j=await res.json(); if(j&&j.elements) break; j=null; }catch(e){ this.fetchErr=e.message; console.warn('overpass poi', u, e.message); } }
+    this.fetching=false; if(!j) return; this.fetched.add(key);
+    const seenJ=new Set(this.jcts.map(x=>x.id)), seenP=new Set(this.pois.map(x=>x.id));
+    for(const e of j.elements){ const tg=e.tags||{}; if(!tg.name) continue;
+      const isJ = e.type==='node' && (tg.highway||tg.junction||/(사거리|삼거리|오거리|교차로|나들목|분기점)$/.test(tg.name)) && !tg.building;
+      const lat = e.lat!=null? e.lat : (e.center&&e.center.lat), lon = e.lon!=null? e.lon : (e.center&&e.center.lon); if(lat==null) continue;
+      const m=L([lon,lat]);
+      if(isJ){ if(seenJ.has(e.id)) continue; seenJ.add(e.id); this.jcts.push({ id:e.id, name:tg.name, m, lon, lat, kind:'jct' }); continue; }
+      if(seenP.has(e.type+e.id)) continue; seenP.add(e.type+e.id);
+      const lv=parseFloat(tg['building:levels'])||0; let hgt=parseFloat(tg.height)||0; if(!hgt && lv) hgt=lv*3.2;
+      const land = !!(tg.tourism||tg.amenity||tg.shop||tg.office||/타워|센터|컨벤시아|호텔|병원|대학교|시청|구청|청사|스퀘어|몰|백화점|도서관|경찰청|해양경찰/.test(tg.name));
+      const generic = /^(\d+동|상가|주차장|경비실|관리사무소|[A-Z]?\d{2,3}동)$/.test(tg.name) || /^\d+동$/.test(tg.name) || /\s\d{3}동$/.test(tg.name);
+      if(!land && lv<CL.minLevels && !hgt) continue;
+      if(generic) continue;
+      const imp = (land?60:0) + Math.min(hgt,300)/5 + (lv?Math.min(lv,70)*0.6:0);
+      this.pois.push({ id:e.type+e.id, name:tg.name, m, lon, lat, hgt:Math.min(hgt,200), imp, land, kind:'bld' }); }
+    this.count={ jct:this.jcts.length, bld:this.pois.length };
+  };
+
+  /* ---- 도로 샘플점 (이름 있는 도로, 250 m 간격; way 별 캐시) ---- */
+  function roadPts(w){ if(w.lpts) return w.lpts; const pts=[]; if(!w.name||w.len<40){ w.lpts=pts; return pts; } const step=CL.roadSpacingM; let next=Math.min(step/2, w.len/2);
+    let acc=0; for(const s of w.segs){ while(next<=acc+s.len){ const u=(next-acc)/s.len; pts.push({ m:[s.a[0]+s.dx*u, s.a[1]+s.dy*u], br:s.br }); next+=step; } acc+=s.len; }
+    w.lpts=pts; return pts; }
+
+  /* ---- 선택 + 겹침 제거 (0.5 s) ---- */
+  function uiRects(){ const r=[]; const add=(sel,only)=>{ const el=q(sel); if(!el) return; if(only && !el.classList.contains(only)) return; const b=el.getBoundingClientRect(); if(b.width&&b.height) r.push([b.left-4,b.top-4,b.right+4,b.bottom+4]); };
+    add('#top'); add('#speed'); add('#limit','show'); add('#rail'); add('#navCard','show'); add('#bar','show'); add('#compass'); add('#curRoad','show'); add('#dbg','show'); add('#attr'); add('#dest','show');
+    const cx=innerWidth*CONFIG.anchorX, cy=innerHeight*S.anchorY; r.push([cx-CL.carPad, cy-CL.carPad, cx+CL.carPad, cy+CL.carPad]); return r; }
+  const hit=(a,b)=> a[0]<b[2] && a[2]>b[0] && a[1]<b[3] && a[3]>b[1];
+  function worldPos(it){ if(!it.pos || performance.now()-(it.posT||0)>5000){ const carto=C.Cartographic.fromDegrees(it.lon,it.lat); let g=globe.getHeight(carto); if(g==null||isNaN(g)) g = S.hs!=null? S.hs : 0; it.pos=C.Cartesian3.fromDegrees(it.lon,it.lat,g+(it.hgt||0)+2.5); it.posT=performance.now(); } return it.pos; }
+  function select(){ if(!LBL.on || S.lon==null) return clearAll();
+    const kmh=S.spd*3.6; const f=clamp(1-kmh/CL.speedFadeKmh, CL.minFactor, 1);
+    const nR=Math.round(CL.maxRoads*f), nJ=Math.round(CL.maxJunctions*f), nB=Math.round(CL.maxBuildings*f);
+    const view=clamp(S.viewRange*S.zoom*CL.viewMul, CL.minViewM, CL.maxViewM); const car=L([S.lon,S.lat]); const hd=S.hdg;
+    const score=(m)=>{ const dx=m[0]-car[0], dy=m[1]-car[1]; const d=Math.hypot(dx,dy); if(d>view) return null; const br=(deg(Math.atan2(dx,dy))+360)%360; const ahead=Math.abs(angDiff(hd,br))<80; return { d, s: ahead? d*CL.aheadBonus : d }; };
+    const cands=[];
+    // 도로명: 이름당 1개 (가장 가까운/전방 우선), 현재 도로는 전방 300 m 이상 떨어진 점만
+    const byName=new Map();
+    for(const w of ROADS.ways.values()){ if(!w.name) continue; for(const p of roadPts(w)){ const sc=score(p.m); if(!sc) continue; if(S.way && w.name===S.way.name && sc.d<300) continue; const cur=byName.get(w.name); if(!cur || sc.s<cur.s) byName.set(w.name, { id:'r'+w.name, name:w.name, lon:UL(p.m)[0], lat:UL(p.m)[1], kind:'road', cls:'road'+(S.way&&w.name===S.way.name?' cur':''), s:sc.s, pri:1 }); } }
+    cands.push(...[...byName.values()].sort((a,b)=>a.s-b.s).slice(0,nR));
+    cands.push(...LBL.jcts.map(j=>{ const sc=score(j.m); return sc? Object.assign({}, j, { id:'j'+j.id, cls:'jct', s:sc.s, pri:0 }) : null; }).filter(Boolean).sort((a,b)=>a.s-b.s).slice(0,nJ));
+    const bN=new Map(); for(const p of LBL.pois){ const sc=score(p.m); if(!sc) continue; const v=sc.s/(1+p.imp/40); const cur=bN.get(p.name); if(!cur||v<cur.v) bN.set(p.name, Object.assign({}, p, { id:'b'+p.id, cls:'bld'+(p.land?' land':''), s:sc.s, v, pri:2 })); }
+    cands.push(...[...bN.values()].sort((a,b)=>a.v-b.v).slice(0,nB));
+    // 화면 투영 + 겹침 제거 (우선순위: 교차로 → 도로명 → 건물)
+    cands.sort((a,b)=>a.pri-b.pri || a.s-b.s);
+    const placed=uiRects().slice(); const keep=new Map(); const W=innerWidth, Hh=innerHeight;
+    for(const it of cands){ const sp=scene.cartesianToCanvasCoordinates(worldPos(it)); if(!sp) continue; if(sp.x<30||sp.x>W-30||sp.y<30||sp.y>Hh-30) continue;
+      const fs = it.kind==='bld'&&!it.land ? 12 : 13; const tw=measure(it.name, '600 '+fs+'px "Noto Sans KR",sans-serif') + (it.kind==='jct'?34:it.kind==='bld'?14:18); const th=fs+10;
+      const bx=[sp.x-tw/2-3, sp.y-th/2-3, sp.x+tw/2+3, sp.y+th/2+3]; if(placed.some(r=>hit(bx,r))) continue; placed.push(bx); keep.set(it.id, it); if(keep.size>=nR+nJ+nB) break; }
+    // DOM 반영 (페이드 인/아웃)
+    for(const [id,rec] of LBL.active){ if(!keep.has(id)){ rec.el.classList.remove('in'); const el=rec.el; setTimeout(()=>el.remove(), 260); LBL.active.delete(id); } }
+    for(const [id,it] of keep){ if(LBL.active.has(id)){ LBL.active.get(id).it=it; continue; } const el=document.createElement('div'); el.className='lb '+it.cls; el.textContent=it.name; box.appendChild(el); requestAnimationFrame(()=>el.classList.add('in')); LBL.active.set(id,{ el, it }); }
+  }
+  function clearAll(){ for(const [id,rec] of LBL.active){ rec.el.remove(); } LBL.active.clear(); }
+  // 매 프레임: 화면 좌표만 갱신 (저비용) · 현재 도로 필
+  function place(){ for(const rec of LBL.active.values()){ const sp=scene.cartesianToCanvasCoordinates(worldPos(rec.it)); if(!sp){ rec.el.style.visibility='hidden'; continue; } rec.el.style.visibility=''; rec.el.style.transform=`translate(${sp.x.toFixed(1)}px,${sp.y.toFixed(1)}px) translate(-50%,-50%)`; } }
+  LBL.tick=function(now){ const nm = (LBL.on && S.matched && S.way && S.way.name) ? S.way.name : ''; if(nm){ if(pill.textContent!==nm) pill.textContent=nm; pill.classList.add('show'); pill.classList.toggle('up', q('#bar').classList.contains('show')); } else pill.classList.remove('show');
+    if(now-this.lastSel>CL.updateMs){ this.lastSel=now; try{ select(); }catch(e){ console.warn('labels', e.message); } } place(); };
 })();
 </script>
 </body>
