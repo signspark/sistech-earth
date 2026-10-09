@@ -201,7 +201,7 @@ const CONFIG = {
   // 메뉴 UI (2026-10-09 추가)
   ui: { zoomIn: 0.7, zoomOut: 1.4, zoomMin: 0.25, zoomMax: 4, modeTransSec: 0.8, northUpAnchorY: 0.5 },
   // 지명 라벨 (도로명·교차로·건물)
-  labels: { maxRoads: 8, maxJunctions: 5, maxBuildings: 10, roadSpacingM: 250, updateMs: 500, viewMul: 2.4, minViewM: 400, maxViewM: 2500, aheadBonus: 0.55, speedFadeKmh: 160, minFactor: 0.4, carPad: 44, fetchGapMs: 20000, minLevels: 3 },
+  labels: { maxRoads: 8, maxJunctions: 5, maxBuildings: 10, roadSpacingM: 250, updateMs: 500, viewMul: 2.4, minViewM: 400, maxViewM: 2500, aheadBonus: 0.55, speedFadeKmh: 160, minFactor: 0.4, carPad: 44, fetchGapMs: 20000, minLevels: 5 },
   nav: { offRouteM: 50, offRouteFixes: 3, rerouteGapMs: 20000, lineWidth: 8, lineColor: '#3E6AE1', nominatimGapMs: 1100, maxResults: 5, voiceStartTimeoutMs: 4000 },
 };
 const R = 6371008.8, rad = d=>d*Math.PI/180, deg = r=>r*180/Math.PI, clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -749,7 +749,7 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
     const cands=[];
     // 도로명: 이름당 1개 (가장 가까운/전방 우선), 현재 도로는 전방 300 m 이상 떨어진 점만
     const byName=new Map();
-    for(const w of ROADS.ways.values()){ if(!w.name) continue; for(const p of roadPts(w)){ const sc=score(p.m); if(!sc) continue; if(S.way && w.name===S.way.name && sc.d<300) continue; const cur=byName.get(w.name); if(!cur || sc.s<cur.s) byName.set(w.name, { id:'r'+w.name, name:w.name, lon:UL(p.m)[0], lat:UL(p.m)[1], kind:'road', cls:'road'+(S.way&&w.name===S.way.name?' cur':''), s:sc.s, pri:1 }); } }
+    for(const w of ROADS.ways.values()){ if(!w.name || /^\d+$/.test(w.name)) continue; for(const p of roadPts(w)){ const sc=score(p.m); if(!sc) continue; if(S.way && w.name===S.way.name && sc.d<300) continue; const cur=byName.get(w.name); if(!cur || sc.s<cur.s) byName.set(w.name, { id:'r'+w.name, name:w.name, lon:UL(p.m)[0], lat:UL(p.m)[1], kind:'road', cls:'road'+(S.way&&w.name===S.way.name?' cur':''), s:sc.s, pri:1 }); } }
     cands.push(...[...byName.values()].sort((a,b)=>a.s-b.s).slice(0,nR));
     cands.push(...LBL.jcts.map(j=>{ const sc=score(j.m); return sc? Object.assign({}, j, { id:'j'+j.id, cls:'jct', s:sc.s, pri:0 }) : null; }).filter(Boolean).sort((a,b)=>a.s-b.s).slice(0,nJ));
     const bN=new Map(); for(const p of LBL.pois){ const sc=score(p.m); if(!sc) continue; const v=sc.s/(1+p.imp/40); const cur=bN.get(p.name); if(!cur||v<cur.v) bN.set(p.name, Object.assign({}, p, { id:'b'+p.id, cls:'bld'+(p.land?' land':''), s:sc.s, v, pri:2 })); }
