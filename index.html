@@ -5447,5 +5447,51 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   window.sistech2D = { enter, exit, get on(){ return D2.on; } };
 })();
 </script>
+<script>
+/* ---------- 48. 배경 영상 선택 (설정 › 배경 영상: 브이월드 / Esri) · 기본 브이월드 · 한국 영역(본토·제주·울릉/독도)만 브이월드, 그 밖은 Esri · 2026-10-09 ---------- */
+(function(){
+  const C = Cesium;
+  const VW_KEY = '57C7018D-1A36-4873-99CD-A2272BD3040E';
+  const VW_URL = 'https://api.vworld.kr/req/wmts/1.0.0/' + VW_KEY + '/Satellite/{z}/{y}/{x}.jpeg';
+  // 브이월드는 국외 고배율 타일을 오류(XML)로 돌려주므로 국내 영역으로 제한 (오류 시 저해상도 확대 표시 방지)
+  const RECTS = [
+    [124.5, 33.9, 130.0, 38.7],   // 본토·서해 도서·대마도 인근
+    [126.0, 33.0, 127.0, 33.9],   // 제주·마라도
+    [130.0, 37.0, 132.0, 38.0],   // 울릉도·독도
+  ];
+  const VW = { layers: [] };
+  function build(){
+    if(VW.layers.length) return;
+    RECTS.forEach(r => {
+      const p = new C.UrlTemplateImageryProvider({ url: VW_URL, minimumLevel: 6, maximumLevel: 19,
+        rectangle: C.Rectangle.fromDegrees(r[0], r[1], r[2], r[3]), credit: '브이월드(국토교통부 공간정보 오픈플랫폼)' });
+      const lyr = viewer.imageryLayers.addImageryProvider(p, 1);   // Esri 기본 영상 바로 위
+      VW.layers.push(lyr);
+    });
+  }
+  function apply(src){
+    VW.src = src;
+    if(src === 'vworld'){ build(); VW.layers.forEach(l => l.show = true); }
+    else VW.layers.forEach(l => l.show = false);
+    try{ localStorage.setItem('se.basemap', src); }catch(e){}
+    seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === src));
+    try{ (MENUS.earth||[]).forEach(c => (c.items||[]).forEach(it => { if(it.id==='imagery') it.src = src==='vworld' ? '브이월드(국내) · Esri World Imagery(국외)' : 'Esri World Imagery'; })); }catch(e){}
+    try{ updateSrc(); }catch(e){}
+    const note = document.querySelector('#settings .note');
+    if(note) note.innerHTML = note.innerHTML.replace(/영상: [^·<]*/, src === 'vworld' ? '영상: 브이월드(국내) + Esri(국외) ' : '영상: Esri World Imagery ');
+  }
+  const _updateSrc48 = updateSrc;
+  updateSrc = function(){ _updateSrc48.apply(this, arguments); if(VW.src === 'vworld'){ const el = document.querySelector('#hudSrc'); if(el) el.innerHTML = el.innerHTML.replace('<b>Esri World Imagery</b> 영상', '<b>브이월드</b>(국토교통부) · <b>Esri</b>(국외) 영상'); } };
+  const row = document.createElement('div'); row.className = 'row';
+  row.innerHTML = '<span>배경 영상</span><div class="seg" id="segBase"><button data-v="vworld">브이월드</button><button data-v="esri">Esri</button></div>';
+  const sb = document.querySelector('#settings');
+  sb.insertBefore(row, sb.querySelector('.row:nth-of-type(2)'));
+  const seg = row.querySelector('#segBase');
+  seg.querySelectorAll('button').forEach(b => b.onclick = () => { apply(b.dataset.v); toast(b.dataset.v === 'vworld' ? '배경 영상: 브이월드 (국내 항공영상) · 국외는 Esri' : '배경 영상: Esri World Imagery', 1800); });
+  let saved = 'vworld'; try{ saved = localStorage.getItem('se.basemap') || 'vworld'; }catch(e){}
+  apply(saved);
+  window.sistechBase = { set: apply, get src(){ return VW.src; } };
+})();
+</script>
 </body>
 </html>
