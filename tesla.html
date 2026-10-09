@@ -75,14 +75,13 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 #navCard .eta button{min-width:56px;min-height:44px;border-radius:12px;background:rgba(255,255,255,.1);font-size:13px;font-weight:600;color:#fff}
 #navCard .dn{padding:0 14px 8px;font-size:12px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 탭 시 제어막대 */
-#bar{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%) translateY(8px);display:flex;gap:6px;padding:6px;border-radius:18px;background:rgba(18,20,24,.78);border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(12px);box-shadow:0 6px 20px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:6;width:max-content;max-width:calc(100vw - 20px);flex-wrap:wrap;justify-content:center}
+#bar{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%) translateY(8px);display:flex;gap:8px;padding:0;background:none;border:0;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:6;width:max-content;max-width:calc(100vw - 20px);flex-wrap:wrap;justify-content:center}
 #bar.show{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
-#bar button{min-width:72px;min-height:56px;padding:0 16px;border-radius:13px;background:transparent;font-size:15px;font-weight:600;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;line-height:1.1}
-#bar button small{font-size:11px;color:rgba(255,255,255,.55);font-weight:500}
-#bar button+button{box-shadow:-1px 0 0 rgba(255,255,255,.08)}
-#bar button.on{background:#3E6AE1;color:#fff;box-shadow:none}
-#bar button.on small{color:rgba(255,255,255,.85)}
-#bar button:active{background:rgba(255,255,255,.12)}
+#bar button{min-width:76px;height:56px;padding:0 14px;border-radius:16px;background:rgba(8,12,20,.55);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(8px);box-shadow:0 2px 8px rgba(0,0,0,.35);color:#fff;font-size:15px;font-weight:600;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;line-height:1.1;opacity:.85;transition:opacity .2s,background .2s}
+#bar button small{font-size:10px;color:rgba(255,255,255,.7);font-weight:500}
+#bar button.on{background:rgba(62,106,225,.85);opacity:1}
+#bar button.on small{color:rgba(255,255,255,.9)}
+#bar button:active{opacity:1;background:rgba(62,106,225,.85)}
 /* 출처(연한 표기) */
 #attr{position:fixed;right:68px;bottom:6px;font-size:10px;color:rgba(220,232,245,.42);z-index:4;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.7);white-space:nowrap}
 /* 디버그 */
@@ -140,7 +139,6 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
   <button id="bDim">3D<small>2D 전환</small></button>
   <button id="bQ">화질<small>자동</small></button>
   <button id="bExp">기록<small>내보내기</small></button>
-  <button id="bExit">종료<small>EARTH로</small></button>
 </div>
 <div id="attr">브이월드(국토교통부) · Esri · SISTECH 3D · © OpenStreetMap contributors</div>
 <div id="dbg"></div>
@@ -547,7 +545,6 @@ q('#bDim').onclick=()=>{ S.dim = S.dim==='3D'?'2D':'3D'; q('#bDim').innerHTML = 
 q('#bQ').onclick=()=>{ // 자동 → 저 → 중 → 고 → 자동
   if(S.qAuto){ S.qAuto=false; S.qIdx=0; } else if(S.qIdx<CONFIG.quality.length-1) S.qIdx++; else { S.qAuto=true; S.qIdx=1; } applyQuality(); toast(`화질: ${S.qAuto?'자동':CONFIG.quality[S.qIdx][0]}`); };
 q('#bExp').onclick=()=>{ openModal(); };
-q('#bExit').onclick=()=>{ if(LOG.trip) LOG.end(); location.href='index.html'; };
 
 /* ---------- 위치 소스 ---------- */
 // 송도 실도로 가상 주행 (OSRM 경로, 실패 시 내장 경로) · 속도 0→30→60→80 km/h + 정차 · 가우시안 잡음
