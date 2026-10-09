@@ -409,7 +409,8 @@ const LOG = { db:null, mem:{ trips:new Map(), fixes:[], upload:[] }, trip:null, 
   start(now){ this.trip={ id:'T'+new Date(now).toISOString().replace(/[-:T]/g,'').slice(0,14), start:now, end:null, n:0, dist:0, src: SIM?'sim':'gps' }; this.lastLL=null; this.lastT=now; this.putTrip(this.trip).catch(()=>{}); toast(this.db? '주행 기록 시작' : '주행 기록 시작 (저장소 사용 불가: 세션 메모리에만 보관)', 3000); },
   async flush(final){ this.lastT=Date.now(); if(!this.buf.length && !final) return;
     const batch=this.buf; this.buf=[]; this.flashTxt='⏳ 저장 중…'; this.flashCls='warn'; this.flashUntil=performance.now()+1500;
-    try{ await this.addFixes(batch); if(this.trip) await this.putTrip(this.trip); this.flashTxt='✓ 저장됨 '+hhmm(Date.now()); this.flashCls='ok'; this.flashUntil=performance.now()+2500; }
+    const t0=performance.now();
+    try{ await this.addFixes(batch); if(this.trip) await this.putTrip(this.trip); const wait=Math.max(0, 700-(performance.now()-t0)); if(wait) await new Promise(r=>setTimeout(r,wait)); /* '저장 중' 최소 0.7 s 표시 */ this.flashTxt='✓ 저장됨 '+hhmm(Date.now()); this.flashCls='ok'; this.flashUntil=performance.now()+2500; }
     catch(e){ this.buf=batch.concat(this.buf); this.flashTxt='저장 실패'; this.flashCls='warn'; this.flashUntil=performance.now()+2500; }
     this.upload(batch); },
   end(){ if(!this.trip) return; this.trip.end=Date.now(); const t=this.trip; this.flush(true).then(()=>this.putTrip(t)).catch(()=>{}); this.trip=null; this.aboveSince=0; this.idleSince=0; this.lastLL=null; toast('주행 기록 종료'); },
