@@ -2992,7 +2992,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     <div class="row"><label style="color:var(--text);font-weight:600">회전하기</label><input type="range" id="xsARange" min="-180" max="180" step="1" style="flex:1" aria-label="구역 회전하기 (왼쪽·오른쪽으로 끌기)" title="왼쪽·오른쪽으로 끌어 구역을 회전"><input type="number" id="xsA" min="-180" max="180" step="5" style="width:58px" aria-label="회전 각도"><label>°</label><button id="xsA0" title="회전 0°(정북)로">0°</button></div>
     <div class="row"><label style="display:flex;align-items:center;gap:6px;color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer"><input type="checkbox" id="xsBld" style="accent-color:var(--lime)"> 건물만 표시 (나무·수목·지면 제외)</label><span id="xsBldInfo" style="font-size:11px;color:var(--text-dim);margin-left:auto;text-align:right"></span></div>
     <div class="btns"><button id="xsDraw">▭ 구역 새로 그리기 (지도에서 끌기)</button><button id="xsCenter">구역 중심 = 기준점</button></div>
-    <div class="hint">연두색 사각형이 단면 구역 (처음 200 × 200 m, 화면 중심) · <b>모서리 점을 끌면</b> 크기 조정 (최대 500 m) · <b>테두리 선을 끌면</b> 구역 이동 · <b>회전하기</b> 슬라이더를 왼쪽·오른쪽으로 끌면 회전 · <b>건물만 표시</b>: 구역 안 나무·수목·지면을 숨기고 건물만 (건물 외곽선: 인천시 도로명주소 건물 / 그 밖 OpenStreetMap · 자료에 없는 신축 건물은 빠질 수 있음) · 구역 밖 건물은 자르지 않음</div>
+    <div class="hint">연두색 사각형이 단면 구역 (처음 200 × 200 m, 화면 중심) · <b>모서리 점을 끌면</b> 크기 조정 (최대 500 m) · <b>변 가운데 화살표를 끌면</b> 그 방향으로만 늘이기·줄이기 · <b>테두리 선을 끌면</b> 구역 이동 · <b>회전하기</b> 슬라이더를 왼쪽·오른쪽으로 끌면 회전 · <b>건물만 표시</b>: 구역 안 나무·수목·지면을 숨기고 건물만 (건물 외곽선: 인천시 도로명주소 건물 / 그 밖 OpenStreetMap · 자료에 없는 신축 건물은 빠질 수 있음) · 구역 밖 건물은 자르지 않음</div>
   </div>
   <div class="btns"><button id="xsTop">⬇ 위에서 보기 (평면도)</button><button id="xsBack">원래 시점</button><button id="xsPick">기준 지면 다시 찍기</button></div>
   <div class="hint"><b>Ctrl + 마우스 휠</b>: 단면을 0.5 m씩 스크롤 · <b>↑ ↓</b>: 한 층씩 · <b>Shift+↑↓</b>: 0.5 m씩<br>절단선은 적색 테두리 · 단면 안쪽 벽면(메쉬 뒷면)도 표시 · 층고 기본 2.9 m (아파트) · 단면은 각 층 바닥 +1.5 m</div>
@@ -3089,6 +3089,10 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   }
 
   /* ---- 구역 표시 (절단 높이의 반투명 면 + 바닥 점선 + 모서리 핸들) ---- */
+  let _xsArrowUrl = null;
+  function xsArrowImg(){ if(_xsArrowUrl) return _xsArrowUrl; const cv = document.createElement('canvas'); cv.width = 52; cv.height = 68; const g = cv.getContext('2d');
+    g.beginPath(); g.moveTo(26,3); g.lineTo(49,32); g.lineTo(35,32); g.lineTo(35,65); g.lineTo(17,65); g.lineTo(17,32); g.lineTo(3,32); g.closePath();
+    g.fillStyle = '#BFE33A'; g.fill(); g.lineWidth = 4; g.strokeStyle = '#06224A'; g.lineJoin = 'round'; g.stroke(); _xsArrowUrl = cv.toDataURL('image/png'); return _xsArrowUrl; }
   function drawRegion(){ for(const e of XS.ents) viewer.entities.remove(e); XS.ents = []; XS.handles = []; if(!XS.on || !XS.region || XS.lon==null) return;
     const cs = corners(); const hAbs = XS.base + XS.h; const top = cs.map(c=>C.Cartesian3.fromDegrees(c[0], c[1], hAbs)); const col = C.Color.fromCssColorString('#BFE33A');
     XS.ents.push(viewer.entities.add({ polygon:{ hierarchy: new C.PolygonHierarchy(top), perPositionHeight: true, material: col.withAlpha(.10) } }));
@@ -3097,6 +3101,12 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     XS.ents.push(viewer.entities.add({ polyline:{ positions: cs.concat([cs[0]]).map(c=>C.Cartesian3.fromDegrees(c[0], c[1])), width: 2, clampToGround: true, classificationType: C.ClassificationType.BOTH, material: new C.PolylineDashMaterialProperty({ color: col.withAlpha(.8), dashLength: 12 }) } }));
     for(let i=0;i<4;i++){ XS.ents.push(viewer.entities.add({ id:'xsEdge'+i, polyline:{ positions:[top[i], top[(i+1)%4]], width: 14, material: col.withAlpha(.02), arcType: C.ArcType.NONE } })); }
     for(let i=0;i<4;i++){ const e = viewer.entities.add({ id:'xsHandle'+i, position: top[i], point:{ pixelSize: 12, color: col, outlineColor: C.Color.fromCssColorString('#06224A'), outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY } }); XS.ents.push(e); XS.handles.push(e); }
+    // 변 가운데 화살표 (끌면 그 변만 바깥/안쪽으로 이동 → 끈 방향으로 크기 조절)
+    { const ctr = C.Cartesian3.fromDegrees(XS.lon, XS.lat, hAbs); const off = Math.max(6, Math.min(25, 0.08*Math.min(XS.w, XS.d)));
+      for(let i=0;i<4;i++){ const a = cs[i], b = cs[(i+1)%4]; const mid = C.Cartesian3.fromDegrees((a[0]+b[0])/2, (a[1]+b[1])/2, hAbs);
+        const dir = C.Cartesian3.normalize(C.Cartesian3.subtract(mid, ctr, new C.Cartesian3()), new C.Cartesian3());
+        const pos = C.Cartesian3.add(mid, C.Cartesian3.multiplyByScalar(dir, off, new C.Cartesian3()), new C.Cartesian3());
+        XS.ents.push(viewer.entities.add({ id:'xsArrow'+i, position: pos, billboard:{ image: xsArrowImg(), width: 26, height: 34, alignedAxis: dir, disableDepthTestDistance: Number.POSITIVE_INFINITY } })); } }
     for(let i=0;i<4;i++){ const a = cs[i], b = cs[(i+1)%4]; const mid = C.Cartesian3.fromDegrees((a[0]+b[0])/2, (a[1]+b[1])/2, hAbs); const len = (i%2===0) ? XS.w : XS.d;
       XS.ents.push(viewer.entities.add({ position: mid, label:{ text: Math.round(len)+' m', font: '12px Inter, "Noto Sans KR", sans-serif', fillColor: C.Color.WHITE, showBackground: true, backgroundColor: C.Color.fromCssColorString('#06224A').withAlpha(.75), backgroundPadding: new C.Cartesian2(5,3), disableDepthTestDistance: Number.POSITIVE_INFINITY, scale: 0.9 } })); }
   }
@@ -3136,7 +3146,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     const span = Math.max(120, Math.max(XS.w, XS.d) * 1.1); camera.flyTo({ destination: C.Cartesian3.fromDegrees(XS.lon, XS.lat, XS.base + XS.h + span), orientation:{ heading: XS.region ? rad(XS.ang) : 0, pitch: -C.Math.PI_OVER_TWO, roll: 0 }, duration: 1.2 }); XS.top = true; q('#xsTop').classList.add('on'); };
   q('#xsBack').onclick = () => { if(XS.savedCam){ camera.flyTo({ destination: XS.savedCam.pos, orientation: XS.savedCam.hpr, duration: 1.2 }); XS.savedCam = null; } XS.top = false; q('#xsTop').classList.remove('on'); };
   function onWheel(e){ if(!XS.on || !e.ctrlKey) return; e.preventDefault(); e.stopImmediatePropagation(); const d = e.deltaY > 0 ? -0.5 : 0.5; setH(XS.h + d); if(XS.top) camera.setView({ destination: C.Cartesian3.fromDegrees(XS.lon, XS.lat, XS.base + XS.h + Math.max(120, Math.max(XS.w, XS.d)*1.1)), orientation:{ heading: XS.region ? rad(XS.ang) : 0, pitch:-C.Math.PI_OVER_TWO, roll:0 } }); }
-  function onKey(e){ if(!XS.on) return; const tag = (document.activeElement||{}).tagName; if(tag==='INPUT' || tag==='TEXTAREA') return; if(e.key==='ArrowUp'){ e.preventDefault(); e.shiftKey ? setH(XS.h+0.5) : setFloor(XS.floor+1); } else if(e.key==='ArrowDown'){ e.preventDefault(); e.shiftKey ? setH(XS.h-0.5) : setFloor(XS.floor-1); } else if(e.key==='Escape' && (XS.drawing||XS.drag||XS.move)){ XS.drawing=false; XS.drag=null; XS.move=null; q('#xsDraw').classList.remove('on'); scene.screenSpaceCameraController.enableInputs = true; } }
+  function onKey(e){ if(!XS.on) return; const tag = (document.activeElement||{}).tagName; if(tag==='INPUT' || tag==='TEXTAREA') return; if(e.key==='ArrowUp'){ e.preventDefault(); e.shiftKey ? setH(XS.h+0.5) : setFloor(XS.floor+1); } else if(e.key==='ArrowDown'){ e.preventDefault(); e.shiftKey ? setH(XS.h-0.5) : setFloor(XS.floor-1); } else if(e.key==='Escape' && (XS.drawing||XS.drag||XS.move||XS.side)){ XS.drawing=false; XS.drag=null; XS.move=null; XS.side=null; q('#xsDraw').classList.remove('on'); scene.screenSpaceCameraController.enableInputs = true; } }
   // 클릭: 기준 지면 찍기
   const _xsClick = handler.getInputAction(C.ScreenSpaceEventType.LEFT_CLICK);
   handler.setInputAction(e => { if(!XS.on || !XS.picking) return _xsClick(e); XS.picking = false; const pt = pickGround(e.position); if(!pt) return; setBase(pt); toast('기준 지면 표고 '+fmt(pt.h)+' m (지형) · 구역 중심 이동 · 미세 조정은 Shift+↑↓', 3000); }, C.ScreenSpaceEventType.LEFT_CLICK);
@@ -3144,18 +3154,26 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   const _xsDown = handler.getInputAction(C.ScreenSpaceEventType.LEFT_DOWN), _xsMove = handler.getInputAction(C.ScreenSpaceEventType.MOUSE_MOVE), _xsUp = handler.getInputAction(C.ScreenSpaceEventType.LEFT_UP);
   handler.setInputAction(e => { if(!XS.on || !XS.region){ return _xsDown && _xsDown(e); }
     if(XS.drawing==='wait'){ const pt = pickGround(e.position); if(!pt) return; XS.drawing = { a: pt }; scene.screenSpaceCameraController.enableInputs = false; return; }
-    let id = null; try{ const ids = scene.drillPick(e.position, 6, 10, 10).map(o=>o && o.id && o.id.id).filter(s=>typeof s==='string'); id = ids.find(s=>s.startsWith('xsHandle')) || ids.find(s=>s.startsWith('xsEdge')) || null; }catch(err){}
+    let id = null; try{ const ids = scene.drillPick(e.position, 6, 10, 10).map(o=>o && o.id && o.id.id).filter(s=>typeof s==='string'); id = ids.find(s=>s.startsWith('xsArrow')) || ids.find(s=>s.startsWith('xsHandle')) || ids.find(s=>s.startsWith('xsEdge')) || null; }catch(err){}
+    if(typeof id==='string' && id.startsWith('xsArrow')){ const i = +id.slice(7); const isU = (i%2===1), s = (i===1||i===2) ? 1 : -1; const half = (isU ? XS.w : XS.d)/2;
+      XS.side = { i, isU, s, fixed: -s*half, lon0: XS.lon, lat0: XS.lat }; scene.screenSpaceCameraController.enableInputs = false; scene.canvas.style.cursor = isU ? 'ew-resize' : 'ns-resize'; return; }
     if(typeof id==='string' && id.startsWith('xsEdge')){ const st = pickOnCutPlane(e.position); if(st){ XS.move = { st, lon0: XS.lon, lat0: XS.lat }; scene.screenSpaceCameraController.enableInputs = false; scene.canvas.style.cursor = 'grabbing'; return; } }
     if(typeof id==='string' && id.startsWith('xsHandle')){ const i = +id.slice(8); const cs = corners(); const opp = cs[(i+2)%4]; XS.drag = { i, opp: toUV(opp[0], opp[1]), cx: XS.lon, cy: XS.lat }; scene.screenSpaceCameraController.enableInputs = false; return; }
     return _xsDown && _xsDown(e); }, C.ScreenSpaceEventType.LEFT_DOWN);
   handler.setInputAction(e => {
     if(XS.on && XS.drawing && XS.drawing.a){ const a = XS.drawing.a; const pt = pickOnPlane(e.endPosition, a.lon, a.lat, a.h); if(pt) setRectFromCorners(a, pt, true); return; }
+    if(XS.on && XS.side){ const ll = pickOnCutPlane(e.endPosition); if(!ll) return; const sd = XS.side; const a = rad(XS.ang);
+      const ee = rad(ll[0]-sd.lon0)*R*Math.cos(rad(sd.lat0)), nn = rad(ll[1]-sd.lat0)*R; const pu = ee*Math.cos(a) - nn*Math.sin(a), pv = ee*Math.sin(a) + nn*Math.cos(a);
+      const p = sd.isU ? pu : pv; const len = clampS(sd.s*(p - sd.fixed)); const cAx = sd.fixed + sd.s*len/2; const cu = sd.isU ? cAx : 0, cv = sd.isU ? 0 : cAx;
+      const ce = cu*Math.cos(a) + cv*Math.sin(a), cn = -cu*Math.sin(a) + cv*Math.cos(a); XS.lon = sd.lon0 + deg(ce/(R*Math.cos(rad(sd.lat0)))); XS.lat = sd.lat0 + deg(cn/R);
+      if(sd.isU) XS.w = len; else XS.d = len; render(); applyAll(); return; }
     if(XS.on && XS.move){ const ll = pickOnCutPlane(e.endPosition); if(!ll) return; XS.lon = XS.move.lon0 + (ll[0]-XS.move.st[0]); XS.lat = XS.move.lat0 + (ll[1]-XS.move.st[1]); render(); applyAll(); return; }
-    if(XS.on && XS.region && !XS.drag && !XS.drawing){ const now = performance.now(); if(now - (XS._hov||0) > 80){ XS._hov = now; let cur = ''; try{ const pk = scene.pick(e.endPosition, 10, 10); const id = pk && pk.id && pk.id.id; if(typeof id==='string'){ if(id.startsWith('xsHandle')) cur = 'nwse-resize'; else if(id.startsWith('xsEdge')) cur = 'move'; } }catch(err){} if(cur){ scene.canvas.style.cursor = cur; XS._cur = true; } else if(XS._cur){ scene.canvas.style.cursor = ''; XS._cur = false; } } }
+    if(XS.on && XS.region && !XS.drag && !XS.drawing && !XS.side){ const now = performance.now(); if(now - (XS._hov||0) > 80){ XS._hov = now; let cur = ''; try{ const pk = scene.pick(e.endPosition, 10, 10); const id = pk && pk.id && pk.id.id; if(typeof id==='string'){ if(id.startsWith('xsArrow')) cur = (+id.slice(7))%2===1 ? 'ew-resize' : 'ns-resize'; else if(id.startsWith('xsHandle')) cur = 'nwse-resize'; else if(id.startsWith('xsEdge')) cur = 'move'; } }catch(err){} if(cur){ scene.canvas.style.cursor = cur; XS._cur = true; } else if(XS._cur){ scene.canvas.style.cursor = ''; XS._cur = false; } } }
     if(XS.on && XS.drag){ const ll = pickOnCutPlane(e.endPosition); if(!ll) return; const uv = toUV(ll[0], ll[1]); const o = XS.drag.opp; let w = Math.abs(uv[0]-o[0]), d = Math.abs(uv[1]-o[1]); const w2 = clampS(w), d2 = clampS(d); const su = Math.sign(uv[0]-o[0])||1, sv = Math.sign(uv[1]-o[1])||1; const cu = o[0] + su*w2/2, cv = o[1] + sv*d2/2; const c = toLL(cu, cv); XS.lon = c[0]; XS.lat = c[1]; XS.w = w2; XS.d = d2; render(); applyAll(); return; }
     return _xsMove && _xsMove(e); }, C.ScreenSpaceEventType.MOUSE_MOVE);
   handler.setInputAction(e => {
     if(XS.on && XS.drawing && XS.drawing.a){ const a = XS.drawing.a; const pt = pickOnPlane(e.position, a.lon, a.lat, a.h); if(pt) setRectFromCorners(a, pt, false); XS.drawing = false; q('#xsDraw').classList.remove('on'); scene.screenSpaceCameraController.enableInputs = true; toast('단면 구역 '+Math.round(XS.w)+' × '+Math.round(XS.d)+' m', 2200); return; }
+    if(XS.on && XS.side){ XS.side = null; scene.screenSpaceCameraController.enableInputs = true; scene.canvas.style.cursor = ''; XS._cur = false; toast('단면 구역 '+Math.round(XS.w)+' × '+Math.round(XS.d)+' m', 1500); return; }
     if(XS.on && XS.move){ XS.move = null; scene.screenSpaceCameraController.enableInputs = true; scene.canvas.style.cursor = ''; XS._cur = false; toast('단면 구역 이동', 1200); return; }
     if(XS.on && XS.drag){ XS.drag = null; scene.screenSpaceCameraController.enableInputs = true; return; }
     return _xsUp && _xsUp(e); }, C.ScreenSpaceEventType.LEFT_UP);
