@@ -22,10 +22,10 @@ html,body{margin:0;height:100%;background:var(--navy-950);color:var(--text);font
 button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer}
 /* 상단 좌측: 로고 + 상태 배지 */
 #top{position:fixed;left:14px;top:12px;display:flex;align-items:center;gap:12px;z-index:5;pointer-events:none}
-.brand{display:flex;align-items:baseline;gap:8px;user-select:none;text-shadow:0 1px 3px rgba(0,0,0,.6)}
-.brand .word{font-weight:800;font-size:19px;letter-spacing:.06em;color:#fff}
-.brand .word b{color:var(--lime);font-weight:900}
-.brand .sub{font-weight:300;font-size:13px;letter-spacing:.32em;color:var(--text-dim)}
+.brand{display:flex;align-items:center;gap:0;user-select:none;height:40px;padding:0 14px;border-radius:12px;background:#1F5FD1;box-shadow:0 2px 10px rgba(0,0,0,.35),inset 0 0 0 1px rgba(255,255,255,.14)}
+.brand .word{font-weight:800;font-size:19px;letter-spacing:.06em;color:#fff;line-height:1}
+.brand .word b{color:#fff;font-weight:900}
+.brand .sub{font-weight:500;font-size:12px;letter-spacing:.28em;color:rgba(255,255,255,.82);line-height:1;margin-left:10px;padding-left:10px;border-left:1px solid rgba(255,255,255,.35)}
 #badge{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;background:rgba(3,18,42,.72);border:1px solid var(--line);font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;backdrop-filter:blur(4px);transition:background .3s}
 #badge.warn{border-color:rgba(242,166,90,.6);color:var(--amber)}
 #badge.rec{border-color:rgba(255,93,93,.5)}
@@ -77,17 +77,27 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 #navCard .eta button{min-width:56px;min-height:44px;border-radius:12px;background:rgba(255,255,255,.1);font-size:13px;font-weight:600;color:#fff}
 #navCard .dn{padding:0 14px 8px;font-size:12px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 탭 시 제어막대 */
-#bar{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%) translateY(8px);display:flex;gap:8px;padding:8px;border-radius:16px;background:var(--panel);border:1px solid var(--line);backdrop-filter:blur(8px);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:6;max-width:calc(100vw - 20px);flex-wrap:wrap;justify-content:center}
+#bar{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%) translateY(8px);display:flex;gap:6px;padding:6px;border-radius:18px;background:rgba(18,20,24,.78);border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(12px);box-shadow:0 6px 20px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:6;max-width:calc(100vw - 20px);flex-wrap:wrap;justify-content:center}
 #bar.show{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
-#bar button{min-width:56px;min-height:56px;padding:0 16px;border-radius:12px;background:rgba(255,255,255,.06);font-size:15px;font-weight:600;color:var(--text);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;line-height:1.1}
-#bar button small{font-size:11px;color:var(--text-dim);font-weight:500}
-#bar button.on{background:var(--navy);box-shadow:inset 0 0 0 1px var(--line-strong);color:#fff}
-#bar button.on small{color:var(--lime-bright)}
-#bar button:active{background:rgba(255,255,255,.14)}
+#bar button{min-width:72px;min-height:56px;padding:0 16px;border-radius:13px;background:transparent;font-size:15px;font-weight:600;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;line-height:1.1}
+#bar button small{font-size:11px;color:rgba(255,255,255,.55);font-weight:500}
+#bar button+button{box-shadow:-1px 0 0 rgba(255,255,255,.08)}
+#bar button.on{background:#3E6AE1;color:#fff;box-shadow:none}
+#bar button.on small{color:rgba(255,255,255,.85)}
+#bar button:active{background:rgba(255,255,255,.12)}
 /* 출처(연한 표기) */
 #attr{position:fixed;right:68px;bottom:6px;font-size:10px;color:rgba(220,232,245,.42);z-index:4;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.7);white-space:nowrap}
 /* 디버그 */
-#dbg{position:fixed;left:14px;bottom:10px;z-index:5;font:11px/1.45 ui-monospace,Consolas,monospace;color:#cfe;background:rgba(3,18,42,.72);padding:8px 10px;border-radius:8px;border:1px solid var(--line);white-space:pre;display:none;pointer-events:none}
+#dbg{position:fixed;left:14px;bottom:14px;z-index:5;width:min(330px,calc(100vw - 110px));font-family:var(--font);color:#fff;background:rgba(18,20,24,.78);padding:10px 12px 8px;border-radius:16px;border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(12px);box-shadow:0 6px 20px rgba(0,0,0,.45);display:none;pointer-events:none}
+#dbg .hd{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+#dbg .hd b{font-size:13px;font-weight:700;letter-spacing:.02em}
+#dbg .hd span{font-size:11px;color:rgba(255,255,255,.55)}
+#dbg .g{display:grid;grid-template-columns:repeat(3,1fr);gap:6px 10px;padding:6px 0;border-top:1px solid rgba(255,255,255,.08)}
+#dbg .c{min-width:0}
+#dbg .c i{display:block;font-style:normal;font-size:10px;color:rgba(255,255,255,.5);letter-spacing:.02em;white-space:nowrap}
+#dbg .c b{display:block;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#dbg .c b.ok{color:#7FD36B}#dbg .c b.warn{color:#F2A65A}
+#dbg .ft{font-size:10px;color:rgba(255,255,255,.45);padding-top:5px;border-top:1px solid rgba(255,255,255,.08);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #dbg.show{display:block}
 /* 내보내기 모달 */
 #modal{position:fixed;inset:0;background:rgba(3,18,42,.65);display:none;align-items:center;justify-content:center;z-index:9}
@@ -454,7 +464,15 @@ function updHud(kmh){ q('#spdV').textContent=Math.round(kmh);
   if(!S.started){ b.textContent = SIM? '시뮬레이션 준비 중…' : REPLAY? '재생 준비 중…' : 'GPS 대기 중…'; b.className=''; return; }
   b.textContent = S.matched ? (S.way && S.way.name ? S.way.name : '도로 정합') : '도로 미정합'; b.className = S.matched? 'ok' : 'warn'; }
 function updDbg(){ const sp = S.pos? scene.cartesianToCanvasCoordinates(S.pos) : null; const W=innerWidth,H=innerHeight;
-  q('#dbg').textContent = `viewport ${W}×${H}  DPR ${devicePixelRatio.toFixed(2)}  canvas ${scene.canvas.width}×${scene.canvas.height}\nFPS ${fps.toFixed(0)}  GPS interval ${(S.fixGap/1000).toFixed(2)} s  acc ${S.acc.toFixed(1)} m  fixes ${S.fixes}\nmatch ${S.matched?'ON':'off'}  way ${S.way?S.way.id+' '+(S.way.name||S.way.hw):'-'}  d ${S.matchDist.toFixed(1)} m  lane ${S.laneOff.toFixed(1)} m\nroads ${ROADS.ways.size}  tiles ${TILES.active.map(p=>p.id).join(',')||'-'}  q ${CONFIG.quality[S.qIdx][0]}\nspeed ${(S.spd*3.6).toFixed(1)} km/h  hdg ${S.hdg.toFixed(1)}  cam ${(S.camHdg||0).toFixed(1)}  range ${S.viewRange.toFixed(0)} pitch ${S.viewPitch.toFixed(1)}\ncar px ${sp?sp.x.toFixed(1)+','+sp.y.toFixed(1):'-'}  target ${(W*CONFIG.anchorX).toFixed(1)},${(H*S.anchorY).toFixed(1)}  Δ ${sp?(sp.x-W*CONFIG.anchorX).toFixed(1)+','+(sp.y-H*S.anchorY).toFixed(1):'-'}  mode ${S.mode} zoom ${S.zoom.toFixed(2)}\nmatched ${S.stat.n?Math.round(100*S.stat.matched/S.stat.n):0}%  mean raw→matched ${S.stat.matched?(S.stat.sumD/S.stat.matched).toFixed(1):'-'} m  log ${LOG.trip?LOG.trip.id:'-'} buf ${LOG.buf.length} db ${LOG.db?'idb':'mem'+(LOG.dbErr?'('+LOG.dbErr.slice(0,30)+')':'')}`; }
+  const c=(k,v,cls)=>'<div class="c"><i>'+k+'</i><b'+(cls?' class="'+cls+'"':'')+'>'+v+'</b></div>';
+  const dx = sp? (sp.x-W*CONFIG.anchorX) : null, dy = sp? (sp.y-H*S.anchorY) : null;
+  const mr = S.stat.n? Math.round(100*S.stat.matched/S.stat.n) : 0;
+  q('#dbg').innerHTML = '<div class="hd"><b>주행 진단</b><span>'+W+'×'+H+' · DPR '+devicePixelRatio.toFixed(2)+'</span></div>'
+   + '<div class="g">'+c('속도',(S.spd*3.6).toFixed(0)+' km/h')+c('FPS',fps.toFixed(0),fps<24?'warn':'ok')+c('화질',CONFIG.quality[S.qIdx][0])+'</div>'
+   + '<div class="g">'+c('GPS 간격',(S.fixGap/1000).toFixed(2)+' s')+c('정확도','±'+S.acc.toFixed(1)+' m',S.acc>15?'warn':'')+c('수신',S.fixes+'회')+'</div>'
+   + '<div class="g">'+c('도로 정합',S.matched?'ON':'OFF',S.matched?'ok':'warn')+c('정합률',mr+'%')+c('보정 거리',S.matchDist.toFixed(1)+' m')+'</div>'
+   + '<div class="g">'+c('방향',S.hdg.toFixed(0)+'°')+c('거리·각도',S.viewRange.toFixed(0)+' m · '+S.viewPitch.toFixed(0)+'°')+c('차량 위치 Δ',sp? dx.toFixed(1)+', '+dy.toFixed(1) : '-', sp&&Math.abs(dx)<=3&&Math.abs(dy)<=3?'ok':'warn')+'</div>'
+   + '<div class="ft">'+(S.way? (S.way.name||S.way.hw)+' · way '+S.way.id : '도로 없음')+' · 3D '+(TILES.active.map(p=>p.id).join(',')||'-')+' · 기록 '+(LOG.trip?LOG.trip.id:'-')+' · 저장 '+(LOG.db?'차량(IndexedDB)':'메모리')+' · '+(S.mode==='nu'?'노스업':'헤딩업')+' ×'+S.zoom.toFixed(2)+'</div>'; }
 if(DEBUG) q('#dbg').classList.add('show');
 
 /* ---------- 주행 기록 (IndexedDB 'sistech-tesla') ---------- */
