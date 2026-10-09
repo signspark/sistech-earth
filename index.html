@@ -7330,5 +7330,53 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
 
 </script>
 
+<script>
+/* ---------- 53. SITE › 부동산 메뉴 신설 (2026-10-10): 분석에서 실거래가 · 전세 안전 체크 · 가시권 분석을 '부동산'(집 아이콘)으로 옮김 ----------
+   - 왼쪽 메뉴 '분석' 바로 아래에 '부동산' 추가 (모바일 하단 탭도 동일)
+   - 한 번에 하나만 켜짐 규칙은 분석 + 부동산 전체에 그대로 적용 (실거래가 + 전세 안전 체크만 함께 사용 가능)
+   - '켜진 자료만' 필터 숨김 · 시간 바는 분석에서만 표시
+*/
+(function(){
+  const site = MENUS.site || [];
+  const an = site.find(c=>c.id==='analysis');
+  if(!an || site.some(c=>c.id==='realestate')) return;
+  const MOVE = ['re','jeonse','view'];
+  const items = [];
+  for(const id of MOVE){ const k = an.items.findIndex(i=>i.id===id); if(k>=0) items.push(an.items.splice(k,1)[0]); }
+  if(!items.length) return;
+  const ICON = '<svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-5.5h4V20"/></svg>';
+  const cat = { id:'realestate', name:'부동산', icon:ICON, items };
+  site.splice(site.indexOf(an)+1, 0, cat);
+
+  // 분석 + 부동산 단일 활성 (실거래가·전세 안전 체크는 짝으로 허용)
+  const PAIR = new Set(['re','jeonse']);
+  const grp = () => [...an.items, ...cat.items].filter(i=>i.type==='layer');
+  const _t53 = toggleLayer;
+  toggleLayer = async function(id, force){
+    try{
+      const g = grp();
+      if(STATE.mode==='site' && g.some(x=>x.id===id)){
+        const want = force!==undefined ? force : !STATE.on.has(id);
+        if(want){
+          const others = g.filter(x=>x.id!==id && STATE.on.has(x.id) && !(PAIR.has(id) && PAIR.has(x.id)));
+          for(const o of others){ try{ await _t53(o.id, false); }catch(e){} }
+          if(others.length){ try{ toast('이전 분석 닫힘: '+others.map(o=>(o.name||o.id).replace(/\s*\(.*$/,'')).join(', '), 1800); }catch(e){} }
+        }
+      }
+    }catch(e){}
+    return _t53.apply(this, arguments);
+  };
+
+  // '켜진 자료만' 필터는 부동산에서도 숨김 (분석과 동일)
+  const _rs53 = renderSub;
+  renderSub = function(){
+    const r = _rs53.apply(this, arguments);
+    try{ if(STATE.mode==='site' && STATE.cat==='realestate'){ const f = document.querySelector('#sub .filter'); if(f) f.style.display = 'none'; const o = document.getElementById('onlyOn'); if(o && o.checked){ o.checked = false; _rs53.apply(this, arguments); } } }catch(e){}
+    return r;
+  };
+  try{ renderCats(); renderSub(); }catch(e){}
+  window.__RM53 = { version:'53.1', cat, moved: items.map(i=>i.id) };
+})();
+</script>
 </body>
 </html>
