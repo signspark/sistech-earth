@@ -157,7 +157,7 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
   <button id="bQ">화질<small>자동</small></button>
   <button id="bExp">기록<small>내보내기</small></button>
 </div>
-<div id="attr">브이월드(국토교통부) · Esri · SISTECH 3D · © OpenStreetMap contributors</div>
+<div id="attr">브이월드(국토교통부) · Esri · SISTECH 3D · © OpenStreetMap contributors · 장소: 카카오</div>
 <div id="dbg"></div>
 <div id="toast"></div>
 <div id="modal"><div class="box"><h2>주행 기록 <button id="mClose" aria-label="닫기">✕</button></h2><div id="trips"></div></div></div>
@@ -202,6 +202,10 @@ const CONFIG = {
   ui: { zoomIn: 0.7, zoomOut: 1.4, zoomMin: 0.25, zoomMax: 4, modeTransSec: 0.8, northUpAnchorY: 0.5 },
   // 지명 라벨 (도로명·교차로·건물)
   labels: { maxRoads: 8, maxJunctions: 5, maxBuildings: 10, roadSpacingM: 250, updateMs: 500, viewMul: 2.4, minViewM: 400, maxViewM: 2500, aheadBonus: 0.55, speedFadeKmh: 160, minFactor: 0.4, carPad: 44, fetchGapMs: 20000, minLevels: 5 },
+  // 카카오 장소 (주요 건물/장소·교차로 라벨 소스) — JS SDK Places 전용, 지도 타일 미표시
+  kakao: { enabled: true, jsKey: 'a63ed99c322b7dc882982c133786c4b6', dailyCap: 5000, roundGapMs: 20000, moveM: 700, radiusMin: 1000, radiusMax: 2500, callDelayMs: 120,
+    categories: [ ['SW8','🚇',100,'station'], ['PO3','🏛',80,'public'], ['AT4','',70,'sight'], ['CT1','',60,'culture'], ['AD5','',55,'hotel'], ['MT1','',50,'mart'], ['SC4','',45,'school'], ['HP8','',50,'hospital'], ['OL7','⚡',20,'fuel'] ],
+    buildingKeywords: ['빌딩','타워','센터'], buildingPri: 65, buildingHgt: 30, junctionKeywords: ['교차로','사거리'] },
   nav: { offRouteM: 50, offRouteFixes: 3, rerouteGapMs: 20000, lineWidth: 8, lineColor: '#3E6AE1', nominatimGapMs: 1100, maxResults: 5, voiceStartTimeoutMs: 4000 },
 };
 const R = 6371008.8, rad = d=>d*Math.PI/180, deg = r=>r*180/Math.PI, clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -487,7 +491,7 @@ function updDbg(){ const sp = S.pos? scene.cartesianToCanvasCoordinates(S.pos) :
    + '<div class="g">'+c('GPS 간격',(S.fixGap/1000).toFixed(2)+' s')+c('정확도','±'+S.acc.toFixed(1)+' m',S.acc>15?'warn':'')+c('수신',S.fixes+'회')+'</div>'
    + '<div class="g">'+c('도로 정합',S.matched?'ON':'OFF',S.matched?'ok':'warn')+c('정합률',mr+'%')+c('보정 거리',S.matchDist.toFixed(1)+' m')+'</div>'
    + '<div class="g">'+c('방향',S.hdg.toFixed(0)+'°')+c('거리·각도',S.viewRange.toFixed(0)+' m · '+S.viewPitch.toFixed(0)+'°')+c('차량 위치 Δ',sp? dx.toFixed(1)+', '+dy.toFixed(1) : '-', sp&&Math.abs(dx)<=3&&Math.abs(dy)<=3?'ok':'warn')+'</div>'
-   + '<div class="ft">'+(S.way? (S.way.name||S.way.hw)+' · way '+S.way.id : '도로 없음')+' · 3D '+(TILES.active.map(p=>p.id).join(',')||'-')+' · 기록 '+(LOG.trip?LOG.trip.id:'-')+' · 저장 '+(LOG.db?'차량(IndexedDB)':'메모리')+' · '+(S.mode==='nu'?'노스업':'헤딩업')+' ×'+S.zoom.toFixed(2)+'</div>'; }
+   + '<div class="ft">'+(S.way? (S.way.name||S.way.hw)+' · way '+S.way.id : '도로 없음')+' · 3D '+(TILES.active.map(p=>p.id).join(',')||'-')+' · 기록 '+(LOG.trip?LOG.trip.id:'-')+' · 저장 '+(LOG.db?'차량(IndexedDB)':'메모리')+' · '+(S.mode==='nu'?'노스업':'헤딩업')+' ×'+S.zoom.toFixed(2)+(window.KAKAO? ' · 카카오 '+({ok:'정상',fallback:'폴백(OSM)',cap:'한도초과(OSM)',loading:'로딩',off:'꺼짐'}[KAKAO.status]||KAKAO.status)+' '+KAKAO.calls()+'회/일 · 장소 '+(LBL.kpois||[]).length+'·교차로 '+(LBL.kjcts||[]).length : '')+'</div>'; }
 if(DEBUG) q('#dbg').classList.add('show');
 
 /* ---------- 주행 기록 (IndexedDB 'sistech-tesla') ---------- */
@@ -700,7 +704,7 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
 (function(){
   const CL = CONFIG.labels;
   const box = q('#labels'), pill = q('#curRoad');
-  const LBL = window.LBL = { on:true, pois:[], jcts:[], fetched:new Set(), lastFetch:-1e9, fetching:false, pending:null, active:new Map(), lastSel:0, mctx:null, count:{jct:0,bld:0}, fetchErr:null };
+  const LBL = window.LBL = { on:true, pois:[], jcts:[], kpois:[], kjcts:[], fetched:new Set(), lastFetch:-1e9, fetching:false, pending:null, active:new Map(), lastSel:0, mctx:null, count:{jct:0,bld:0}, fetchErr:null };
   try{ LBL.on = localStorage.getItem('tesla.labels')!=='0'; }catch(e){}
   const bBtn=q('#bLbl'); const renderBtn=()=>{ bBtn.classList.toggle('on', LBL.on); bBtn.innerHTML = LBL.on ? '지명<small>표시 중</small>' : '지명<small>숨김</small>'; }; renderBtn();
   bBtn.onclick=()=>{ LBL.on=!LBL.on; try{ localStorage.setItem('tesla.labels', LBL.on?'1':'0'); }catch(e){} renderBtn(); if(!LBL.on) clearAll(); toast(LBL.on?'지명 표시':'지명 숨김', 1200); };
@@ -751,8 +755,9 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
     const byName=new Map();
     for(const w of ROADS.ways.values()){ if(!w.name || /^\d+$/.test(w.name)) continue; for(const p of roadPts(w)){ const sc=score(p.m); if(!sc) continue; if(S.way && w.name===S.way.name && sc.d<300) continue; const cur=byName.get(w.name); if(!cur || sc.s<cur.s) byName.set(w.name, { id:'r'+w.name, name:w.name, lon:UL(p.m)[0], lat:UL(p.m)[1], kind:'road', cls:'road'+(S.way&&w.name===S.way.name?' cur':''), s:sc.s, pri:1 }); } }
     cands.push(...[...byName.values()].sort((a,b)=>a.s-b.s).slice(0,nR));
-    cands.push(...LBL.jcts.map(j=>{ const sc=score(j.m); return sc? Object.assign({}, j, { id:'j'+j.id, cls:'jct', s:sc.s, pri:0 }) : null; }).filter(Boolean).sort((a,b)=>a.s-b.s).slice(0,nJ));
-    const bN=new Map(); for(const p of LBL.pois){ const sc=score(p.m); if(!sc) continue; const v=sc.s/(1+p.imp/40); const cur=bN.get(p.name); if(!cur||v<cur.v) bN.set(p.name, Object.assign({}, p, { id:'b'+p.id, cls:'bld'+(p.land?' land':''), s:sc.s, v, pri:2 })); }
+    const jSrc = [...LBL.jcts, ...(LBL.kjcts||[])];
+    cands.push(...jSrc.map(j=>{ const sc=score(j.m); return sc? Object.assign({}, j, { id:'j'+j.id, cls:'jct', s:sc.s, pri:0 }) : null; }).filter(Boolean).sort((a,b)=>a.s-b.s).slice(0,nJ));
+    const pSrc = (window.KAKAO && KAKAO.status==='ok' && LBL.kpois && LBL.kpois.length) ? LBL.kpois : LBL.pois; const bN=new Map(); for(const p of pSrc){ const sc=score(p.m); if(!sc) continue; const v=sc.s/(1+p.imp/40); const cur=bN.get(p.name); if(!cur||v<cur.v) bN.set(p.name, Object.assign({}, p, { id:'b'+p.id, cls:'bld'+(p.land?' land':''), s:sc.s, v, pri:2 })); }
     cands.push(...[...bN.values()].sort((a,b)=>a.v-b.v).slice(0,nB));
     // 화면 투영 + 겹침 제거 (우선순위: 교차로 → 도로명 → 건물)
     cands.sort((a,b)=>a.pri-b.pri || a.s-b.s);
@@ -769,7 +774,57 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
   function place(){ for(const rec of LBL.active.values()){ const sp=scene.cartesianToCanvasCoordinates(worldPos(rec.it)); if(!sp){ rec.el.style.visibility='hidden'; continue; } rec.el.style.visibility=''; rec.el.style.transform=`translate(${sp.x.toFixed(1)}px,${sp.y.toFixed(1)}px) translate(-50%,-50%)`; } }
   LBL.tick=function(now){ const nm = (LBL.on && S.matched && S.way && S.way.name) ? S.way.name : ''; if(nm){ if(pill.textContent!==nm) pill.textContent=nm; pill.classList.add('show'); pill.classList.toggle('up', q('#bar').classList.contains('show')); } else pill.classList.remove('show');
     if(this.pending && !this.fetching && now-this.lastFetch>=CL.fetchGapMs){ const b=this.pending; this.pending=null; this.fetch(b); }
-    if(now-this.lastSel>CL.updateMs){ this.lastSel=now; try{ select(); }catch(e){ console.warn('labels', e.message); } } place(); };
+    if(now-this.lastSel>CL.updateMs){ this.lastSel=now; try{ select(); }catch(e){ console.warn('labels', e.message); } } place(); if(window.KAKAO) KAKAO.tick(now); };
+})();
+</script>
+
+<script>
+/* ---------- 카카오 장소 (2026-10-09): 주요 건물/장소·교차로 라벨 소스 — 공식 JS SDK(services.Places)만 사용, 실패 시 OSM 폴백 ---------- */
+(function(){
+  const CK = CONFIG.kakao;
+  const KAKAO = window.KAKAO = { status: CK.enabled ? 'loading' : 'off', ps:null, lastRound:-1e9, centers:[], seen:new Set(), busy:false, perCat:{}, err:null, roundN:0,
+    dayKey(){ const d=new Date(); return 'tesla.kakao.'+d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0'); },
+    calls(){ try{ return parseInt(localStorage.getItem(this.dayKey())||'0')||0; }catch(e){ return this._mem||0; } },
+    bump(){ const n=this.calls()+1; try{ localStorage.setItem(this.dayKey(), String(n)); }catch(e){ this._mem=n; } if(n>CK.dailyCap) this.status='cap'; return n; },
+  };
+  if(!CK.enabled) return;
+  // SDK 로드 (autoload=false → kakao.maps.load)
+  const sc=document.createElement('script'); sc.src='https://dapi.kakao.com/v2/maps/sdk.js?appkey='+CK.jsKey+'&libraries=services&autoload=false';
+  const fail=(why)=>{ KAKAO.status='fallback'; KAKAO.err=why; console.warn('kakao places fallback:', why); };
+  sc.onerror=()=>fail('sdk load error'); 
+  sc.onload=()=>{ try{ if(!window.kakao||!kakao.maps) return fail('no kakao.maps'); kakao.maps.load(()=>{ try{ KAKAO.ps=new kakao.maps.services.Places(); KAKAO.status = KAKAO.calls()>CK.dailyCap ? 'cap' : 'ok'; }catch(e){ fail('places init: '+e.message); } }); }catch(e){ fail(e.message); } };
+  document.head.appendChild(sc);
+  setTimeout(()=>{ if(KAKAO.status==='loading') fail('sdk timeout'); }, 15000);
+
+  const call = (fn, arg, opt) => new Promise(res=>{ if(KAKAO.calls()>=CK.dailyCap){ KAKAO.status='cap'; return res([]); } KAKAO.bump();
+    const done=(data,status)=>{ res(status===kakao.maps.services.Status.OK ? (data||[]) : []); };
+    try{ fn.call(KAKAO.ps, arg, done, opt); }catch(e){ res([]); } setTimeout(()=>res([]), 10000); });
+  const shortName = (n, cat) => { if(cat==='station'){ const m=/^(.+?역)\b/.exec(n); if(m) return m[1]; } return n; };
+  function addPoi(d, pri, glyph, cat, hgt){ if(KAKAO.seen.has(d.id)) return; KAKAO.seen.add(d.id); const lon=+d.x, lat=+d.y; if(!isFinite(lon)||!isFinite(lat)) return;
+    const name=shortName(d.place_name, cat); LBL.kpois.push({ id:'k'+d.id, name: glyph? glyph+' '+name : name, m:L([lon,lat]), lon, lat, hgt:hgt||0, imp:pri, land:pri>=60, kind:'bld', cat }); KAKAO.perCat[cat]=(KAKAO.perCat[cat]||0)+1; }
+  function addJct(d){ if(KAKAO.seen.has(d.id)) return; KAKAO.seen.add(d.id); const lon=+d.x, lat=+d.y; const nm=d.place_name.replace(/\s*교차로$/,'').trim()||d.place_name;
+    if(LBL.jcts.some(j=>j.name===nm || j.name===d.place_name)) return; LBL.kjcts.push({ id:'k'+d.id, name:nm, m:L([lon,lat]), lon, lat, kind:'jct' }); KAKAO.perCat.junction=(KAKAO.perCat.junction||0)+1; }
+  async function round(){ if(KAKAO.busy||KAKAO.status!=='ok'||S.lon==null) return; KAKAO.busy=true; KAKAO.roundN++;
+    const loc=new kakao.maps.LatLng(S.lat, S.lon); const radius=clamp(Math.round(S.viewRange*S.zoom*CONFIG.labels.viewMul), CK.radiusMin, CK.radiusMax); const sort=kakao.maps.services.SortBy.DISTANCE;
+    KAKAO.centers.push({ m:L([S.lon,S.lat]), r:radius }); const wait=ms=>new Promise(r=>setTimeout(r,ms));
+    try{
+      for(const [code,glyph,pri,cat] of CK.categories){ const docs=await call(KAKAO.ps.categorySearch, code, { location:loc, radius, sort }); await wait(CK.callDelayMs);
+        for(const d of docs){ const n=d.place_name, c=d.category_name||'';
+          if(cat==='hotel' && /모텔|무인텔|여관|여인숙/.test(n+c)) continue;
+          if(cat==='hospital' && !(/병원/.test(n) && !/의원|동물|치과|한의원/.test(n))) continue;
+          let p=pri, g=glyph; if(cat==='school') p = /대학교|고등학교/.test(n) ? 45 : 30; if(cat==='fuel'){ if(/충전/.test(n+c)) { p=20; g='⚡'; } else { p=15; g=''; } }
+          addPoi(d, p, g, cat, 0); } }
+      for(const kw of CK.buildingKeywords){ const docs=await call(KAKAO.ps.keywordSearch, kw, { location:loc, radius, sort }); await wait(CK.callDelayMs);
+        for(const d of docs){ if(!/빌딩/.test(d.category_name||'')) continue; addPoi(d, CK.buildingPri, '', 'building', CK.buildingHgt); } }
+      for(const kw of CK.junctionKeywords){ const docs=await call(KAKAO.ps.keywordSearch, kw, { location:loc, radius, sort }); await wait(CK.callDelayMs);
+        for(const d of docs){ if(!/교차로$/.test(d.category_name||'')) continue; addJct(d); } }
+    }catch(e){ console.warn('kakao round', e.message); }
+    KAKAO.busy=false; }
+  KAKAO.tick=function(now){ if(this.status!=='ok' || S.lon==null || !LBL.on) return; if(now-this.lastRound<CK.roundGapMs) return;
+    const here=L([S.lon,S.lat]); const need=clamp(Math.round(S.viewRange*S.zoom*CONFIG.labels.viewMul), CK.radiusMin, CK.radiusMax);
+    const covered=this.centers.some(c=>Math.hypot(c.m[0]-here[0], c.m[1]-here[1])<CK.moveM && c.r>=need*0.9); if(covered) return;
+    this.lastRound=now; round(); };
+  KAKAO.round=round;
 })();
 </script>
 </body>
