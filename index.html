@@ -6220,5 +6220,608 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
 })();
 
 </script>
+<style id="re50-css">
+#rePanel{position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:30;display:none;flex-direction:column;gap:7px;padding:9px 12px;width:min(640px,94vw);box-sizing:border-box;font-size:13px}
+#rePanel.open{display:flex}
+#rePanel .row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+#rePanel .seg{display:flex;gap:2px;background:rgba(3,18,42,.6);border:1px solid var(--line);border-radius:8px;padding:2px}
+#rePanel .seg button,#rePanel .chip{padding:4px 9px;border-radius:6px;border:1px solid transparent;font-size:12px;color:var(--text);background:transparent;white-space:nowrap}
+#rePanel .seg button.on{background:var(--lime);color:var(--navy-950);font-weight:700}
+#rePanel .chip{border:1px solid var(--line);background:rgba(3,18,42,.5)}
+#rePanel .chip.on{border-color:var(--c);color:#fff;background:color-mix(in srgb,var(--c) 35%,transparent)}
+#rePanel .chip i{display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--c);margin-right:5px;vertical-align:-1px}
+#rePanel input[type=text],#rePanel input[type=number]{height:30px;border-radius:6px;border:1px solid var(--line-strong);background:rgba(3,18,42,.8);color:#fff;padding:0 9px;font-size:13px;font-family:inherit}
+#rePanel input[type=number]{width:74px;text-align:right}
+#rePanel .q{position:relative;flex:1;min-width:160px}
+#rePanel .q input{width:100%;box-sizing:border-box}
+#rePanel .q ul{position:absolute;left:0;right:0;top:32px;list-style:none;margin:0;padding:4px 0;max-height:220px;overflow:auto;background:rgba(3,18,42,.96);border:1px solid var(--line-strong);border-radius:8px;z-index:5;display:none}
+#rePanel .q ul.open{display:block}
+#rePanel .q li{padding:6px 10px;cursor:pointer;font-size:13px}
+#rePanel .q li:hover{background:rgba(164,200,28,.18)}
+#rePanel .q li small{color:var(--text-dim);margin-left:6px}
+#rePanel .n{margin-left:auto;color:var(--text-dim);font-size:12px;white-space:nowrap;cursor:pointer}
+#rePanel.mini .row:not(:first-child){display:none}
+#rePanel .n b{color:var(--lime-bright)}
+#rePanel .x{color:var(--text-dim);font-size:16px;line-height:1;padding:0 2px}
+#rePanel .lbl{color:var(--text-dim);font-size:12px}
+.re50tbl{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+.re50tbl th{color:var(--text-dim);font-weight:500;text-align:left;padding:3px 4px;border-bottom:1px solid var(--line)}
+.re50tbl td{padding:3px 4px;border-bottom:1px solid rgba(127,178,230,.1);white-space:nowrap}
+.re50tbl td.r,.re50tbl th.r{text-align:right}
+.re50tbl tr.x td{text-decoration:line-through;color:var(--text-dim)}
+.re50tbl .tag{margin-left:4px;text-decoration:none;display:inline-block}
+.re50tbl .tag.cancel{background:rgba(255,93,93,.18);color:var(--red);border:1px solid rgba(255,93,93,.4)}
+.re50 .big{font-size:20px;font-weight:800;color:#fff}
+.re50 .big small{font-size:12px;color:var(--text-dim);font-weight:400;margin-left:4px}
+.re50 .fly{margin-top:6px}
+.re50 .ty{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.re50 .ck{list-style:none;margin:0;padding:0}
+.re50 .ck li{padding:5px 0;border-bottom:1px solid rgba(127,178,230,.1);font-size:12.5px;line-height:1.45}
+.re50 .ck li a{color:var(--lime-bright)}
+.re50 label.f{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-dim);margin:4px 0}
+.re50 label.f span{flex:0 0 92px}
+.re50 label.f input,.re50 label.f select{flex:1;height:30px;border-radius:6px;border:1px solid var(--line-strong);background:rgba(3,18,42,.8);color:#fff;padding:0 8px;font-size:13px;font-family:inherit;min-width:0}
+@media (max-width:600px){
+  #rePanel{top:calc(118px + var(--mSafeT));width:calc(100vw - 16px);padding:7px 8px;gap:5px;font-size:12px}
+  #rePanel .seg button,#rePanel .chip{padding:4px 7px;font-size:11px}
+  #rePanel input[type=number]{width:62px;height:28px}
+  #rePanel .q{min-width:120px}
+  #rePanel .lbl.per{display:none}
+}
+</style>
+<script>
+/* ---------- 50. SITE › 분석 › 실거래가 (2026-10-10) ----------
+   - 국토교통부 실거래가 공개자료(인천 연수구, 2025.10~2026.09 계약) → data/re_yeonsu_2025-10_2026-09.json (레이어 처음 켤 때만 지연 로드)
+   - 상단 검색바: 단지·동 검색(카메라 이동) · 매매/전세/월세 · 유형 칩 · 예산(억) · 기간(3/6/12개월)
+   - 3D 기둥(단일 Primitive, 인스턴스 색상) 높이 ∝ 중앙값(매매 평당가 · 전세 보증금 · 월세) · 유형별 색 · 거리별 라벨 정리 · 지번 비공개 집계는 법정동 중심에 반투명 원판
+   - 기둥 클릭 → 카드: 요약(매매·전세·월세 중앙값, ㎡/평 단가, 면적대별 전세가율) · 매매 추이 스파크라인 · 최근 거래표(해제 취소선) · 공시가격(공동주택가격/개별공시지가, 브이월드 NED) · 건물 정보(49 연동) · 전세 안전 체크(51)
+   - 분석 단일 활성(49와 동일 방식) · 모드 전환 정리(46) · 측정 중 양보
+*/
+(function(){
+  const C = Cesium;
+  const VW_KEY = (typeof window.VW_KEY==='string' && window.VW_KEY) || '57C7018D-1A36-4873-99CD-A2272BD3040E';
+  const VW_DOMAIN = (typeof window.VW_DOMAIN==='string' && window.VW_DOMAIN) || 'https://signspark.github.io';
+  const DATA_URL = new URL('data/re_yeonsu_2025-10_2026-09.json', location.href).href;
+  const RE = { on:false, data:null, loading:null, prim:null, labels:null, discs:null, f:{ deal:'m', types:new Set(['A','B','D','F','H']), min:0, max:0, months:12 }, agg:null, sel:null, cardOpen:false, ground:new Map(), cache:new Map(), seq:0, picking:false };
+  const TYN = { A:'아파트', B:'연립다세대', C:'단독다가구', D:'오피스텔', F:'상업업무', H:'공장창고' };
+  const TYC = { A:'#4FA3FF', B:'#F2A65A', C:'#C9A0FF', D:'#2ED3B7', F:'#FF6B8A', H:'#A4C81C' };
+  const DEAL = { m:'매매', j:'전세', w:'월세' };
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const rad = d=>d*Math.PI/180, deg = r=>r*180/Math.PI;
+  const PY = 3.305785;
+  const USE = { '01':'단독주택','02':'공동주택','02001':'아파트','02002':'연립주택','02003':'다세대주택','03':'제1종 근린생활시설','04':'제2종 근린생활시설','05':'문화 및 집회시설','07':'판매시설','09':'의료시설','10':'교육연구시설','11':'노유자시설','13':'운동시설','14':'업무시설','15':'숙박시설','17':'공장','18':'창고시설','20':'자동차 관련시설' };
+  const useName = c => { c = String(c||'').trim(); if(!c) return '-'; return USE[c] || USE[c.slice(0,2)] || '코드 '+c; };
+
+  /* ---- 메뉴: 분석 › 건물 속성 조회 다음 ---- */
+  const an = MENUS.site.find(c=>c.id==='analysis');
+  if(an && !an.items.some(i=>i.id==='re')){
+    const item = { id:'re', q:'이 단지 얼마에 거래됐나', name:'실거래가', src:'국토교통부 실거래가(연수구 2025.10~2026.09) · 매매/전세/월세 · 3D 기둥 · 단지 검색 · 공시가격', type:'layer' };
+    const bi = an.items.findIndex(i=>i.id==='bldg'); if(bi>=0) an.items.splice(bi+1, 0, item); else an.items.unshift(item);
+  }
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  /* ---- 숫자 서식 ---- */
+  const won = v => { // 만원 → 억/만원
+    if(v==null || !isFinite(v)) return '-';
+    v = Math.round(v); if(Math.abs(v) < 10000) return v.toLocaleString()+'만';
+    const eok = Math.floor(v/10000), man = v - eok*10000;
+    return eok.toLocaleString()+'억'+(man? ' '+man.toLocaleString()+'만':'');
+  };
+  const wonS = v => { if(v==null || !isFinite(v)) return '-'; return v>=10000 ? (v/10000).toFixed(v>=100000?0:1).replace(/\.0$/,'')+'억' : Math.round(v).toLocaleString()+'만'; };
+  const ymdS = v => { v = String(v); return v.slice(0,4)+'.'+v.slice(4,6)+'.'+v.slice(6,8); };
+  const med = arr => { if(!arr.length) return null; const s = arr.slice().sort((a,b)=>a-b); const m = s.length>>1; return s.length%2 ? s[m] : (s[m-1]+s[m])/2; };
+  const ymdAdd = (ymd, months) => { let y = Math.floor(ymd/10000), m = Math.floor(ymd/100)%100, d = ymd%100; m += months; while(m<1){ m+=12; y--; } while(m>12){ m-=12; y++; } return y*10000+m*100+d; };
+
+  /* ---- 데이터 ---- */
+  function load(){
+    if(RE.data) return Promise.resolve(RE.data);
+    if(RE.loading) return RE.loading;
+    RE.loading = (window.__RE50_PRELOAD ? Promise.resolve(window.__RE50_PRELOAD) : fetch(DATA_URL, { cache:'force-cache' }).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })).then(d => {
+      d.sites.forEach(s => { s.trades = []; });
+      let maxY = 0;
+      for(const t of d.t){ const s = d.sites[t[0]]; if(s) s.trades.push(t); if(t[3] > maxY) maxY = t[3]; }
+      for(const g of d.dong){ for(const r of g.rows) if(r[2] > maxY) maxY = r[2]; }
+      d.maxYmd = maxY; d.minYmd = +d.meta.from.replace(/-/g,'');
+      // 검색 색인
+      d.index = d.sites.map(s => ({ id:s[0], key:(s[1]+' '+s[2]).toLowerCase(), name:s[1], dong:s[2] }));
+      RE.data = d; RE.loading = null; return d;
+    }).catch(e => { RE.loading = null; throw e; });
+    return RE.loading;
+  }
+  const site = id => RE.data && RE.data.sites[id];
+  const live = t => !t[8];
+
+  /* ---- 필터·집계 ---- */
+  function since(){ const d = RE.data; return Math.max(d.minYmd, ymdAdd(d.maxYmd, -RE.f.months)+1); }
+  function passF(t, f, sinceY){ return t[2]===f.deal && f.types.has(t[1]) && t[3] >= sinceY && (!f.min || t[5] >= f.min) && (!f.max || t[5] <= f.max); }
+  function metricOf(rows, deal){ // 매매: 평당가 중앙값(만원/평) · 전세: 보증금 중앙값 · 월세: 월세 중앙값
+    if(deal==='m') return med(rows.map(t => t[5] / (t[4]/PY)));
+    if(deal==='j') return med(rows.map(t => t[5]));
+    return med(rows.map(t => t[6]));
+  }
+  function aggregate(){
+    const d = RE.data, f = RE.f, s0 = since(); const out = { sites:[], dongs:[], maxV:0 };
+    for(const s of d.sites){
+      const rows = s.trades.filter(t => live(t) && passF(t, f, s0));
+      if(!rows.length) continue;
+      const cnt = {}; for(const t of rows) cnt[t[1]] = (cnt[t[1]]||0)+1;
+      const ty = Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];
+      const v = metricOf(rows, f.deal);
+      out.sites.push({ id:s[0], name:s[1], dong:s[2], lon:s[5], lat:s[6], ty, n:rows.length, v, rows });
+      if(v > out.maxV) out.maxV = v;
+    }
+    for(const g of d.dong){
+      const rows = g.rows.filter(r => !r[7] && r[1]===f.deal && f.types.has(r[0]) && r[2] >= s0 && (!f.min || r[4] >= f.min) && (!f.max || r[4] <= f.max));
+      if(!rows.length) continue;
+      const v = metricOf(rows.map(r => [0, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]]), f.deal);
+      const cnt = {}; for(const r of rows) cnt[r[0]] = (cnt[r[0]]||0)+1;
+      out.dongs.push({ dong:g.dong, lon:g.lon, lat:g.lat, n:rows.length, v, ty:Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0], rows });
+    }
+    RE.agg = out; return out;
+  }
+  const SCALE = { m: v => 24 + v/13, j: v => 24 + v/250, w: v => 24 + v*1.6 }; // m: 만원/평 → 3,000 ≈ 255 m · j: 5억 ≈ 225 m · w: 150만 ≈ 265 m
+  const heightOf = v => Math.min(600, SCALE[RE.f.deal](v || 0));
+
+  /* ---- 지형 높이 (한 번만) ---- */
+  async function groundAll(){
+    const d = RE.data; if(RE.groundDone) return; RE.groundDone = true;
+    try{
+      const pts = d.sites.map(s => C.Cartographic.fromDegrees(s[5], s[6])).concat(d.dong.map(g => C.Cartographic.fromDegrees(g.lon, g.lat)));
+      const tp = viewer.terrainProvider;
+      if(tp && !(tp instanceof C.EllipsoidTerrainProvider)){ await C.sampleTerrainMostDetailed(tp, pts); }
+      d.sites.forEach((s,i) => RE.ground.set('s'+s[0], pts[i].height||0));
+      d.dong.forEach((g,i) => RE.ground.set('d'+g.dong, pts[d.sites.length+i].height||0));
+    }catch(e){ console.warn('re50 terrain', e); }
+  }
+
+  /* ---- 3D 기둥 ---- */
+  function clearPrims(){
+    for(const k of ['prim','discs']){ if(RE[k]){ try{ scene.primitives.remove(RE[k]); }catch(e){} RE[k] = null; } }
+    if(RE.labels){ try{ scene.primitives.remove(RE.labels); }catch(e){} RE.labels = null; }
+    if(RE.selEnt){ try{ viewer.entities.remove(RE.selEnt); }catch(e){} RE.selEnt = null; }
+  }
+  function cylinder(lon, lat, ground, h, radius, color, id, slices){
+    const center = C.Cartesian3.fromDegrees(lon, lat, ground + h/2);
+    const mm = C.Transforms.eastNorthUpToFixedFrame(center);
+    return new C.GeometryInstance({ geometry: new C.CylinderGeometry({ length:h, topRadius:radius, bottomRadius:radius, slices: slices||12, vertexFormat: C.PerInstanceColorAppearance.VERTEX_FORMAT }), modelMatrix: mm, id, attributes:{ color: C.ColorGeometryInstanceAttribute.fromColor(color) } });
+  }
+  function build(){
+    clearPrims(); if(!RE.on || !RE.data) return;
+    const A = aggregate(); const inst = [], dinst = [];
+    RE.labels = scene.primitives.add(new C.LabelCollection({ scene }));
+    const byV = A.sites.slice().sort((a,b)=>b.v-a.v); const top = new Set(byV.slice(0, 40).map(s=>s.id));
+    const unit = RE.f.deal==='m' ? '만/평' : (RE.f.deal==='w' ? '만/월' : '');
+    for(const s of A.sites){
+      const g = RE.ground.get('s'+s.id) || 0, h = heightOf(s.v);
+      const col = C.Color.fromCssColorString(TYC[s.ty]||'#fff').withAlpha(.82);
+      inst.push(cylinder(s.lon, s.lat, g, h, 14, col, { re50:s.id }));
+      const txt = s.name.length > 14 ? s.name.slice(0,13)+'…' : s.name;
+      const val = RE.f.deal==='m' ? Math.round(s.v).toLocaleString()+unit : (RE.f.deal==='j' ? wonS(s.v) : Math.round(s.v)+unit);
+      RE.labels.add({ position: C.Cartesian3.fromDegrees(s.lon, s.lat, g + h + 4), text: txt+'\n'+val, font:'600 12px Inter, "Noto Sans KR", sans-serif', fillColor: C.Color.WHITE, outlineColor: C.Color.fromCssColorString('#03122A'), outlineWidth: 4, style: C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin: C.VerticalOrigin.BOTTOM, horizontalOrigin: C.HorizontalOrigin.CENTER, showBackground: true, backgroundColor: C.Color.fromCssColorString('#03122A').withAlpha(.6), backgroundPadding: new C.Cartesian2(6,3), disableDepthTestDistance: Number.POSITIVE_INFINITY, distanceDisplayCondition: new C.DistanceDisplayCondition(0, top.has(s.id) ? 5000 : 1500), scaleByDistance: new C.NearFarScalar(500, 1, 5000, .6), id:{ re50:s.id } });
+    }
+    for(const g of A.dongs){
+      const gr = RE.ground.get('d'+g.dong) || 0;
+      const col = C.Color.fromCssColorString(TYC[g.ty]||'#fff').withAlpha(.3);
+      dinst.push(cylinder(g.lon, g.lat, gr, 12, 170, col, { re50d:g.dong }, 48));
+      RE.labels.add({ position: C.Cartesian3.fromDegrees(g.lon, g.lat, gr + 20), text: g.dong+' 지번 비공개 집계\n'+g.n+'건 · '+(RE.f.deal==='m' ? Math.round(g.v).toLocaleString()+'만/평' : (RE.f.deal==='j' ? wonS(g.v) : Math.round(g.v)+'만/월')), font:'600 12px Inter, "Noto Sans KR", sans-serif', fillColor: C.Color.fromCssColorString('#E6F0FF'), outlineColor: C.Color.fromCssColorString('#03122A'), outlineWidth: 4, style: C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin: C.VerticalOrigin.BOTTOM, showBackground: true, backgroundColor: C.Color.fromCssColorString('#03122A').withAlpha(.5), backgroundPadding: new C.Cartesian2(6,3), disableDepthTestDistance: Number.POSITIVE_INFINITY, distanceDisplayCondition: new C.DistanceDisplayCondition(0, 8000), id:{ re50d:g.dong } });
+    }
+    if(inst.length) RE.prim = scene.primitives.add(new C.Primitive({ geometryInstances: inst, appearance: new C.PerInstanceColorAppearance({ translucent:true, closed:true }), asynchronous:true, allowPicking:true }));
+    if(dinst.length) RE.discs = scene.primitives.add(new C.Primitive({ geometryInstances: dinst, appearance: new C.PerInstanceColorAppearance({ translucent:true, closed:true }), asynchronous:true, allowPicking:true }));
+    const n = document.getElementById('reN'); if(n) n.innerHTML = '<b>'+A.sites.length+'</b>단지 · <b>'+A.sites.reduce((a,s)=>a+s.n,0).toLocaleString()+'</b>건'+(A.dongs.length? ' · 동집계 '+A.dongs.length:'');
+    highlightSel();
+    try{ scene.requestRender(); }catch(e){}
+  }
+  function highlightSel(){
+    if(RE.selEnt){ try{ viewer.entities.remove(RE.selEnt); }catch(e){} RE.selEnt = null; }
+    if(!RE.sel || !RE.on) return; const s = site(RE.sel); if(!s) return;
+    const a = RE.agg && RE.agg.sites.find(x=>x.id===RE.sel); const g = RE.ground.get('s'+s[0])||0; const h = a ? heightOf(a.v) : 30;
+    RE.selEnt = viewer.entities.add({ position: C.Cartesian3.fromDegrees(s[5], s[6], g + h/2), cylinder:{ length:h+2, topRadius:19, bottomRadius:19, material: C.Color.fromCssColorString('#FFD400').withAlpha(.25), outline:true, outlineColor: C.Color.fromCssColorString('#FFD400'), numberOfVerticalLines:0, slices:24 } });
+    RE.selEnt._re50 = true;
+  }
+
+  /* ---- 패널 ---- */
+  function ensurePanel(){
+    if(document.getElementById('rePanel')) return;
+    const p = document.createElement('div'); p.id = 'rePanel'; p.className = 'panel';
+    const chips = ['A','B','D','F','H'].map(k => `<button class="chip on" data-ty="${k}" style="--c:${TYC[k]}"><i></i>${TYN[k]}</button>`).join('');
+    p.innerHTML = `<div class="row"><div class="q"><input type="text" id="reQ" placeholder="단지·동 검색 (예: 더샵그린워크, 송도동)" autocomplete="off"><ul id="reQL"></ul></div>
+      <div class="seg" id="reDeal"><button data-d="m" class="on">매매</button><button data-d="j">전세</button><button data-d="w">월세</button></div>
+      <span class="n" id="reN"></span><button class="x" id="reX" title="실거래가 끄기">✕</button></div>
+      <div class="row"><span id="reTy">${chips}</span></div>
+      <div class="row"><span class="lbl">예산</span><input type="number" id="reMin" placeholder="최소" min="0" step="0.5"><span class="lbl">억 ~</span><input type="number" id="reMax" placeholder="최대" min="0" step="0.5"><span class="lbl">억</span>
+      <span class="lbl per" style="margin-left:10px">기간</span><div class="seg" id="rePer"><button data-m="3">3개월</button><button data-m="6">6개월</button><button data-m="12" class="on">12개월</button></div>
+      <button class="chip" id="reJs" style="--c:#A4C81C;margin-left:auto">전세 안전 체크</button></div>`;
+    document.body.appendChild(p);
+    p.querySelector('#reDeal').onclick = e => { const b = e.target.closest('button'); if(!b) return; RE.f.deal = b.dataset.d; p.querySelectorAll('#reDeal button').forEach(x=>x.classList.toggle('on', x===b)); build(); if(RE.sel && RE.cardOpen) card(RE.sel); };
+    p.querySelector('#rePer').onclick = e => { const b = e.target.closest('button'); if(!b) return; RE.f.months = +b.dataset.m; p.querySelectorAll('#rePer button').forEach(x=>x.classList.toggle('on', x===b)); build(); };
+    p.querySelector('#reTy').onclick = e => { const b = e.target.closest('button'); if(!b) return; const k = b.dataset.ty; if(RE.f.types.has(k)){ if(RE.f.types.size===1) return toast('유형은 하나 이상 선택', 1200); RE.f.types.delete(k); } else RE.f.types.add(k); b.classList.toggle('on', RE.f.types.has(k)); build(); };
+    const bud = () => { RE.f.min = Math.round((parseFloat(p.querySelector('#reMin').value)||0)*10000); RE.f.max = Math.round((parseFloat(p.querySelector('#reMax').value)||0)*10000); build(); };
+    p.querySelector('#reMin').onchange = bud; p.querySelector('#reMax').onchange = bud;
+    p.querySelector('#reX').onclick = () => toggleLayer('re', false);
+    p.querySelector('#reN').title = '필터 접기/펼치기'; p.querySelector('#reN').onclick = () => p.classList.toggle('mini');
+    p.querySelector('#reJs').onclick = () => toggleLayer('jeonse', true);
+    const q = p.querySelector('#reQ'), ul = p.querySelector('#reQL');
+    q.oninput = () => { const v = q.value.trim().toLowerCase(); if(!v || !RE.data){ ul.classList.remove('open'); return; }
+      const hits = []; const dongs = new Set();
+      for(const g of RE.data.dong) if(g.dong.includes(v)) dongs.add(g.dong);
+      for(const d of dongs) hits.push({ dong:d });
+      for(const s of RE.data.index){ if(s.key.includes(v)){ hits.push(s); if(hits.length > 14) break; } }
+      ul.innerHTML = hits.map(h => h.dong && !h.name ? `<li data-dong="${esc(h.dong)}">${esc(h.dong)}<small>법정동</small></li>` : `<li data-id="${h.id}">${esc(h.name)}<small>${esc(h.dong)}</small></li>`).join('') || '<li><small>검색 결과 없음</small></li>';
+      ul.classList.toggle('open', true); };
+    q.onfocus = q.oninput; q.onblur = () => setTimeout(()=>ul.classList.remove('open'), 180);
+    q.onkeydown = e => { if(e.key==='Enter'){ const li = ul.querySelector('li[data-id],li[data-dong]'); if(li) li.click(); } if(e.key==='Escape') ul.classList.remove('open'); };
+    ul.onclick = e => { const li = e.target.closest('li'); if(!li) return; ul.classList.remove('open');
+      if(li.dataset.id){ const s = site(+li.dataset.id); q.value = s[1]; flyToSite(s, true); }
+      else if(li.dataset.dong){ const g = RE.data.dong.find(x=>x.dong===li.dataset.dong); q.value = g.dong; camera.flyTo({ destination: C.Cartesian3.fromDegrees(g.lon, g.lat - .012, 1800), orientation:{ heading:0, pitch: rad(-50), roll:0 }, duration:1.6 }); } };
+  }
+  function flyToSite(s, openCard){
+    const g = RE.ground.get('s'+s[0])||0; const a = RE.agg && RE.agg.sites.find(x=>x.id===s[0]); const h = a ? heightOf(a.v) : 60;
+    camera.flyTo({ destination: C.Cartesian3.fromDegrees(s[5], s[6] - .0055, g + h + 420), orientation:{ heading:0, pitch: rad(-45), roll:0 }, duration:1.5 });
+    if(openCard){ RE.sel = s[0]; highlightSel(); card(s[0]); }
+  }
+
+  /* ---- 브이월드 JSONP (49 재사용, 없으면 자체) ---- */
+  function jsonp(url, ms){
+    return new Promise((res, rej) => {
+      const cb = '__vw50_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+      const s = document.createElement('script'); let done = false;
+      const fin = () => { done = true; clearTimeout(t); try{ delete window[cb]; }catch(e){ window[cb] = undefined; } s.remove(); };
+      const t = setTimeout(()=>{ if(!done){ fin(); window[cb] = ()=>{}; rej(new Error('응답 시간 초과')); } }, ms||12000);
+      window[cb] = d => { if(done) return; fin(); res(d); };
+      s.onerror = () => { if(done) return; fin(); rej(new Error('네트워크 오류')); };
+      s.src = url + (url.includes('?')?'&':'?') + 'callback=' + cb;
+      document.head.appendChild(s);
+    });
+  }
+  function cached(key, fn){ if(RE.cache.has(key)) return RE.cache.get(key); const p = fn(); RE.cache.set(key, p); p.catch(()=>RE.cache.delete(key)); return p; }
+  const NED = 'https://api.vworld.kr/ned/data/';
+  async function nedRows(op, root, params){ const d = await jsonp(NED+op+'?key='+VW_KEY+'&domain='+encodeURIComponent(VW_DOMAIN)+'&format=json&'+params); const r = d && d[root]; if(!r) return { rows:[], total:0 }; return { rows: r.field || [], total: +r.totalCount || 0 }; }
+  // 공동주택가격: PNU 전체 호(최대 2,000호) · 최신 기준연도 자동 (올해 → 작년)
+  function aptPrice(pnu){
+    return cached('apt:'+pnu, async () => {
+      const y0 = new Date().getFullYear();
+      for(const y of [y0, y0-1]){
+        const a = await nedRows('getApartHousingPriceAttr', 'apartHousingPrices', 'pnu='+pnu+'&stdrYear='+y+'&numOfRows=1000&pageNo=1');
+        if(a.total > 0){ let rows = a.rows; if(a.total > 1000){ const b = await nedRows('getApartHousingPriceAttr', 'apartHousingPrices', 'pnu='+pnu+'&stdrYear='+y+'&numOfRows=1000&pageNo=2'); rows = rows.concat(b.rows); }
+          return { year:y, units: rows.map(r => ({ area:+r.prvuseAr, price:(+r.pblntfPc)/10000, dong:r.dongNm, ho:r.hoNm, name:r.aphusNm })).filter(u => u.price > 0), total:a.total }; }
+      }
+      return { year:null, units:[], total:0 };
+    });
+  }
+  function landPrice(pnu){
+    return cached('land:'+pnu, async () => {
+      const a = await nedRows('getIndvdLandPriceAttr', 'indvdLandPrices', 'pnu='+pnu+'&numOfRows=30&pageNo=1');
+      const rows = a.rows.map(r => ({ year:+r.stdrYear, won:+r.pblntfPclnd })).filter(r=>r.won>0).sort((x,y)=>y.year-x.year);
+      return rows[0] || null;
+    });
+  }
+  function aptMedian(ap, area){ // 면적 ±3㎡ 호의 공시가격 중앙값(만원) → 없으면 전체
+    if(!ap || !ap.units.length) return null;
+    let u = area ? ap.units.filter(x => Math.abs(x.area - area) <= 3) : [];
+    const band = u.length > 0; if(!band) u = ap.units;
+    return { price: med(u.map(x=>x.price)), n:u.length, band, year:ap.year };
+  }
+
+  /* ---- 통계 ---- */
+  function stats(s){ // 카드용(필터 무관 · 전체 기간 · 해제 제외)
+    const T = s.trades.filter(live);
+    const m = T.filter(t=>t[2]==='m'), j = T.filter(t=>t[2]==='j'), w = T.filter(t=>t[2]==='w');
+    const areas = {}; for(const t of T){ const k = Math.round(t[4]); areas[k] = (areas[k]||0)+1; }
+    const mainArea = Object.keys(areas).sort((a,b)=>areas[b]-areas[a]).map(Number)[0] || null;
+    const bands = []; // 면적대별 (±3㎡) 매매·전세 중앙값 → 전세가율
+    const keys = Object.keys(areas).map(Number).sort((a,b)=>areas[b]-areas[a]).slice(0, 6);
+    const used = [];
+    for(const k of keys){ if(used.some(u=>Math.abs(u-k)<=3)) continue; used.push(k);
+      const mm = med(m.filter(t=>Math.abs(t[4]-k)<=3).map(t=>t[5])), jj = med(j.filter(t=>Math.abs(t[4]-k)<=3).map(t=>t[5]));
+      const nm = m.filter(t=>Math.abs(t[4]-k)<=3).length, nj = j.filter(t=>Math.abs(t[4]-k)<=3).length;
+      if(nm || nj) bands.push({ area:k, m:mm, j:jj, nm, nj, ratio: (mm && jj) ? jj/mm : null }); }
+    bands.sort((a,b)=>a.area-b.area);
+    return { n:T.length, nCancel: s.trades.length - T.length,
+      m:{ n:m.length, med: med(m.map(t=>t[5])), m2: med(m.map(t=>t[5]/t[4])), py: med(m.map(t=>t[5]/(t[4]/PY))) },
+      j:{ n:j.length, med: med(j.map(t=>t[5])), m2: med(j.map(t=>t[5]/t[4])) },
+      w:{ n:w.length, dep: med(w.map(t=>t[5])), rent: med(w.map(t=>t[6])) },
+      mainArea, bands, types:[...new Set(T.map(t=>t[1]))] };
+  }
+  function spark(m){ // 월별 매매 평당가 중앙값 스파크라인
+    const by = {}; for(const t of m){ const k = Math.floor(t[3]/100); (by[k] = by[k]||[]).push(t[5]/(t[4]/PY)); }
+    const ks = Object.keys(by).map(Number).sort((a,b)=>a-b); if(ks.length < 2) return '';
+    const vs = ks.map(k=>med(by[k])); const lo = Math.min(...vs), hi = Math.max(...vs); const W = 300, H = 46;
+    const pts = ks.map((k,i) => [ (i/(ks.length-1))*(W-8)+4, H-6 - (hi>lo ? (vs[i]-lo)/(hi-lo) : .5)*(H-14) ]);
+    const path = pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+    const lab = (k) => String(k).slice(2,4)+'.'+String(k).slice(4,6);
+    return `<svg viewBox="0 0 ${W} ${H+14}" width="100%" height="60" style="display:block"><path d="${path}" fill="none" stroke="#A4C81C" stroke-width="2"/>${pts.map(p=>`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.2" fill="#DFFF4F"/>`).join('')}
+      <text x="4" y="${H+11}" font-size="9" fill="#8AA4C4">${lab(ks[0])}</text><text x="${W-4}" y="${H+11}" font-size="9" fill="#8AA4C4" text-anchor="end">${lab(ks[ks.length-1])}</text>
+      <text x="${W-4}" y="10" font-size="9" fill="#8AA4C4" text-anchor="end">최고 ${Math.round(hi).toLocaleString()}만/평</text><text x="4" y="10" font-size="9" fill="#8AA4C4">최저 ${Math.round(lo).toLocaleString()}만/평</text></svg>`;
+  }
+
+  /* ---- 카드 ---- */
+  function CARD(title, sub, html){ STATE.point = null; const c = document.getElementById('card'); c.classList.add('open'); document.getElementById('cardTitle').innerHTML = title + '<small>' + (sub||'') + '</small>'; document.getElementById('cardBody').innerHTML = '<div class="re50" id="re50body">' + html + '</div>'; RE.cardOpen = true; try{ if(window.matchMedia('(max-width:600px)').matches){ const p = document.getElementById('rePanel'); if(p) p.classList.add('mini'); } }catch(e){} }
+  const kv = (k, v) => `<div>${k}<b>${v}</b></div>`;
+  function tradeRows(T, limit){
+    const rows = T.slice().sort((a,b)=>b[3]-a[3]).slice(0, limit);
+    return rows.map(t => `<tr class="${t[8]?'x':''}"><td>${ymdS(t[3])}${t[8]?'<span class="tag cancel">해제</span>':''}</td><td><span class="ty" style="background:${TYC[t[1]]}"></span>${DEAL[t[2]]}</td><td class="r">${t[4].toFixed(1)}㎡</td><td class="r">${t[2]==='w' ? won(t[5])+' / '+Math.round(t[6])+'만' : won(t[5])}</td><td class="r">${t[7]==null?'-':t[7]+'층'}</td></tr>`).join('');
+  }
+  function card(id){
+    const s = site(id); if(!s) return; const my = ++RE.seq; const S = stats(s);
+    const tyHtml = s[7].split('').map(k => `<span class="ty" style="background:${TYC[k]}"></span>${TYN[k]||k}`).join(' · ');
+    const title = esc(s[1]); const sub = esc(s[2]+' '+s[3]) + (s[8] ? ' · '+esc(s[8])+'년 건축' : '') + ' · ' + tyHtml;
+    const bands = S.bands.filter(b=>b.ratio!=null);
+    let html = `<div class="sec"><div class="kv">
+      ${S.m.n ? kv('매매 중앙값', won(S.m.med)+' <span style="color:var(--text-dim);font-weight:400">'+S.m.n+'건</span>') : ''}
+      ${S.m.n ? kv('단가', Math.round(S.m.m2).toLocaleString()+'만/㎡ · '+Math.round(S.m.py).toLocaleString()+'만/평') : ''}
+      ${S.j.n ? kv('전세 중앙값', won(S.j.med)+' <span style="color:var(--text-dim);font-weight:400">'+S.j.n+'건</span>') : ''}
+      ${S.w.n ? kv('월세 중앙값', won(S.w.dep)+' / '+Math.round(S.w.rent)+'만 <span style="color:var(--text-dim);font-weight:400">'+S.w.n+'건</span>') : ''}
+      ${kv('공시가격', '<span id="re50gong" style="color:var(--text-dim);font-weight:400">조회 중…</span>')}
+      </div>
+      ${bands.length ? '<div class="meta" style="margin-top:8px">전세가율(면적대별 · ±3㎡): '+bands.map(b=>'<b style="color:#fff">'+b.area+'㎡</b> '+Math.round(b.ratio*100)+'% <span style="opacity:.7">('+b.nm+'/'+b.nj+'건)</span>').join(' · ')+'</div>' : ''}
+      <div class="meta">계약 ${S.n}건 (해제 ${S.nCancel}건 제외 · 2025.10~2026.09 전체)</div></div>`;
+    const sp = spark(s.trades.filter(t=>live(t) && t[2]==='m'));
+    if(sp) html += `<div class="sec"><h3 style="margin:0 0 4px;font-size:13px;color:var(--lime-bright)">매매 평당가 추이 (월별 중앙값)</h3>${sp}</div>`;
+    const all = s.trades.length;
+    html += `<div class="sec"><h3 style="margin:0 0 6px;font-size:13px;color:var(--lime-bright)">최근 거래 <small style="color:var(--text-dim);font-weight:400">${all}건</small></h3>
+      <table class="re50tbl"><thead><tr><th>계약일</th><th>유형</th><th class="r">면적</th><th class="r">금액</th><th class="r">층</th></tr></thead><tbody id="re50rows">${tradeRows(s.trades, 20)}</tbody></table>
+      ${all > 20 ? '<button class="cta ghost" id="re50more" style="padding:7px;margin-top:8px;font-size:12px">더보기 (20 / '+all+')</button>' : ''}</div>`;
+    html += `<div class="sec" style="display:flex;gap:6px;flex-wrap:wrap"><button class="cta ghost" data-re="bldg" style="flex:1">건물 정보</button><button class="cta" data-re="jeonse" style="flex:1;margin-top:10px">전세 안전 체크</button></div>
+      <div id="re50bldg"></div>
+      <div class="sec"><div class="meta">국토교통부 실거래가 공개자료(2025.10~2026.09, 계약일 기준) · 참고용, 법적 효력 없음</div></div>`;
+    CARD(title, sub, html);
+    const body = document.getElementById('re50body');
+    let shown = 20; const more = body.querySelector('#re50more'); if(more) more.onclick = () => { shown += 20; body.querySelector('#re50rows').innerHTML = tradeRows(s.trades, shown); more.textContent = shown >= all ? '전체 표시됨' : '더보기 ('+Math.min(shown,all)+' / '+all+')'; if(shown >= all) more.disabled = true; };
+    body.querySelectorAll('[data-re]').forEach(b => b.onclick = () => action(b.dataset.re, s, S));
+    // 공시가격
+    gongsi(s, S.mainArea).then(txt => { if(RE.seq!==my) return; const el = document.getElementById('re50gong'); if(el) el.outerHTML = txt; }).catch(e => { const el = document.getElementById('re50gong'); if(el) el.textContent = '조회 실패 ('+e.message+')'; });
+  }
+  async function gongsi(s, area){
+    const isHouse = /[ABD]/.test(s[7]);
+    if(isHouse){ const ap = await aptPrice(s[4]); const r = aptMedian(ap, area);
+      if(r) return won(r.price)+' <span style="color:var(--text-dim);font-weight:400">'+r.year+' 공동주택가격 · '+(r.band ? area+'㎡대 '+r.n+'호' : '전체 '+r.n+'호')+' 중앙값</span>';
+    }
+    const lp = await landPrice(s[4]);
+    if(lp) return lp.won.toLocaleString()+'원/㎡ <span style="color:var(--text-dim);font-weight:400">'+lp.year+' 개별공시지가</span>';
+    return '<span style="color:var(--text-dim)">자료 없음</span>';
+  }
+  async function action(kind, s, S){
+    if(kind==='jeonse'){ toggleLayer('jeonse', true); return; }
+    if(kind==='bldg'){
+      const box = document.getElementById('re50bldg'); if(!box) return;
+      box.innerHTML = '<div class="sec"><p class="lead" style="color:var(--text-dim)">건축물대장 조회 중…</p></div>';
+      try{
+        const B49 = window.__BD49;
+        let feats; if(B49 && B49.vwData) feats = await B49.vwData('LT_C_BLDGINFO', s[5], s[6]);
+        else { const d = await jsonp('https://api.vworld.kr/req/data?service=data&request=GetFeature&data=LT_C_BLDGINFO&key='+VW_KEY+'&domain='+encodeURIComponent(VW_DOMAIN)+'&geomFilter=POINT('+s[5]+' '+s[6]+')&geometry=false&crs=EPSG:4326&format=json&size=20'); feats = (d.response && d.response.result && d.response.result.featureCollection.features) || []; }
+        if(!feats.length){ box.innerHTML = '<div class="sec"><p class="lead" style="color:var(--text-dim)">이 좌표(단지 대표점)에는 건축물대장 레코드가 없습니다. 지도에서 건물을 직접 클릭하려면 <b>분석 › 건물 속성 조회</b>를 켜세요.</p></div>'; return; }
+        const Bm = B49 && B49.merge ? B49.merge(feats) : { P: feats[0].properties, names:[feats[0].properties.bld_nm], dongs:[], n:feats.length };
+        const P = Bm.P; const n = v => { const x = parseFloat(v); return isFinite(x)&&x>0 ? x : 0; };
+        box.innerHTML = `<div class="sec"><h3 style="margin:0 0 6px;font-size:13px;color:var(--lime-bright)">건축물대장 <small style="color:var(--text-dim);font-weight:400">${esc(Bm.names.filter(Boolean).join(' · ')||'')}${Bm.n>1?' · '+Bm.n+'건 병합':''}</small></h3><div class="kv">
+          ${kv('주용도', esc(useName(P.usability)))}${kv('층수', (n(P.grnd_flr)||n(P.ugrnd_flr)) ? '지상 '+n(P.grnd_flr)+' / 지하 '+n(P.ugrnd_flr) : '-')}${kv('연면적', n(P.totalarea)? n(P.totalarea).toLocaleString()+' ㎡':'-')}${kv('대지면적', n(P.platarea)? n(P.platarea).toLocaleString()+' ㎡':'-')}
+          ${kv('사용승인', /^\d{8}$/.test(String(P.useapr_day||'')) ? ymdS(P.useapr_day) : '-')}${kv('용적률', n(P.vl_rat)? n(P.vl_rat).toFixed(1)+' %':'-')}</div>
+          <div class="meta">브이월드 건축물정보(건축물대장 기반) · 위반건축물 여부는 공개 API에 없음 → <a href="https://www.eais.go.kr/" target="_blank" rel="noopener" style="color:var(--lime-bright)">세움터</a>에서 확인 · 더 자세히: <b>분석 › 건물 속성 조회</b> (외곽선·3D 실측 높이)</div></div>`;
+      }catch(e){ box.innerHTML = '<div class="sec"><p class="lead"><span class="warn">건축물대장 조회 실패: '+esc(e.message)+'</span></p></div>'; }
+    }
+  }
+
+  /* ---- 클릭 ---- */
+  function otherBusy(){ return !!(STATE.measure || (window.__GT && window.__GT.picking) || (window.sistechViewshed && window.sistechViewshed.active)); }
+  function nearestSite(lon, lat, maxM){ if(!RE.data) return null; let best = null, bd = maxM||150; const mLat = 111320, mLon = 111320*Math.cos(rad(lat)); for(const s of RE.data.sites){ const d = Math.hypot((s[5]-lon)*mLon, (s[6]-lat)*mLat); if(d < bd){ bd = d; best = s; } } return best; }
+  function pickLL(pos){ let c = null; const pk = scene.pick(pos); if(C.defined(pk) && scene.pickPositionSupported) c = scene.pickPosition(pos); if(!c){ const ray = camera.getPickRay(pos); c = ray && globe.pick(ray, scene); } if(!c) c = camera.pickEllipsoid(pos, globe.ellipsoid); if(!c) return null; const ct = C.Cartographic.fromCartesian(c); return [deg(ct.longitude), deg(ct.latitude)]; }
+  const _reClick = handler.getInputAction(C.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction(e => {
+    if(!RE.on || STATE.mode!=='site' || otherBusy()) return _reClick && _reClick(e);
+    const pk = scene.pick(e.position);
+    let sid = null;
+    if(C.defined(pk) && pk.id && pk.id.re50!==undefined) sid = pk.id.re50;
+    else if(C.defined(pk) && pk.id && pk.id.re50d!==undefined){ const g = RE.agg && RE.agg.dongs.find(x=>x.dong===pk.id.re50d); if(g){ toast(g.dong+' 지번 비공개 집계 · '+g.n+'건 (단독다가구 등은 법정동 단위로만 공개)', 2600); } return; }
+    else if(window.__JS51 && window.__JS51.picking){ const ll = pickLL(e.position); const s = ll && nearestSite(ll[0], ll[1], 150); if(s){ sid = s[0]; } else { toast('가까운 실거래 단지가 없습니다 (150 m 이내) · 기둥을 클릭하세요', 2000); return; } }
+    if(sid===null){ if(C.defined(pk) && pk.id && pk.id.properties) return _reClick && _reClick(e); return _reClick && _reClick(e); }
+    RE.sel = sid; highlightSel();
+    if(window.__JS51 && (window.__JS51.picking || window.__JS51.open)) window.__JS51.select(sid); else card(sid);
+  }, C.ScreenSpaceEventType.LEFT_CLICK);
+
+  /* ---- 켜기/끄기 ---- */
+  async function on(){
+    RE.on = true; ensurePanel(); document.getElementById('rePanel').classList.add('open');
+    const n = document.getElementById('reN'); if(n) n.textContent = '불러오는 중…';
+    try{ await load(); }catch(e){ toast('실거래가 자료를 불러오지 못했습니다: '+e.message, 3500); if(n) n.textContent = '자료 없음'; return; }
+    if(!RE.on) return;
+    await groundAll(); if(!RE.on) return;
+    build();
+    toast('실거래가 켜짐 · 기둥을 클릭하면 단지 거래 내역 · 상단에서 검색/필터', 3000);
+    if(!RE.flown && STATE.mode==='site'){ RE.flown = true; const ct = camera.positionCartographic; const lon = deg(ct.longitude), lat = deg(ct.latitude); if(!(lon > 126.58 && lon < 126.76 && lat > 37.35 && lat < 37.47)){ camera.flyTo({ destination: C.Cartesian3.fromDegrees(126.66, 37.36, 5200), orientation:{ heading:0, pitch: rad(-48), roll:0 }, duration:2 }); } }
+  }
+  function off(){ RE.on = false; RE.seq++; clearPrims(); const p = document.getElementById('rePanel'); if(p) p.classList.remove('open'); if(RE.cardOpen){ document.getElementById('card').classList.remove('open'); RE.cardOpen = false; } RE.sel = null; if(STATE.on.has('jeonse')){ try{ toggleLayer('jeonse', false); }catch(e){} } }
+  const _t50 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(id === 're'){
+      const want = force!==undefined ? force : !STATE.on.has('re');
+      if(want && STATE.mode!=='site'){ toast('실거래가는 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ const others = an ? an.items.filter(x=>x.id!=='re' && x.id!=='jeonse' && STATE.on.has(x.id)) : []; for(const o of others){ try{ await _t50(o.id, false); }catch(e){} } if(others.length) try{ toast('이전 분석 닫힘: '+others.map(o=>(o.name||o.id).replace(/\s*\(.*$/,'')).join(', '), 1800); }catch(e){} }
+      if(want){ STATE.on.add('re'); try{ renderCats(); renderSub(); updateSrc(); }catch(e){} await on(); } else { STATE.on.delete('re'); off(); try{ renderCats(); renderSub(); updateSrc(); }catch(e){} }
+      return;
+    }
+    const r = await _t50.apply(this, arguments);
+    if(RE.on && !STATE.on.has('re')) off();
+    return r;
+  };
+  const _us50 = updateSrc;
+  updateSrc = function(){ _us50.apply(this, arguments); if(!RE.on) return; const el = document.getElementById('hudSrc'); if(el && !el.innerHTML.includes('실거래가')) el.innerHTML = '<b>국토교통부</b> 실거래가 공개자료 (OFFICIAL · 참고용) · ' + el.innerHTML; };
+  const cc = document.getElementById('cardClose'); if(cc) cc.addEventListener('click', ()=>{ if(RE.cardOpen){ RE.cardOpen = false; RE.seq++; RE.sel = null; highlightSel(); } });
+  try{ const _cap50 = closeAllPanels; closeAllPanels = function(){ const r = _cap50.apply(this, arguments); if(RE.cardOpen){ RE.cardOpen = false; RE.sel = null; highlightSel(); } return r; }; }catch(e){}
+  try{ new MutationObserver(()=>{ if(!RE.cardOpen) return; if(!document.getElementById('re50body') && !document.getElementById('js51body')){ RE.cardOpen = false; RE.sel = null; highlightSel(); } }).observe(document.getElementById('cardBody'), { childList:true }); }catch(e){}
+  if(STATE.on.has('re')){ if(STATE.mode==='site') setTimeout(()=>on(), 1500); else STATE.on.delete('re'); }
+  window.__RE50 = { RE, load, aggregate, build, stats, card, site, nearestSite, aptPrice, landPrice, aptMedian, med, won, wonS, flyToSite, TYN, TYC, DEAL, PY, get cardOpen(){ return RE.cardOpen; }, setCardOpen(v){ RE.cardOpen = v; }, version:'50.1' };
+})();
+</script>
+
+<script>
+/* ---------- 51. SITE › 분석 › 전세 안전 체크 (2026-10-10) ----------
+   - 실거래가(50) 카드의 버튼 또는 메뉴에서 열기 → 단지(기둥 클릭) · 전용면적 · 보증금 · 선순위 채권 · 주택유형 입력
+   - (a) 전세가율 = 보증금 ÷ 추정 매매가 (같은 단지 ±3㎡ 12개월 실거래 중앙값 → 같은 단지 ㎡단가 → 공시가격×140% → 동 ㎡단가) · 산정 근거 표시 · 신호등 · (보증금+선순위)/추정가
+   - (b) HUG 전세보증금반환보증 가입 가능성(추정): 아파트/오피스텔 시세 · 연립다세대 공시가격×140% 우선 · 한도 90% · 보증금 7억(수도권)
+   - (c) 위반건축물: 공개 API(브이월드 LT_C_BLDGINFO·NED, 건축HUB 표제부)에 항목 없음 → 세움터/정부24 안내
+   - (d) 체크리스트 + 결과 텍스트 복사
+*/
+(function(){
+  const C = Cesium;
+  const JS = { open:false, picking:false, sid:null, area:null, deposit:40000, senior:0, type:'A', last:null, seq:0 };
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const an = MENUS.site.find(c=>c.id==='analysis');
+  if(an && !an.items.some(i=>i.id==='jeonse')){
+    const item = { id:'jeonse', q:'이 전세 보증금 안전한가', name:'전세 안전 체크', src:'전세가율(실거래 기반 추정 매매가) · HUG 반환보증 가입 가능성(추정) · 위반건축물 확인 안내 · 체크리스트', type:'layer' };
+    const ri = an.items.findIndex(i=>i.id==='re'); if(ri>=0) an.items.splice(ri+1, 0, item); else an.items.push(item);
+  }
+  try{ renderCats(); renderSub(); }catch(e){}
+  const R = () => window.__RE50;
+  const TYN = { A:'아파트', B:'연립다세대', D:'오피스텔', C:'단독다가구' };
+  const HUG_CAP = 70000; // 수도권 보증금 상한(만원)
+
+  /* ---- 추정 매매가 ---- */
+  function estimate(s, area, type, gong){
+    const R0 = R(); const d = R0.RE.data; const PY = R0.PY, med = R0.med;
+    const s12 = Math.max(d.minYmd, (function(y){ let Y=Math.floor(y/10000)-1; return Y*10000 + (y%10000); })(d.maxYmd)+1);
+    const m = s.trades.filter(t => !t[8] && t[2]==='m' && t[3] >= s12);
+    const band = m.filter(t => Math.abs(t[4]-area) <= 3);
+    if(band.length) return { price: med(band.map(t=>t[5])), basis:'같은 단지 ±3㎡ 매매 실거래 중앙값 (12개월)', n:band.length, level:1 };
+    if(m.length){ const m2 = med(m.map(t=>t[5]/t[4])); return { price: m2*area, basis:'같은 단지 매매 ㎡단가 중앙값 × 면적 (면적대 거래 없음 · 12개월)', n:m.length, level:2 }; }
+    if(gong && gong.price) return { price: gong.price*1.4, basis:gong.label+' × 140%', n:gong.n, level:3 };
+    // 동 ㎡단가 (같은 유형)
+    const rows = []; for(const x of d.sites){ if(x[2]!==s[2]) continue; for(const t of x.trades) if(!t[8] && t[2]==='m' && t[1]===type && t[3] >= s12) rows.push(t[5]/t[4]); }
+    if(rows.length) return { price: med(rows)*area, basis:s[2]+' '+(TYN[type]||type)+' 매매 ㎡단가 중앙값 × 면적 (12개월)', n:rows.length, level:4 };
+    return null;
+  }
+  async function gongsiFor(s, area, type){
+    const R0 = R();
+    try{
+      if(type==='A' || type==='B' || type==='D'){ const ap = await R0.aptPrice(s[4]); const r = R0.aptMedian(ap, area); if(r) return { price:r.price, n:r.n, year:r.year, label:r.year+' 공동주택가격'+(r.band ? ' ('+area+'㎡대 '+r.n+'호 중앙값)' : ' (면적대 없음 · 전체 '+r.n+'호 중앙값)'), kind:'apt' }; return { price:null, label:'공동주택가격 없음(해당 PNU 미등재)', kind:'none' }; }
+      // 단독다가구: 개별주택가격 시도
+      const d = await new Promise((res,rej)=>{ const cb='__vw51_'+Math.random().toString(36).slice(2,8); const sc=document.createElement('script'); const t=setTimeout(()=>{sc.remove();rej(new Error('timeout'));},12000); window[cb]=x=>{clearTimeout(t);sc.remove();res(x);}; sc.onerror=()=>{clearTimeout(t);rej(new Error('net'));}; sc.src='https://api.vworld.kr/ned/data/getIndvdHousingPriceAttr?key=57C7018D-1A36-4873-99CD-A2272BD3040E&domain=https%3A%2F%2Fsignspark.github.io&pnu='+s[4]+'&format=json&numOfRows=20&pageNo=1&callback='+cb; document.head.appendChild(sc); });
+      const rows = ((d.indvdHousingPrices && d.indvdHousingPrices.field) || []).map(r=>({ y:+r.stdrYear, p:(+r.housePc||+r.pblntfPc||0)/10000 })).filter(r=>r.p>0).sort((a,b)=>b.y-a.y);
+      if(rows.length) return { price:rows[0].p, n:1, year:rows[0].y, label:rows[0].y+' 개별주택가격', kind:'house' };
+      return { price:null, label:'개별주택가격 없음', kind:'none' };
+    }catch(e){ return { price:null, label:'공시가격 조회 실패('+e.message+')', kind:'err' }; }
+  }
+  function light(r){ if(r==null) return { cls:'warn', txt:'판정 불가', col:'#8AA4C4' }; if(r <= .7) return { cls:'ok', txt:'안전', col:'#A4C81C' }; if(r <= .8) return { cls:'warn', txt:'주의', col:'#F2D35A' }; if(r <= .9) return { cls:'warn', txt:'위험', col:'#F2A65A' }; return { cls:'bad', txt:'깡통전세 위험', col:'#FF5D5D' }; }
+
+  /* ---- 패널 ---- */
+  function CARD(title, sub, html){ STATE.point = null; const c = document.getElementById('card'); c.classList.add('open'); document.getElementById('cardTitle').innerHTML = title + '<small>' + (sub||'') + '</small>'; document.getElementById('cardBody').innerHTML = '<div class="re50" id="js51body">' + html + '</div>'; JS.open = true; const R0 = R(); if(R0) R0.setCardOpen(true); try{ if(window.matchMedia('(max-width:600px)').matches){ const p = document.getElementById('rePanel'); if(p) p.classList.add('mini'); } }catch(e){} }
+  const won = v => R().won(v);
+  function areasOf(s){ const cnt = {}; for(const t of s.trades){ const k = +t[4].toFixed(2); cnt[k] = (cnt[k]||0)+1; } return Object.keys(cnt).map(Number).sort((a,b)=>cnt[b]-cnt[a]).slice(0, 12); }
+  function form(){
+    const R0 = R(); const s = JS.sid!=null ? R0.site(JS.sid) : null;
+    const areas = s ? areasOf(s) : [];
+    if(s && (JS.area==null || !areas.length || JS.areaSite!==s[0])){ JS.area = areas[0] || 84; JS.areaSite = s[0]; const ty = s[7].split('').find(k=>TYN[k]); JS.type = ty || 'A'; }
+    const title = '전세 안전 체크'; const sub = s ? esc(s[1])+' · '+esc(s[2]+' '+s[3])+(s[8]?' · '+esc(s[8])+'년':'') : '단지를 선택하세요';
+    let html = `<div class="sec">
+      <label class="f"><span>단지</span><input type="text" id="js51site" value="${s?esc(s[1]):''}" placeholder="지도에서 기둥(단지)을 클릭" readonly><button class="chip" id="js51pick" style="--c:#A4C81C;height:30px;border:1px solid var(--line-strong);border-radius:6px;background:rgba(3,18,42,.6);color:var(--text);padding:0 8px;font-size:12px">${JS.picking?'클릭 대기…':'지도에서 선택'}</button></label>
+      <label class="f"><span>전용면적</span><select id="js51areaSel">${areas.map(a=>`<option value="${a}" ${Math.abs(a-JS.area)<.005?'selected':''}>${a} ㎡ (${(a/3.305785).toFixed(1)}평)</option>`).join('')}<option value="_" ${areas.some(a=>Math.abs(a-JS.area)<.005)?'':'selected'}>직접 입력</option></select><input type="number" id="js51area" value="${JS.area||''}" step="0.01" min="5" style="flex:0 0 78px"></label>
+      <label class="f"><span>보증금</span><input type="number" id="js51dep" value="${JS.deposit}" step="500" min="0"><span style="flex:0 0 auto">만원</span></label>
+      <label class="f"><span>선순위 채권</span><input type="number" id="js51sen" value="${JS.senior}" step="500" min="0" title="등기부 을구 근저당 채권최고액 등"><span style="flex:0 0 auto">만원</span></label>
+      <label class="f"><span>주택유형</span><select id="js51ty">${['A','B','D','C'].map(k=>`<option value="${k}" ${JS.type===k?'selected':''}>${TYN[k]}</option>`).join('')}</select></label>
+      <button class="cta" id="js51go" style="margin-top:8px">안전도 계산</button>
+      </div><div id="js51out"></div>
+      <div class="sec" style="display:flex;gap:6px"><button class="cta ghost" id="js51back" style="flex:1">← 실거래 카드</button><button class="cta ghost" id="js51copy" style="flex:1" ${JS.last?'':'disabled'}>결과 텍스트 복사</button></div>`;
+    CARD(title, sub, html);
+    const b = document.getElementById('js51body');
+    b.querySelector('#js51pick').onclick = () => { JS.picking = !JS.picking; b.querySelector('#js51pick').textContent = JS.picking ? '클릭 대기…' : '지도에서 선택'; if(JS.picking) toast('지도에서 단지 기둥(또는 건물)을 클릭하세요', 2200); };
+    b.querySelector('#js51areaSel').onchange = e => { if(e.target.value!=='_'){ JS.area = +e.target.value; b.querySelector('#js51area').value = JS.area; } };
+    b.querySelector('#js51area').onchange = e => { JS.area = +e.target.value; const sel = b.querySelector('#js51areaSel'); sel.value = [...sel.options].some(o=>o.value!=='_' && Math.abs(+o.value-JS.area)<.005) ? String(JS.area) : '_'; };
+    b.querySelector('#js51dep').onchange = e => JS.deposit = +e.target.value||0;
+    b.querySelector('#js51sen').onchange = e => JS.senior = +e.target.value||0;
+    b.querySelector('#js51ty').onchange = e => JS.type = e.target.value;
+    b.querySelector('#js51go').onclick = () => { JS.area = +b.querySelector('#js51area').value||JS.area; JS.deposit = +b.querySelector('#js51dep').value||0; JS.senior = +b.querySelector('#js51sen').value||0; JS.type = b.querySelector('#js51ty').value; run(); };
+    b.querySelector('#js51back').onclick = () => { JS.open = false; if(JS.sid!=null) R0.card(JS.sid); else { document.getElementById('card').classList.remove('open'); R0.setCardOpen(false); } };
+    b.querySelector('#js51copy').onclick = copy;
+    if(JS.last && JS.last.sid===JS.sid) document.getElementById('js51out').innerHTML = JS.last.html;
+  }
+  async function run(){
+    const R0 = R(); const s = JS.sid!=null ? R0.site(JS.sid) : null; const out = document.getElementById('js51out'); if(!out) return;
+    if(!s){ out.innerHTML = '<div class="sec"><p class="lead"><span class="warn">먼저 단지를 선택하세요 (지도에서 기둥 클릭)</span></p></div>'; return; }
+    if(!(JS.deposit > 0)){ out.innerHTML = '<div class="sec"><p class="lead"><span class="warn">보증금을 입력하세요</span></p></div>'; return; }
+    const my = ++JS.seq; out.innerHTML = '<div class="sec"><p class="lead" style="color:var(--text-dim)">공시가격 조회·계산 중…</p></div>';
+    const gong = await gongsiFor(s, JS.area, JS.type); if(my!==JS.seq) return;
+    const est = estimate(s, JS.area, JS.type, gong);
+    const area = JS.area, dep = JS.deposit, sen = JS.senior, type = JS.type;
+    // (a) 전세가율
+    const ratio = est ? dep/est.price : null, comb = est ? (dep+sen)/est.price : null; const L = light(ratio), L2 = light(comb);
+    // (b) HUG
+    let hp = null, hb = '';
+    if(type==='B' || type==='C'){ if(gong && gong.price){ hp = gong.price*1.4; hb = gong.label+' × 140% (HUG: 빌라·단독은 공시가격 우선)'; } else if(est){ hp = est.price; hb = est.basis+' (공시가격 없어 시세 대체)'; } }
+    else { if(est && est.level <= 2){ hp = est.price; hb = est.basis+' (KB·부동산테크 시세 대용)'; } else if(est){ hp = est.price; hb = est.basis; } }
+    const limit = hp ? hp*0.9 : null; const need = dep+sen; const pass = limit!=null ? (need <= limit && dep <= HUG_CAP) : null; const margin = limit!=null ? limit - need : null;
+    let html = `<div class="sec"><h3 style="margin:0 0 6px;font-size:13px;color:var(--lime-bright)">① 전세가율</h3>
+      ${est ? `<div class="big">${Math.round(ratio*100)}%<small>보증금 ${won(dep)} ÷ 추정 매매가 ${won(est.price)}</small></div>
+      <div class="fly ${L.cls}" style="border-color:${L.col};color:${L.col}"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${L.col}"></span> ${L.txt}</div>
+      <div class="kv"><div>추정 매매가<b>${won(est.price)}</b></div><div>근거<b style="font-weight:500">${esc(est.basis)} · n=${est.n}</b></div>
+      ${sen>0 ? `<div>(보증금+선순위)/추정가<b style="color:${L2.col}">${Math.round(comb*100)}% · ${L2.txt}</b></div>` : ''}
+      <div>공시가격<b style="font-weight:500">${gong && gong.price ? won(gong.price)+' ('+esc(gong.label)+')' : esc(gong?gong.label:'-')}</b></div></div>
+      <div class="meta">기준: ≤70% 안전 · 70~80% 주의 · 80~90% 위험 · >90% 깡통전세 위험. 추정 매매가는 실거래 중앙값이며 호별 시세와 다를 수 있음.</div>`
+      : `<p class="lead"><span class="warn">추정 매매가를 산정할 수 없습니다</span> (단지·동 매매 실거래와 공시가격 모두 없음) · ${esc(gong?gong.label:'')}</p>`}
+    </div>`;
+    html += `<div class="sec"><h3 style="margin:0 0 6px;font-size:13px;color:var(--lime-bright)">② HUG 전세보증금반환보증 가입 가능성 (추정)</h3>
+      ${limit!=null ? `<div class="fly ${pass?'ok':'bad'}">${pass ? '가입 가능 범위 (추정)' : '한도 초과 (추정)'}</div>
+      <div class="kv"><div>주택가격<b>${won(hp)}</b></div><div>보증한도 (90%)<b>${won(limit)}</b></div><div>보증금+선순위<b>${won(need)}</b></div><div>여유<b style="color:${margin>=0?'#A4C81C':'#FF5D5D'}">${margin>=0?'+':'-'}${won(Math.abs(margin))}</b></div>${dep > HUG_CAP ? '<div>보증금 상한<b style="color:#FF5D5D">7억 초과 (수도권)</b></div>' : ''}</div>
+      <div class="meta">주택가격 근거: ${esc(hb)}</div>` : '<p class="lead"><span class="warn">주택가격을 산정할 수 없어 판정 불가</span></p>'}
+      <div class="meta">2025.10 기준 HUG 산정기준을 단순화한 추정입니다. 실제 심사(권리관계·임대인 요건 등)와 다를 수 있으며 HUG/HF/SGI에서 확인하세요.</div></div>`;
+    html += `<div class="sec"><h3 style="margin:0 0 6px;font-size:13px;color:var(--lime-bright)">③ 위반건축물</h3>
+      <div class="fly warn">자동 확인 불가</div>
+      <div class="meta">브이월드 건축물정보·NED, 건축HUB 표제부 등 공개 API에는 위반건축물 항목이 없습니다 → <a href="https://www.eais.go.kr/" target="_blank" rel="noopener" style="color:var(--lime-bright)">세움터</a> 또는 <a href="https://www.gov.kr/mw/AA020InfoCappView.do?CappBizCD=15000000098" target="_blank" rel="noopener" style="color:var(--lime-bright)">정부24 건축물대장</a>에서 대장 우측 상단 '위반건축물' 표기를 확인하세요. 위반건축물은 HUG 보증 가입이 거절됩니다.</div></div>`;
+    html += `<div class="sec"><h3 style="margin:0 0 6px;font-size:13px;color:var(--lime-bright)">④ 계약 전 체크리스트</h3><ul class="ck">
+      <li>☐ <a href="https://www.iros.go.kr/" target="_blank" rel="noopener">등기부등본(인터넷등기소)</a> — 갑구 소유자 = 임대인 일치 · 을구 근저당(채권최고액) · 압류/가압류/가처분 없음</li>
+      <li>☐ 임대인 국세·지방세 체납 열람 — <a href="https://www.hometax.go.kr/" target="_blank" rel="noopener">홈택스</a>·세무서(계약 전 임대인 동의) / 지방세는 <a href="https://www.wetax.go.kr/" target="_blank" rel="noopener">위택스</a>·주민센터</li>
+      <li>☐ 잔금 당일 전입신고 + 확정일자 (<a href="https://www.gov.kr/" target="_blank" rel="noopener">정부24</a>·주민센터) · 계약서에 "잔금 다음날까지 근저당 설정 금지" 특약</li>
+      <li>☐ 전세보증금 반환보증 가입 — <a href="https://www.khug.or.kr/" target="_blank" rel="noopener">HUG</a> · <a href="https://www.hf.go.kr/" target="_blank" rel="noopener">HF</a> · <a href="https://www.sgic.co.kr/" target="_blank" rel="noopener">SGI</a></li>
+      <li>☐ 건축물대장 용도가 주거용(주택·아파트·오피스텔 주거)인지 · 위반건축물 표기 없는지 — <a href="https://www.eais.go.kr/" target="_blank" rel="noopener">세움터</a></li>
+      </ul></div>
+      <div class="sec"><div class="meta">국토교통부 실거래가·브이월드 공시가격 기반 추정 · 참고용, 법적 효력 없음</div></div>`;
+    out.innerHTML = html;
+    JS.last = { sid: s[0], html, est, ratio, comb, hp, limit, pass, margin, gong, area, dep, sen, type, name:s[1], addr:s[2]+' '+s[3] };
+    const cp = document.getElementById('js51copy'); if(cp) cp.disabled = false;
+    window.__JS51.last = JS.last;
+  }
+  function text(){
+    const L = JS.last; if(!L) return '';
+    const lines = ['[전세 안전 체크] '+L.name+' ('+L.addr+') · '+TYN[L.type]+' '+L.area+'㎡',
+      '보증금 '+won(L.dep)+(L.sen?' · 선순위 '+won(L.sen):''),
+      L.est ? '① 전세가율 '+Math.round(L.ratio*100)+'% ('+light(L.ratio).txt+') · 추정 매매가 '+won(L.est.price)+' · 근거: '+L.est.basis+' n='+L.est.n+(L.sen?' · (보증금+선순위)/추정가 '+Math.round(L.comb*100)+'%':'') : '① 전세가율: 추정 매매가 산정 불가',
+      '   공시가격: '+(L.gong && L.gong.price ? won(L.gong.price)+' ('+L.gong.label+')' : (L.gong?L.gong.label:'-')),
+      L.limit!=null ? '② HUG 반환보증(추정): '+(L.pass?'가입 가능 범위':'한도 초과')+' · 주택가격 '+won(L.hp)+' · 한도(90%) '+won(L.limit)+' · 여유 '+(L.margin>=0?'+':'-')+won(Math.abs(L.margin)) : '② HUG 반환보증: 판정 불가',
+      '   ※ 2025.10 기준 HUG 산정기준을 단순화한 추정. 실제 심사와 다를 수 있음 (HUG/HF/SGI 확인)',
+      '③ 위반건축물: 자동 확인 불가 → 세움터(eais.go.kr)/정부24 건축물대장에서 확인',
+      '④ 체크리스트: 등기부등본(갑구 소유자·을구 근저당·압류) / 임대인 국세·지방세 체납 열람 / 전입신고·확정일자 / 보증보험 가입 / 건축물대장 용도(주거용)',
+      '출처: 국토교통부 실거래가(2025.10~2026.09)·브이월드 공시가격 · 참고용, 법적 효력 없음 · SISTECH EARTH'];
+    return lines.join('\n');
+  }
+  async function copy(){ const t = text(); if(!t) return; try{ await navigator.clipboard.writeText(t); toast('결과 텍스트를 복사했습니다', 1800); }catch(e){ const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); toast('결과 텍스트를 복사했습니다', 1800); }catch(err){ toast('복사 실패 · 수동으로 선택하세요', 2000); } ta.remove(); } }
+  function select(sid){ JS.sid = sid; JS.picking = false; JS.last = null; form(); const s = R().site(sid); if(s) R().flyToSite(s, false); }
+
+  /* ---- 켜기/끄기 ---- */
+  async function on(){
+    if(!STATE.on.has('re')){ await toggleLayer('re', true); if(!STATE.on.has('re')) return; }
+    if(JS.sid==null && R().RE.sel!=null) JS.sid = R().RE.sel;
+    JS.picking = JS.sid==null; form();
+    if(JS.sid==null) toast('지도에서 단지 기둥을 클릭하면 전세 안전 체크가 시작됩니다', 2600);
+  }
+  function off(){ JS.open = false; JS.picking = false; if(document.getElementById('js51body')){ document.getElementById('card').classList.remove('open'); const R0 = R(); if(R0) R0.setCardOpen(false); } }
+  const _t51 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(id === 'jeonse'){
+      const want = force!==undefined ? force : !STATE.on.has('jeonse');
+      if(want && STATE.mode!=='site'){ toast('전세 안전 체크는 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ STATE.on.add('jeonse'); try{ renderCats(); renderSub(); }catch(e){} await on(); if(!STATE.on.has('re')){ STATE.on.delete('jeonse'); } }
+      else { STATE.on.delete('jeonse'); off(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){}
+      return;
+    }
+    const r = await _t51.apply(this, arguments);
+    if(JS.open && !STATE.on.has('jeonse')) off();
+    if(STATE.on.has('jeonse') && !STATE.on.has('re')){ STATE.on.delete('jeonse'); off(); try{ renderCats(); renderSub(); }catch(e){} }
+    return r;
+  };
+  const cc = document.getElementById('cardClose'); if(cc) cc.addEventListener('click', ()=>{ if(JS.open){ JS.open = false; JS.picking = false; } });
+  try{ new MutationObserver(()=>{ if(JS.open && !document.getElementById('js51body')){ JS.open = false; JS.picking = false; } }).observe(document.getElementById('cardBody'), { childList:true }); }catch(e){}
+  if(STATE.on.has('jeonse')) STATE.on.delete('jeonse'); // 패널은 주소로 복원하지 않음
+  window.__JS51 = { JS, get open(){ return JS.open; }, get picking(){ return JS.picking; }, select, run, estimate, gongsiFor, light, text, form, last:null, version:'51.1' };
+})();
+</script>
+
 </body>
 </html>
