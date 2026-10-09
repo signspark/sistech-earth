@@ -7378,5 +7378,440 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   window.__RM53 = { version:'53.1', cat, moved: items.map(i=>i.id) };
 })();
 </script>
+<script>
+/* ---------- 54. SITE › 분석 › 화재 연기 확산 (2026-10-10) ----------
+   - 켜고 건물(또는 지도)을 클릭 → 발화 지점 지정. 건물 층수·높이는 브이월드 건축물정보(LT_C_BLDGINFO) + 3D 모델 실측(49 measureHeight) · 없으면 층수 × 3 m
+   - 바람: Open-Meteo 실황(풍향 = 바람이 불어오는 방향 · 연기는 풍향+180° 로 이동) · 패널에서 풍향/풍속 수정 가능
+   - 대기안정도: Pasquill–Gifford 표(풍속 · 낮/밤 · 일사/운량)로 자동 → A~F 수정 가능
+   - (1) 연기 시각화: Cesium ParticleSystem (부력 상승 → 바람 방향으로 휘어짐 · 확산 · 회색→옅은 회색 · 투명해짐) + 화염 입자 · 카메라 거리 LOD
+   - (2) 확산 추정: 정상상태 가우시안 플룸 (지면 반사) · Briggs 도심 확산계수 · Briggs 부력 플룸 상승
+         C(x,y,z) = Q/(2π u σy σz) · exp(−y²/2σy²) · [exp(−(z−H)²/2σz²) + exp(−(z+H)²/2σz²)]
+         σy,σz (도심): A–B: 0.32x(1+0.0004x)^-½ / 0.24x(1+0.001x)^½ · C: 0.22x(1+0.0004x)^-½ / 0.20x
+                       D: 0.16x(1+0.0004x)^-½ / 0.14x(1+0.0003x)^-½ · E–F: 0.11x(1+0.0004x)^-½ / 0.08x(1+0.0015x)^-½
+         F(부력 플럭스) = g·Qc/(π·cp·ρ·T), Qc = 0.7×HRR · Δh(x) = 1.6 F^⅓ x^⅔ / u (최종 상승 x_f = 49F^⅝(F<55) · 119F^⅖ 에서 고정, 안정(E·F)은 2.6(F/(u·s))^⅓ 와 비교해 작은 값)
+         Q(연기·PM2.5, g/s) = 연기 수율(0.08 g/g) × 질량소실률 (HRR / ΔHc, ΔHc = 20 MJ/kg 혼합 가연물)
+   - 지면 농도 격자(canvas) → GroundPrimitive(Image 재질, 3D 모델·지형 위 덧칠) · 등급: 좋음 ≤15 · 보통 ≤35 · 나쁨 ≤75 · 매우나쁨 >75 · 위험 ≥500 µg/m³(참고)
+   - 0~60분 재생: 플룸 전단 ≈ u·t 까지만 표시 · 결과: 등급별 도달거리 · 최대 지면농도 · 영향 면적 · 나쁨 이상 구역 건물 목록(브이월드 BOX 조회) · 대피 권고 방향(바람 직각)
+   - 단순화한 가우시안 플룸 추정 · 지형/건물 사이 흐름(바람골) 미반영 · 실제 대응은 소방 지휘에 따름 · 참고용
+*/
+(function(){
+  const C = Cesium;
+  const VW_KEY54 = '57C7018D-1A36-4873-99CD-A2272BD3040E', VW_DOMAIN54 = 'https://signspark.github.io';
+  const deg = r=>r*180/Math.PI, rad = d=>d*Math.PI/180;
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const num = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+
+  /* ---- 메뉴: 분석 › rblock/rflood 바로 뒤 ---- */
+  const an = MENUS.site.find(c=>c.id==='analysis');
+  if(an && !an.items.some(i=>i.id==='smoke')){
+    let k = an.items.findIndex(i=>i.id==='rblock'); if(k<0) k = an.items.findIndex(i=>i.id==='rflood'); k = k<0 ? an.items.length : k+1;
+    an.items.splice(k, 0, { id:'smoke', q:'이 건물에 불이 나면 연기는 어디로 가나', name:'화재 연기 확산', src:'건물 클릭 → 발화 지점 · Open-Meteo 실황 바람 · 화재 규모(1/5/20 MW) · Pasquill 안정도 → 연기 입자 시각화 + 가우시안 플룸 지면 PM2.5 추정(좋음/보통/나쁨/매우나쁨/위험) · 0~60분 재생 · 영향 건물 · 대피 방향', type:'layer' });
+    try{ renderCats(); renderSub(); }catch(e){}
+  }
+
+  /* =================== 계산 (순수 함수 · window.__SM54 로 노출) =================== */
+  const G0 = 9.81, CP = 1005, RHO = 1.2, TA = 293;
+  const DHC = 20e6;      // J/kg · 혼합 가연물 유효 연소열
+  const YSMOKE = 0.08;   // g/g · 연기(PM2.5) 수율
+  const CONV = 0.7;      // 대류 열방출 비율
+  // Briggs 도심 확산계수 (x m)
+  function sigmas(cls, x){
+    x = Math.max(1, x);
+    switch(cls){
+      case 'A': case 'B': return { sy:0.32*x*Math.pow(1+0.0004*x,-0.5), sz:0.24*x*Math.pow(1+0.001*x,0.5) };
+      case 'C': return { sy:0.22*x*Math.pow(1+0.0004*x,-0.5), sz:0.20*x };
+      case 'D': return { sy:0.16*x*Math.pow(1+0.0004*x,-0.5), sz:0.14*x*Math.pow(1+0.0003*x,-0.5) };
+      default:  return { sy:0.11*x*Math.pow(1+0.0004*x,-0.5), sz:0.08*x*Math.pow(1+0.0015*x,-0.5) }; // E, F
+    }
+  }
+  // Pasquill–Gifford 안정도 (u m/s, isDay, rad W/m², cloud %)
+  function stability(u, isDay, radW, cloud){
+    if(isDay){
+      const ins = radW >= 600 ? 0 : radW >= 300 ? 1 : 2; // 강 · 중 · 약
+      if(u < 2) return ['A','A','B'][ins];
+      if(u < 3) return ['A','B','C'][ins];   // A–B → A
+      if(u < 5) return ['B','B','C'][ins];   // B–C → B
+      if(u < 6) return ['C','C','D'][ins];   // C–D → C
+      return ['C','D','D'][ins];
+    } else {
+      const cloudy = cloud >= 50; // ≥4/8 운량
+      if(u < 2) return cloudy ? 'E' : 'F';
+      if(u < 3) return cloudy ? 'E' : 'F';
+      if(u < 5) return cloudy ? 'D' : 'E';
+      return 'D';
+    }
+  }
+  const emission = hrrMW => (hrrMW*1e6/DHC) * 1000 * YSMOKE;               // g/s
+  const buoyFlux = hrrMW => G0*(CONV*hrrMW*1e6)/(Math.PI*CP*RHO*TA);        // m⁴/s³
+  const STAB_S = { E:G0/TA*0.02, F:G0/TA*0.035 };
+  function riseFinal(F, u, cls){
+    u = Math.max(0.5, u);
+    const xf = F < 55 ? 49*Math.pow(F,5/8) : 119*Math.pow(F,2/5);
+    let dh = 1.6*Math.cbrt(F)*Math.pow(xf,2/3)/u;
+    if(cls==='E' || cls==='F'){ const s = STAB_S[cls]; dh = Math.min(dh, 2.6*Math.cbrt(F/(u*s)), 5*Math.pow(F,0.25)*Math.pow(s,-3/8)); }
+    return { xf, dh };
+  }
+  function rise(F, u, cls, x){ const fin = riseFinal(F, u, cls); return Math.min(fin.dh, 1.6*Math.cbrt(F)*Math.pow(Math.max(1,x),2/3)/Math.max(0.5,u)); }
+  // 농도 (g/m³) · x 풍하 m, y 횡 m, z 높이 m, H 유효 높이 m
+  function conc(Q, u, cls, H, x, y, z){
+    if(x <= 0) return 0; u = Math.max(0.5, u);
+    const { sy, sz } = sigmas(cls, x);
+    return Q/(2*Math.PI*u*sy*sz) * Math.exp(-y*y/(2*sy*sy)) * (Math.exp(-(z-H)*(z-H)/(2*sz*sz)) + Math.exp(-(z+H)*(z+H)/(2*sz*sz)));
+  }
+  // 파라미터 묶음 → 유효높이 H(x) 포함 지면 농도 µg/m³
+  function model(p){ // { hrr, u, cls, hs }
+    const Q = emission(p.hrr), F = buoyFlux(p.hrr);
+    const H = x => p.hs + rise(F, p.u, p.cls, x);
+    const ug = (x, y, z) => conc(Q, p.u, p.cls, H(x), x, y, z||0) * 1e6;
+    return { Q, F, H, ug, fin: riseFinal(F, p.u, p.cls) };
+  }
+  // 질량 보존 검사: ∫∫ C·u dy dz (z≥0) → Q 와 비교
+  function massFlux(Q, u, cls, H, x){
+    const { sy, sz } = sigmas(cls, x); const ymax = 6*sy, zmax = Math.max(6*sz, H+6*sz);
+    const ny = 400, nz = 400, dy = 2*ymax/ny, dz = zmax/nz; let s = 0;
+    for(let i=0;i<ny;i++){ const y = -ymax + (i+.5)*dy; for(let j=0;j<nz;j++){ const z = (j+.5)*dz; s += conc(Q,u,cls,H,x,y,z); } }
+    return s*dy*dz*Math.max(0.5,u);
+  }
+  /* 등급 (µg/m³ · 시간 노출 참고) */
+  const CLS = [ { k:'good', n:'좋음', lo:0,   col:[80,170,255,0]   },
+                { k:'mod',  n:'보통', lo:15,  col:[60,200,90,110]  },
+                { k:'bad',  n:'나쁨', lo:35,  col:[255,170,0,150]  },
+                { k:'vbad', n:'매우나쁨', lo:75, col:[255,60,60,170] },
+                { k:'dang', n:'위험(참고)', lo:500, col:[150,0,210,200] } ];
+  const clsOf = v => { let r = CLS[0]; for(const c of CLS) if(v >= c.lo) r = c; return r; };
+
+  /* =================== 상태 =================== */
+  const SM = { on:false, src:null, fireH:null, hrr:5, wind:{ dir:270, spd:3, live:null, manual:false }, stab:{ cls:'D', auto:true, why:'' },
+               t:60, playing:false, timer:null, prim:null, ps:null, fl:null, glow:null, mark:[], grid:null, res:null, bl:null, seq:0, lastCam:0, cursor:false, busy:false };
+  const travelDir = () => (SM.wind.dir + 180) % 360;
+
+  /* =================== 브이월드 JSONP =================== */
+  function jsonp(url, ms){ return new Promise((res, rej) => { const cb = '__vw54_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); const s = document.createElement('script'); let done=false; const fin=()=>{ done=true; clearTimeout(t); try{ delete window[cb]; }catch(e){ window[cb]=undefined; } s.remove(); }; const t=setTimeout(()=>{ if(!done){ fin(); window[cb]=()=>{}; rej(new Error('응답 시간 초과')); } }, ms||9000); window[cb]=d=>{ if(done) return; fin(); res(d); }; s.onerror=()=>{ if(done) return; fin(); rej(new Error('네트워크 오류')); }; s.src = url + (url.includes('?')?'&':'?') + 'callback=' + cb; document.head.appendChild(s); }); }
+  async function vwFeat(filter, size){ const d = await jsonp('https://api.vworld.kr/req/data?service=data&request=GetFeature&data=LT_C_BLDGINFO&key='+VW_KEY54+'&domain='+encodeURIComponent(VW_DOMAIN54)+'&geomFilter='+encodeURIComponent(filter)+'&geometry=true&crs=EPSG:4326&format=json&size='+(size||20)); const r = d && d.response; if(!r) throw new Error('응답 없음'); if(r.status==='NOT_FOUND') return []; if(r.status!=='OK') throw new Error((r.error && (r.error.text||r.error.code)) || r.status); return (r.result && r.result.featureCollection && r.result.featureCollection.features) || []; }
+  function ringsOf(geom){ const out=[]; if(!geom) return out; if(geom.type==='Polygon') out.push(geom.coordinates[0]); else if(geom.type==='MultiPolygon') for(const p of geom.coordinates) out.push(p[0]); return out.filter(r=>r && r.length>=4); }
+  function inRing(x, y, ring){ let inside=false; for(let i=0, j=ring.length-1; i<ring.length; j=i++){ const xi=ring[i][0], yi=ring[i][1], xj=ring[j][0], yj=ring[j][1]; if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi)) inside=!inside; } return inside; }
+  function centroid(ring){ let a=0,cx=0,cy=0; for(let i=0;i<ring.length-1;i++){ const [x0,y0]=ring[i],[x1,y1]=ring[i+1]; const f=x0*y1-x1*y0; a+=f; cx+=(x0+x1)*f; cy+=(y0+y1)*f; } if(Math.abs(a)<1e-14) return ring[0]; a*=0.5; return [cx/(6*a), cy/(6*a)]; }
+
+  /* =================== 바람 (Open-Meteo) =================== */
+  async function fetchWind(lon, lat){
+    const u = 'https://api.open-meteo.com/v1/forecast?latitude='+lat.toFixed(4)+'&longitude='+lon.toFixed(4)+'&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,is_day,temperature_2m,shortwave_radiation&wind_speed_unit=ms&timezone=Asia%2FSeoul';
+    const r = await fetch(u); if(!r.ok) throw new Error('Open-Meteo '+r.status); const j = await r.json(); const c = j.current || {};
+    return { dir: num(c.wind_direction_10m), spd: num(c.wind_speed_10m), gust: num(c.wind_gusts_10m), cloud: num(c.cloud_cover), isDay: c.is_day===1, rad: num(c.shortwave_radiation), temp: num(c.temperature_2m), time: c.time };
+  }
+  function applyAutoStab(){ const w = SM.wind.live; if(!w || !SM.stab.auto) return; const u = SM.wind.spd; SM.stab.cls = stability(u, w.isDay, w.rad, w.cloud); SM.stab.why = (w.isDay ? '낮 · 일사 '+Math.round(w.rad)+' W/㎡' : '밤 · 운량 '+Math.round(w.cloud)+'%') + ' · 풍속 '+u.toFixed(1)+' m/s'; }
+
+  /* =================== 지면 농도 격자 → GroundPrimitive =================== */
+  const NPX = 320;
+  function params(){ return { hrr: SM.hrr, u: Math.max(0.5, SM.wind.spd), cls: SM.stab.cls, hs: SM.fireH||0 }; }
+  function centerline(M){ // 중심선 지면 농도 스캔 0~5 km (10 m) → 피크 · 등급별 도달거리 · 표시 범위 X
+    let peak = 0, xPeak = 0; const reach = {}; for(const c of CLS.slice(1)) reach[c.k] = 0;
+    for(let x=10; x<=5000; x+=10){ const c = M.ug(x,0,0); if(c > peak){ peak = c; xPeak = x; } for(const k of CLS.slice(1)) if(c >= k.lo) reach[k.k] = x; }
+    const X = Math.min(5000, Math.max(800, reach.mod*1.15, xPeak*2));
+    return { peak, xPeak, reach, X };
+  }
+  function buildGrid(){
+    if(!SM.src) return null;
+    const M = model(params()); const CL = centerline(M); const X = CL.X; const R = X*1.05;
+    const lat0 = SM.src.lat, lon0 = SM.src.lon; const mLat = 111320, mLon = 111320*Math.cos(rad(lat0));
+    const b = travelDir(); const sb = Math.sin(rad(b)), cb = Math.cos(rad(b));
+    const vals = new Float32Array(NPX*NPX); const xs = new Float32Array(NPX*NPX);
+    let maxC = 0, maxX = 0; const area = { mod:0, bad:0, vbad:0, dang:0 }; const cell = (2*R/NPX)*(2*R/NPX)/1e4; // ha
+    for(let j=0;j<NPX;j++){ const dN = R - (j+.5)*(2*R/NPX); for(let i=0;i<NPX;i++){ const dE = -R + (i+.5)*(2*R/NPX);
+      const x = dE*sb + dN*cb, y = -dE*cb + dN*sb; const k = j*NPX+i; xs[k] = x;
+      if(x <= 0){ vals[k] = 0; continue; }
+      const c = M.ug(x, y, 0); vals[k] = c; if(c > maxC){ maxC = c; maxX = x; }
+      if(c >= 500) area.dang += cell; if(c >= 75) area.vbad += cell; if(c >= 35) area.bad += cell; if(c >= 15) area.mod += cell; } }
+    const reach = CL.reach; // 중심선 도달거리 (등급 하한을 넘는 최대 x · 5 km 까지 스캔)
+    const rect = C.Rectangle.fromDegrees(lon0 - R/mLon, lat0 - R/mLat, lon0 + R/mLon, lat0 + R/mLat);
+    SM.grid = { vals, xs, R, X, rect, mLat, mLon, b, M };
+    SM.res = { maxC, maxX, area, reach, Q:M.Q, F:M.F, Hfin: (SM.fireH||0) + M.fin.dh, xf: M.fin.xf, X };
+    return SM.grid;
+  }
+  function paint(tMin){
+    const g = SM.grid; if(!g) return null;
+    const cv = document.createElement('canvas'); cv.width = cv.height = NPX; const ctx = cv.getContext('2d'); const im = ctx.createImageData(NPX, NPX); const d = im.data;
+    const xmax = tMin >= 60 ? 1e9 : Math.max(0.5, SM.wind.spd)*tMin*60;
+    for(let k=0;k<NPX*NPX;k++){ const v = g.vals[k]; if(v < 15 || g.xs[k] > xmax) continue; const c = clsOf(v); const o = k*4; d[o]=c.col[0]; d[o+1]=c.col[1]; d[o+2]=c.col[2]; d[o+3]=c.col[3]; }
+    ctx.putImageData(im, 0, 0);
+    return cv;
+  }
+  function showGrid(){
+    const g = SM.grid; if(!g) return; const cv = paint(SM.t); if(!cv) return;
+    if(SM.prim && SM.prim._sm54rect === g.rect){ try{ SM.prim.appearance.material.uniforms.image = cv; }catch(e){} scene.requestRender && scene.requestRender(); return; }
+    clearPrim();
+    const prim = new C.GroundPrimitive({ geometryInstances: new C.GeometryInstance({ geometry: new C.RectangleGeometry({ rectangle: g.rect, vertexFormat: C.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat }) }), appearance: new C.MaterialAppearance({ material: C.Material.fromType('Image', { image: cv }), translucent: true, flat: true }), classificationType: C.ClassificationType.BOTH, asynchronous: false, allowPicking: false });
+    prim._sm54rect = g.rect; scene.primitives.add(prim); SM.prim = prim; scene.requestRender && scene.requestRender();
+  }
+  function clearPrim(){ if(SM.prim){ try{ scene.primitives.remove(SM.prim); }catch(e){} SM.prim = null; } }
+
+  /* =================== 연기 입자 =================== */
+  function puffImage(){ const cv = document.createElement('canvas'); cv.width = cv.height = 64; const g = cv.getContext('2d'); const r = g.createRadialGradient(32,32,2,32,32,30); r.addColorStop(0,'rgba(255,255,255,1)'); r.addColorStop(0.45,'rgba(255,255,255,.55)'); r.addColorStop(1,'rgba(255,255,255,0)'); g.fillStyle = r; g.fillRect(0,0,64,64); return cv; }
+  const PUFF = puffImage();
+  const VIS_LIFE = 40; // 입자 수명 s
+  const visK = () => Math.max(1.5, Math.min(5, 600/(Math.max(0.5, SM.wind.spd)*VIS_LIFE))); // 시각화용 이동 배율(수명 안에 플룸 형태 ~600 m 가 보이도록)
+  function enu(){ const o = C.Cartesian3.fromDegrees(SM.src.lon, SM.src.lat, 0); const m = C.Transforms.eastNorthUpToFixedFrame(o); const col = i => C.Matrix4.getColumn(m, i, new C.Cartesian4()); const v = c => new C.Cartesian3(c.x, c.y, c.z); return { E: v(col(0)), N: v(col(1)), U: v(col(2)) }; }
+  function windVec(){ const f = enu(); const b = rad(travelDir()); const v = new C.Cartesian3(); C.Cartesian3.add(C.Cartesian3.multiplyByScalar(f.E, Math.sin(b), new C.Cartesian3()), C.Cartesian3.multiplyByScalar(f.N, Math.cos(b), new C.Cartesian3()), v); return { dir: v, up: f.U }; }
+  function makeParticles(){
+    clearParticles(); if(!SM.src) return;
+    const srcH = (SM.src.ground||0) + (SM.fireH||0);
+    const mm = C.Transforms.eastNorthUpToFixedFrame(C.Cartesian3.fromDegrees(SM.src.lon, SM.src.lat, srcH));
+    const wv = windVec(); const U = wv.up, D = wv.dir;
+    const spd = Math.max(0.5, SM.wind.spd); const F = buoyFlux(SM.hrr); const w0 = Math.min(12, 2 + Math.cbrt(F)*0.8); // 초기 상승 속도
+    const life = VIS_LIFE, rate = 60, VIS_K = visK();
+    const tmp = new C.Cartesian3(), hv = new C.Cartesian3();
+    const ps = new C.ParticleSystem({ image: PUFF, startColor: C.Color.fromCssColorString('#3a3a3a').withAlpha(.42), endColor: C.Color.fromCssColorString('#d0d0d0').withAlpha(0), startScale: 1, endScale: 6 + Math.cbrt(SM.hrr)*1.5, minimumParticleLife: life*0.7, maximumParticleLife: life, minimumSpeed: w0*0.7, maximumSpeed: w0, imageSize: new C.Cartesian2(18, 18), emissionRate: rate, emitter: new C.ConeEmitter(C.Math.toRadians(18)), modelMatrix: mm, sizeInMeters: true,
+      updateCallback: (p, dt) => {
+        const age = p.age, tau = Math.min(1, age/12);
+        // 수평: 바람 속도로 수렴 (시각화 배율) · 수직: 부력 감쇠 + 난류
+        C.Cartesian3.multiplyByScalar(D, spd*VIS_K, tmp);
+        const vUp = C.Cartesian3.dot(p.velocity, U);
+        C.Cartesian3.multiplyByScalar(U, vUp, hv); C.Cartesian3.subtract(p.velocity, hv, hv); // 수평 성분
+        C.Cartesian3.subtract(tmp, hv, tmp); C.Cartesian3.multiplyByScalar(tmp, Math.min(1, dt*0.35), tmp); C.Cartesian3.add(p.velocity, tmp, p.velocity);
+        const buoy = w0*Math.exp(-age/14) - vUp; C.Cartesian3.multiplyByScalar(U, buoy*Math.min(1, dt*0.5), tmp); C.Cartesian3.add(p.velocity, tmp, p.velocity);
+        if(age < life){ const n = (0.6+tau)*spd*0.35; C.Cartesian3.multiplyByScalar(U, (Math.random()-0.5)*n*dt*2, tmp); C.Cartesian3.add(p.velocity, tmp, p.velocity); }
+      } });
+    ps._sm54 = true; scene.primitives.add(ps); SM.ps = ps;
+    // 화염 (짧은 수명 · 주황→빨강)
+    const fl = new C.ParticleSystem({ image: PUFF, startColor: C.Color.fromCssColorString('#ffb347').withAlpha(.9), endColor: C.Color.fromCssColorString('#ff2d00').withAlpha(0), startScale: 1, endScale: 0.4, minimumParticleLife: 0.8, maximumParticleLife: 1.4, minimumSpeed: 2, maximumSpeed: 5, imageSize: new C.Cartesian2(Math.max(2, 2+Math.cbrt(SM.hrr)*1.5), Math.max(2, 2+Math.cbrt(SM.hrr)*1.5)), emissionRate: 40, emitter: new C.ConeEmitter(C.Math.toRadians(25)), modelMatrix: mm, sizeInMeters: true });
+    fl._sm54 = true; scene.primitives.add(fl); SM.fl = fl;
+    if(!SM.glow){ SM.glow = viewer.entities.add({ position: C.Cartesian3.fromDegrees(SM.src.lon, SM.src.lat, srcH), point:{ pixelSize: 14, color: C.Color.fromCssColorString('#ff7a00').withAlpha(.9), outlineColor: C.Color.YELLOW, outlineWidth: 3, disableDepthTestDistance: Number.POSITIVE_INFINITY } }); SM.glow._sm54 = true; }
+    else SM.glow.position = C.Cartesian3.fromDegrees(SM.src.lon, SM.src.lat, srcH);
+    lod();
+  }
+  // 플룸 중심축 (유효 높이 H(x) 곡선) · 상공 통과 여부를 보여 줌
+  function drawAxis(){ if(SM.axis){ try{ viewer.entities.remove(SM.axis); }catch(e){} SM.axis = null; } const g = SM.grid; if(!g || !SM.src) return; const b = rad(travelDir()); const pts = []; for(let x=0; x<=g.X; x+=Math.max(25, g.X/40)){ pts.push(C.Cartesian3.fromDegrees(SM.src.lon + Math.sin(b)*x/g.mLon, SM.src.lat + Math.cos(b)*x/g.mLat, (SM.src.ground||0) + g.M.H(x))); } SM.axis = viewer.entities.add({ polyline:{ positions: pts, width: 2, material: new C.PolylineDashMaterialProperty({ color: C.Color.fromCssColorString('#ffd166').withAlpha(.85), dashLength: 12 }) } }); SM.axis._sm54 = true; }
+  function clearParticles(){ for(const k of ['ps','fl']){ if(SM[k]){ try{ scene.primitives.remove(SM[k]); }catch(e){} SM[k] = null; } } if(SM.glow){ try{ viewer.entities.remove(SM.glow); }catch(e){} SM.glow = null; } if(SM.axis){ try{ viewer.entities.remove(SM.axis); }catch(e){} SM.axis = null; } }
+  function lod(){ if(!SM.ps || !SM.src) return; const d = C.Cartesian3.distance(camera.positionWC, C.Cartesian3.fromDegrees(SM.src.lon, SM.src.lat, SM.src.ground||0)); const f = d < 3000 ? 1 : d < 8000 ? 0.5 : d < 20000 ? 0.2 : 0; SM.ps.emissionRate = 60*f; SM.ps.show = f > 0; if(SM.fl){ SM.fl.show = d < 6000; } }
+  function clearMarks(){ for(const e of SM.mark){ try{ viewer.entities.remove(e); }catch(err){} } SM.mark = []; }
+
+  /* =================== 패널 =================== */
+  const css = document.createElement('style'); css.textContent = `
+#smPanel{position:fixed;right:14px;top:72px;width:372px;max-height:calc(100vh - 120px);z-index:21;display:none;flex-direction:column;overflow:hidden}
+#smPanel.open{display:flex}
+#smPanel .hd{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+#smPanel .hd h2{margin:0;font-size:15px;font-weight:700;flex:1}#smPanel .hd h2 small{display:block;font-weight:400;color:var(--text-dim);font-size:12px}
+#smPanel .hd button{color:var(--text-dim);font-size:18px;background:none;border:0;cursor:pointer}
+#smPanel .bd{padding:12px 14px;display:flex;flex-direction:column;gap:10px;overflow:auto}
+#smPanel .big{display:flex;align-items:center;gap:10px;background:rgba(0,0,0,.3);border-radius:10px;padding:10px 12px}
+#smPanel .big b{font-size:20px;color:#fff;line-height:1.15}#smPanel .big small{display:block;color:var(--text-dim);font-size:12px;margin-top:3px}
+#smPanel .big .tag{margin-left:auto;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid var(--line);color:var(--text-dim);white-space:nowrap}
+#smPanel .big .tag.fire{color:#FF8A8A;border-color:#FF8A8A}#smPanel .big .tag.wait{color:var(--lime-bright);border-color:var(--lime)}
+#smPanel .kv{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;font-size:12px}#smPanel .kv div{background:rgba(0,0,0,.2);border-radius:8px;padding:6px 8px}#smPanel .kv small{display:block;color:var(--text-dim);font-size:11px}#smPanel .kv b{color:#fff;font-size:14px}
+#smPanel .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}#smPanel .row label{font-size:12px;color:var(--text-dim);white-space:nowrap}
+#smPanel input[type=number],#smPanel select{height:30px;border-radius:7px;border:1px solid var(--line);background:rgba(0,0,0,.25);color:var(--text);padding:0 8px;font:13px var(--font)}
+#smPanel input[type=number]{width:66px}#smPanel select{min-width:90px}#smPanel select option{color:#000}
+#smPanel input[type=range]{accent-color:var(--lime);flex:1}
+#smPanel .btns{display:flex;gap:6px;flex-wrap:wrap}#smPanel .btns button,#smPanel .row button{height:30px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--text);font:600 12px var(--font);cursor:pointer;white-space:nowrap}
+#smPanel .btns button:hover,#smPanel .row button:hover{border-color:var(--lime);color:var(--lime-bright)}#smPanel .btns button.on,#smPanel .row button.on{background:var(--lime);color:#06224A;border-color:var(--lime)}
+#smPanel .sec{border-top:1px solid var(--line);padding-top:8px;display:flex;flex-direction:column;gap:8px}#smPanel .sec h4{margin:0;font-size:12.5px;color:var(--text)}#smPanel .sec h4 small{color:var(--text-dim);font-weight:400;margin-left:6px}
+#smPanel .lg{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--text-dim)}#smPanel .lg i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:3px}
+#smPanel .hint{font-size:11.5px;color:var(--text-dim);line-height:1.5}#smPanel .hint b{color:var(--lime-bright);font-weight:600}
+#smPanel .play{width:40px;height:30px;border-radius:8px;border:1px solid var(--lime);background:var(--lime);color:#06224A;font:700 13px var(--font);cursor:pointer}
+#smPanel table{width:100%;border-collapse:collapse;font-size:12px}#smPanel th{color:var(--text-dim);font-weight:500;text-align:left;padding:3px 4px;border-bottom:1px solid var(--line)}#smPanel td{padding:3px 4px;border-bottom:1px solid rgba(127,178,230,.1);white-space:nowrap}#smPanel td.r,#smPanel th.r{text-align:right}
+#smPanel details{font-size:11.5px;color:var(--text-dim);line-height:1.55}#smPanel summary{cursor:pointer;color:var(--text);font-weight:600;font-size:12px}#smPanel details code{color:#fff;font-size:11px}
+#smPanel .bl{max-height:150px;overflow:auto;font-size:12px}#smPanel .bl div{padding:3px 0;border-bottom:1px solid rgba(127,178,230,.1);display:flex;gap:6px}#smPanel .bl div span:first-child{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#smPanel .bl .c{font-weight:700}
+#smPanel .ev{display:flex;gap:8px;align-items:center;font-size:12.5px;flex-wrap:wrap}#smPanel .ev>span:first-child{white-space:nowrap}#smPanel .ev b{font-size:16px;color:var(--lime-bright);white-space:nowrap}
+#smPanel .sw{display:flex;gap:4px;background:rgba(3,18,42,.6);border:1px solid var(--line);border-radius:8px;padding:2px}#smPanel .sw button{height:26px;padding:0 10px;border-radius:6px;border:0;font-size:12px;color:var(--text);background:transparent}#smPanel .sw button.on{background:var(--lime);color:#06224A;font-weight:700}
+@media (max-width:600px){ #smPanel{ left:0 !important; right:0 !important; top:auto !important; bottom:calc(var(--mTab, 56px) + var(--mSafeB, 0px)) !important; width:100% !important; max-height:60vh !important; border-radius:16px 16px 0 0; z-index:27 !important } #smPanel .big b{font-size:17px} #smPanel .kv{grid-template-columns:1fr 1fr} }
+@media (max-height:500px) and (min-width:601px) and (max-width:1000px){ #smPanel{ top:56px !important; right:10px !important; width:340px !important; max-height:calc(100vh - 64px) !important; border-radius:14px } }
+`; document.head.appendChild(css);
+  const P = document.createElement('div'); P.id='smPanel'; P.className='panel'; P.innerHTML = `
+<div class="hd"><h2>화재 연기 확산<small>건물 클릭 → 발화 지점 · 실황 바람 · 가우시안 플룸 추정</small></h2><button id="smClose" aria-label="닫기">×</button></div>
+<div class="bd">
+  <div class="big"><div><b id="smSrcN">발화 지점을 클릭하세요</b><small id="smSrcS">건물 또는 지도 위 아무 곳</small></div><span class="tag wait" id="smTag">대기</span></div>
+  <div class="row"><label>표시</label><span class="sw" id="smShow"><button data-k="vis" class="on">연기 시각화</button><button data-k="est" class="on">추정 범위</button></span><button id="smFly" style="margin-left:auto">플룸 보기</button></div>
+  <div class="sec"><h4>발화 위치<small id="smBldg"></small></h4>
+    <div class="row"><label>발화 층</label><select id="smFloor"></select><label>발화 높이</label><input type="number" id="smH" min="0" max="500" step="1"><label>m</label><button id="smRepick" title="다시 클릭해서 지점 바꾸기">지점 변경</button></div>
+    <div class="hint" id="smHInfo">층수·높이: 브이월드 건축물대장 + 3D 모델 실측 (없으면 층수 × 3 m)</div>
+  </div>
+  <div class="sec"><h4>바람<small id="smWxInfo">Open-Meteo 실황</small></h4>
+    <div class="row"><label>풍향(불어오는 방향)</label><input type="number" id="smDir" min="0" max="360" step="5"><label>°</label><label>풍속</label><input type="number" id="smSpd" min="0.5" max="30" step="0.5"><label>m/s</label><button id="smWxBtn">실황</button></div>
+    <div class="hint" id="smWxHint">연기는 풍향의 반대(풍하) 방향으로 이동합니다</div>
+  </div>
+  <div class="sec"><h4>화재 규모<small>열방출률 HRR</small></h4>
+    <div class="btns" id="smHrr"><button data-h="1">소형 1 MW<br><small>세대 화재</small></button><button data-h="5" class="on">중형 5 MW<br><small>다세대·상가</small></button><button data-h="20">대형 20 MW<br><small>상가·공장</small></button></div>
+    <div class="row"><label>직접 입력</label><input type="number" id="smHrrIn" min="0.1" max="500" step="0.5"><label>MW</label><span class="hint" id="smQ"></span></div>
+  </div>
+  <div class="sec"><h4>대기안정도<small>Pasquill–Gifford</small></h4>
+    <div class="row"><span class="sw" id="smStabMode"><button data-m="auto" class="on">자동</button><button data-m="man">직접</button></span><select id="smStab"><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option></select><span class="hint" id="smStabWhy"></span></div>
+  </div>
+  <div class="sec"><h4>경과 시간<small>플룸 전단 ≈ 풍속 × 시간</small></h4>
+    <div class="row"><button class="play" id="smPlay" title="재생/일시정지">▶</button><input type="range" id="smRange" min="0" max="60" step="1" value="60" aria-label="경과 시간(분)"><b id="smT" style="min-width:52px;text-align:right;font-size:13px">60 분</b></div>
+    <div class="hint" id="smFront"></div>
+  </div>
+  <div class="sec"><h4>추정 결과<small>지면(호흡 높이) PM2.5 · 시간 노출 참고 기준</small></h4>
+    <div class="kv">
+      <div><small>최대 지면 농도</small><b id="smMax">-</b> µg/m³</div>
+      <div><small>최대 농도 거리</small><b id="smMaxX">-</b> m</div>
+      <div><small>유효 배출 높이 (최종)</small><b id="smHeff">-</b> m</div>
+      <div><small>영향 면적 (보통 이상)</small><b id="smArea">-</b> ha</div>
+    </div>
+    <table><thead><tr><th>등급</th><th class="r">기준</th><th class="r">중심선 도달</th><th class="r">면적</th></tr></thead><tbody id="smTbl"></tbody></table>
+    <div class="lg"><span><i style="background:rgba(60,200,90,.6)"></i>보통 15–35</span><span><i style="background:rgba(255,170,0,.7)"></i>나쁨 35–75</span><span><i style="background:rgba(255,60,60,.75)"></i>매우나쁨 &gt;75</span><span><i style="background:rgba(150,0,210,.8)"></i>위험 ≥500 (대피 권고 참고)</span></div>
+    <div class="ev"><span>대피 권고 방향</span><b id="smEvac">-</b><span class="hint">(바람 직각 · 연기 축에서 벗어나는 방향)</span></div>
+  </div>
+  <div class="sec"><h4>나쁨 이상 구역 건물<small id="smBlN"></small></h4><div class="bl" id="smBl"><span class="hint">발화 지점을 지정하면 조회합니다</span></div></div>
+  <details><summary>계산 근거</summary>
+    <div style="margin-top:6px">
+    · 정상상태 가우시안 플룸(지면 반사): <code>C = Q/(2π u σy σz)·exp(−y²/2σy²)·[exp(−(z−H)²/2σz²)+exp(−(z+H)²/2σz²)]</code>, 지면 z = 0<br>
+    · σy·σz: Briggs 도심(urban) 계수 (A–B / C / D / E–F) · x = 풍하 거리 m<br>
+    · 유효 높이 H = 발화 높이 + Briggs 부력 상승 Δh = 1.6 F^⅓ x^⅔ / u (최종 상승 x_f = 49F^⅝(F&lt;55) · 119F^⅖ · 안정 시 2.6(F/us)^⅓ 와 비교)<br>
+    · 부력 플럭스 F = g·Qc/(π·cp·ρ·T), Qc = 0.7 × HRR (cp 1005 J/kg·K · ρ 1.2 kg/m³ · T 293 K)<br>
+    · 배출량 Q(g/s) = 연기 수율 0.08 g/g × 질량소실률(HRR ÷ ΔHc 20 MJ/kg · 혼합 가연물) → 1 MW ≈ 4 g/s · 5 MW ≈ 20 g/s · 20 MW ≈ 80 g/s<br>
+    · 안정도: Pasquill–Gifford 표 (풍속 10 m · 낮 일사 강/중/약 = ≥600/300/&lt;300 W/㎡ · 밤 운량 ≥50% 여부)<br>
+    · 등급: 한국 PM2.5 예보 등급(좋음 ≤15 · 보통 ≤35 · 나쁨 ≤75 · 매우나쁨 &gt;75 µg/m³)을 시간 노출 참고 기준으로 사용 · 위험 ≥500 µg/m³ 은 참고 기준<br>
+    · 시간 재생: 플룸 전단 ≈ u·t (풍하 x ≤ u·t 만 표시) · 입자 시각화는 형태 참고용(이동 배율 1.5~5×, 풍속에 따라)
+    </div>
+  </details>
+  <div class="hint"><b>참고용</b> · 단순화한 가우시안 플룸 추정 · 지형/건물 사이 흐름(바람골) 미반영 · 실제 대응은 소방 지휘에 따름</div>
+</div>`;
+  document.body.appendChild(P);
+  const $ = s => P.querySelector(s);
+  const show = { vis:true, est:true };
+
+  function setTag(cls, txt){ const t = $('#smTag'); t.className = 'tag '+cls; t.textContent = txt; }
+  function fillFloor(){ const sel = $('#smFloor'); const fl = SM.src ? (SM.src.floors||0) : 0; let h = ''; h += '<option value="roof">옥상</option>'; for(let f=fl; f>=1; f--) h += '<option value="'+f+'">'+f+'층</option>'; if(!fl) h += '<option value="g">지면</option>'; sel.innerHTML = h; sel.value = SM.src && SM.src.floorSel ? SM.src.floorSel : 'roof'; }
+  function floorH(v){ const s = SM.src; if(!s) return 0; const per = s.floors>0 && s.H>0 ? s.H/s.floors : 3; if(v==='roof') return s.H>0 ? s.H : (s.floors>0 ? s.floors*3 : 0); if(v==='g') return 0; const f = +v; return Math.max(0, (f-0.5)*per); }
+  function syncInputs(){ $('#smDir').value = Math.round(SM.wind.dir); $('#smSpd').value = SM.wind.spd.toFixed(1); $('#smHrrIn').value = SM.hrr; $('#smH').value = Math.round(SM.fireH||0); $('#smStab').value = SM.stab.cls; $('#smStab').disabled = SM.stab.auto; P.querySelectorAll('#smStabMode button').forEach(b=>b.classList.toggle('on', (b.dataset.m==='auto')===SM.stab.auto)); P.querySelectorAll('#smHrr button').forEach(b=>b.classList.toggle('on', +b.dataset.h===SM.hrr)); $('#smStabWhy').textContent = SM.stab.auto ? (SM.stab.why||'실황 바람 로드 후 자동') : '직접 지정'; $('#smQ').textContent = '→ 연기 배출 '+emission(SM.hrr).toFixed(1)+' g/s'; $('#smRange').value = SM.t; $('#smT').textContent = SM.t+' 분'; }
+  function recompute(keepBl){
+    if(!SM.src) return; buildGrid(); showGrid(); if(show.vis){ makeParticles(); drawAxis(); } else clearParticles(); renderRes(); if(!keepBl) queryBuildings(); try{ updateSrc(); }catch(e){}
+    if(!show.est && SM.prim) SM.prim.show = false;
+  }
+  function renderRes(){
+    const r = SM.res; if(!r) return;
+    $('#smMax').textContent = r.maxC >= 100 ? Math.round(r.maxC).toLocaleString() : r.maxC.toFixed(1); $('#smMaxX').textContent = Math.round(r.maxX).toLocaleString();
+    $('#smHeff').textContent = Math.round(r.Hfin); $('#smArea').textContent = r.area.mod.toFixed(1);
+    $('#smTbl').innerHTML = CLS.slice(1).map(c=>`<tr><td><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgba(${c.col[0]},${c.col[1]},${c.col[2]},.85);margin-right:5px;vertical-align:-1px"></i>${c.n}</td><td class="r">≥ ${c.lo}</td><td class="r">${r.reach[c.k] ? r.reach[c.k].toLocaleString()+' m' : '-'}</td><td class="r">${r.area[c.k] ? r.area[c.k].toFixed(1)+' ha' : '-'}</td></tr>`).join('');
+    const b = travelDir(); const dirName = d => ['북','북북동','북동','동북동','동','동남동','남동','남남동','남','남남서','남서','서남서','서','서북서','북서','북북서'][Math.round(((d%360)+360)%360/22.5)%16];
+    $('#smEvac').textContent = dirName(b+90)+' · '+dirName(b-90); $('#smEvac').title = '연기 이동 방향 '+Math.round(b)+'° ('+dirName(b)+')';
+    $('#smWxHint').textContent = '연기 이동 방향: '+dirName(b)+' '+Math.round(b)+'° (풍향 '+Math.round(SM.wind.dir)+'° 의 반대) · 풍속 '+SM.wind.spd.toFixed(1)+' m/s';
+    const front = SM.t >= 60 ? '정상상태(60분 이상) · 추정 범위 전체 표시 · 풍하 '+r.X.toLocaleString()+' m 까지 계산' : '플룸 전단 약 '+Math.round(Math.max(0.5,SM.wind.spd)*SM.t*60).toLocaleString()+' m (풍속 '+SM.wind.spd.toFixed(1)+' m/s × '+SM.t+' 분)';
+    $('#smFront').textContent = front;
+    const lowNote = r.maxC < 15 ? ' · 지면 농도가 보통 기준(15 µg/m³) 미만: 연기가 상공(유효 높이 약 '+Math.round(r.Hfin)+' m)으로 지나감 — 발화 층을 낮추거나 안정도·풍속을 바꿔 비교' : '';
+    $('#smFront').textContent = front + lowNote;
+    setTag('fire', SM.hrr+' MW · '+SM.stab.cls+' 등급');
+  }
+  async function queryBuildings(){
+    const my = ++SM.seq; const g = SM.grid, r = SM.res; const el = $('#smBl'), n = $('#smBlN'); if(!g || !r) return;
+    if(!r.area.bad){ el.innerHTML = '<span class="hint">나쁨(≥35 µg/m³) 이상 구역 없음</span>'; n.textContent = ''; SM.bl = []; return; }
+    // 나쁨 이상 셀의 경계상자
+    let w=1e9,s=1e9,e=-1e9,no=-1e9; const R = g.R; for(let j=0;j<NPX;j++) for(let i=0;i<NPX;i++){ if(g.vals[j*NPX+i] < 35) continue; const dE = -R+(i+.5)*(2*R/NPX), dN = R-(j+.5)*(2*R/NPX); w=Math.min(w,dE); e=Math.max(e,dE); s=Math.min(s,dN); no=Math.max(no,dN); }
+    const bbox = [SM.src.lon + w/g.mLon, SM.src.lat + s/g.mLat, SM.src.lon + e/g.mLon, SM.src.lat + no/g.mLat];
+    el.innerHTML = '<span class="hint">브이월드 건축물 조회 중…</span>'; n.textContent = '';
+    try{
+      const feats = await vwFeat('BOX('+bbox.map(v=>v.toFixed(6)).join(',')+')', 300);
+      if(my !== SM.seq) return;
+      const list = [];
+      for(const f of feats){ const rs = ringsOf(f.geometry); if(!rs.length) continue; const c = centroid(rs[0]); const dE = (c[0]-SM.src.lon)*g.mLon, dN = (c[1]-SM.src.lat)*g.mLat; const i = Math.floor((dE+R)/(2*R/NPX)), j = Math.floor((R-dN)/(2*R/NPX)); if(i<0||j<0||i>=NPX||j>=NPX) continue; const v = g.vals[j*NPX+i]; if(v < 35) continue; const p = f.properties||{}; list.push({ nm: p.bld_nm || p.dong_nm || '(이름 없음)', fl: num(p.grnd_flr), c: v, lon: c[0], lat: c[1], d: Math.hypot(dE,dN) }); }
+      list.sort((a,b)=>b.c-a.c); SM.bl = list;
+      const shown = list.slice(0, 40);
+      el.innerHTML = shown.length ? shown.map(b=>`<div><span title="${esc(b.nm)}">${esc(b.nm)}${b.fl?' · '+b.fl+'F':''}</span><span>${Math.round(b.d)} m</span><span class="c" style="color:rgba(${clsOf(b.c).col.slice(0,3).join(',')},1)">${b.c>=100?Math.round(b.c):b.c.toFixed(0)}</span></div>`).join('') : '<span class="hint">구역 안 건축물대장 없음 (BOX '+feats.length+'건 조회)</span>';
+      n.textContent = list.length ? list.length+'동'+(feats.length>=300?' (조회 상한 300)':'')+(list.length>40?' · 상위 40':'') : '';
+      clearMarks();
+      for(const b of shown.slice(0, 15)){ const ent = viewer.entities.add({ position: C.Cartesian3.fromDegrees(b.lon, b.lat, 0), point:{ pixelSize: 7, color: C.Color.fromBytes(...clsOf(b.c).col.slice(0,3), 230), outlineColor: C.Color.BLACK, outlineWidth: 1, heightReference: C.HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY } }); ent._sm54 = true; SM.mark.push(ent); }
+    }catch(err){ if(my !== SM.seq) return; el.innerHTML = '<span class="hint">건물 조회 실패 ('+esc(err.message)+') · 면적만 참고: 나쁨 이상 '+r.area.bad.toFixed(1)+' ha</span>'; n.textContent = ''; }
+  }
+
+  /* ---- 입력 ---- */
+  $('#smClose').onclick = ()=> toggleLayer('smoke', false);
+  P.querySelectorAll('#smShow button').forEach(b=> b.onclick = ()=>{ show[b.dataset.k] = !show[b.dataset.k]; b.classList.toggle('on', show[b.dataset.k]); if(b.dataset.k==='vis'){ if(show.vis && SM.src) makeParticles(); else clearParticles(); } else { if(SM.prim) SM.prim.show = show.est; } });
+  $('#smFly').onclick = ()=> flyPlume();
+  $('#smRepick').onclick = ()=>{ SM.waitClick = true; viewer.canvas.style.cursor = 'crosshair'; setTag('wait', '클릭 대기'); toast('발화 지점을 클릭하세요', 1800); };
+  $('#smFloor').onchange = e=>{ if(!SM.src) return; SM.src.floorSel = e.target.value; SM.fireH = floorH(e.target.value); syncInputs(); recompute(); };
+  $('#smH').onchange = e=>{ SM.fireH = Math.max(0, num(e.target.value)); if(SM.src) SM.src.floorSel = 'custom'; recompute(); };
+  $('#smDir').onchange = e=>{ SM.wind.dir = ((num(e.target.value)%360)+360)%360; SM.wind.manual = true; applyAutoStab(); syncInputs(); recompute(); };
+  $('#smSpd').onchange = e=>{ SM.wind.spd = Math.max(0.5, num(e.target.value)); SM.wind.manual = true; applyAutoStab(); syncInputs(); recompute(); };
+  $('#smWxBtn').onclick = ()=> loadWind(true);
+  P.querySelectorAll('#smHrr button').forEach(b=> b.onclick = ()=>{ SM.hrr = +b.dataset.h; syncInputs(); recompute(); });
+  $('#smHrrIn').onchange = e=>{ SM.hrr = Math.max(0.1, num(e.target.value)); syncInputs(); recompute(); };
+  P.querySelectorAll('#smStabMode button').forEach(b=> b.onclick = ()=>{ SM.stab.auto = b.dataset.m==='auto'; applyAutoStab(); syncInputs(); recompute(); });
+  $('#smStab').onchange = e=>{ SM.stab.cls = e.target.value; SM.stab.auto = false; syncInputs(); recompute(); };
+  $('#smRange').oninput = e=> setT(+e.target.value);
+  $('#smPlay').onclick = ()=>{ if(SM.playing) stop(); else play(); };
+  function setT(t){ SM.t = Math.max(0, Math.min(60, t)); $('#smRange').value = SM.t; $('#smT').textContent = SM.t+' 분'; if(SM.grid){ showGrid(); renderRes(); } }
+  function play(){ if(SM.t >= 60) setT(0); SM.playing = true; $('#smPlay').textContent = '❚❚'; if(SM.timer) clearInterval(SM.timer); SM.timer = setInterval(()=>{ if(SM.t >= 60){ stop(); return; } setT(SM.t+1); }, 350); }
+  function stop(){ SM.playing = false; $('#smPlay').textContent = '▶'; if(SM.timer){ clearInterval(SM.timer); SM.timer = null; } }
+  function flyPlume(){ if(!SM.src || !SM.grid) return; const g = SM.grid; const b = rad(travelDir()); const X = Math.min(g.X, 2500); const cx = SM.src.lon + Math.sin(b)*X*0.25/g.mLon, cy = SM.src.lat + Math.cos(b)*X*0.25/g.mLat; const h = Math.max(800, X*0.9); // 플룸 옆(풍향 직각)에서 비스듬히 내려다봄 → 휘어지는 모양이 보임
+    const side = rad(travelDir()+115); const dist = h*1.1; camera.flyTo({ destination: C.Cartesian3.fromDegrees(cx + Math.sin(side)*dist/g.mLon, cy + Math.cos(side)*dist/g.mLat, (SM.src.ground||0)+h), orientation:{ heading: side+Math.PI, pitch: C.Math.toRadians(-48), roll:0 }, duration: 1.6 }); }
+
+  async function loadWind(force){
+    if(!SM.src) return; const my = ++SM.wseq;
+    $('#smWxInfo').textContent = 'Open-Meteo 실황 불러오는 중…';
+    try{ const w = await fetchWind(SM.src.lon, SM.src.lat); if(my !== SM.wseq) return; SM.wind.live = w; if(force || !SM.wind.manual){ SM.wind.dir = w.dir; SM.wind.spd = Math.max(0.5, w.spd); SM.wind.manual = false; }
+      $('#smWxInfo').textContent = 'Open-Meteo 실황 '+(w.time||'').replace('T',' ')+' · 풍향 '+Math.round(w.dir)+'° · '+w.spd.toFixed(1)+' m/s (돌풍 '+w.gust.toFixed(1)+') · '+(w.isDay?'낮':'밤')+' · 운량 '+Math.round(w.cloud)+'%';
+      applyAutoStab(); syncInputs(); recompute();
+    }catch(e){ if(my !== SM.wseq) return; $('#smWxInfo').textContent = '실황 불러오기 실패 ('+e.message+') · 풍향/풍속을 직접 입력하세요'; SM.stab.why = '실황 없음 → D(중립) 가정'; syncInputs(); recompute(); }
+  }
+  SM.wseq = 0;
+
+  /* ---- 발화 지점 지정 ---- */
+  function pickLL(pos){ let c = null; const pk = scene.pick(pos); if(C.defined(pk) && scene.pickPositionSupported) c = scene.pickPosition(pos); if(!c){ const ray = camera.getPickRay(pos); c = ray && globe.pick(ray, scene); } if(!c) c = camera.pickEllipsoid(pos, globe.ellipsoid); if(!c) return null; const ct = C.Cartographic.fromCartesian(c); return [deg(ct.longitude), deg(ct.latitude), ct.height]; }
+  async function setSource(lon, lat, hClick){
+    const my = ++SM.seq; SM.waitClick = false; viewer.canvas.style.cursor = '';
+    stop(); clearMarks();
+    const ground0 = (globe.getHeight(C.Cartographic.fromDegrees(lon, lat)) || 0);
+    SM.src = { lon, lat, ground: ground0, floors: 0, H: 0, name: '', floorSel: 'roof', outline: null };
+    $('#smSrcN').textContent = '조회 중… '+lat.toFixed(5)+', '+lon.toFixed(5); $('#smSrcS').textContent = '건축물대장 · 3D 모델 높이 · 실황 바람'; setTag('wait', '조회 중'); $('#smBldg').textContent = '';
+    let feats = []; try{ feats = await vwFeat('POINT('+lon.toFixed(7)+' '+lat.toFixed(7)+')', 20); }catch(e){}
+    if(my !== SM.seq) return;
+    if(!feats.length){ // 건물 측면(3D 메시)을 클릭하면 외곽선 바깥일 수 있음 → 반경 12 m 상자에서 가장 가까운 건물
+      try{ const dl = 12/(111320*Math.cos(rad(lat))), dp = 12/111320; const fs = await vwFeat('BOX('+[lon-dl, lat-dp, lon+dl, lat+dp].map(v=>v.toFixed(7)).join(',')+')', 20);
+        if(my !== SM.seq) return;
+        const near = fs.map(f=>{ const rs = ringsOf(f.geometry); if(!rs.length) return null; const inside = rs.some(r=>inRing(lon, lat, r)); const c = centroid(rs[0]); return { f, inside, d: Math.hypot((c[0]-lon)*111320*Math.cos(rad(lat)), (c[1]-lat)*111320) }; }).filter(Boolean).sort((a,b)=> (b.inside-a.inside) || (a.d-b.d));
+        if(near.length) feats = fs.filter(f=>f.properties && near[0].f.properties && (f.properties.bld_nm||'')===(near[0].f.properties.bld_nm||'') && (f.properties.dong_nm||'')===(near[0].f.properties.dong_nm||''));
+      }catch(e){}
+    }
+    let B = null; try{ B = (window.__BD49 && window.__BD49.merge) ? window.__BD49.merge(feats) : (feats[0] ? { P: feats[0].properties, names:[feats[0].properties.bld_nm].filter(Boolean), geom: feats[0].geometry } : null); }catch(e){}
+    let hInfo = '';
+    if(B){ const Pp = B.P; SM.src.floors = num(Pp.grnd_flr); SM.src.H = num(Pp.height); SM.src.name = (B.names && B.names[0]) || ''; SM.src.outline = ringsOf(B.geom);
+      const rs = SM.src.outline; let mh = null;
+      if(rs.length && window.__BD49 && window.__BD49.measureHeight){ try{ mh = await window.__BD49.measureHeight(rs); }catch(e){} }
+      if(my !== SM.seq) return;
+      if(mh && mh.ok){ SM.src.H = mh.H; SM.src.ground = mh.ground; hInfo = '3D 모델 실측 높이 '+mh.H.toFixed(1)+' m (지면 '+mh.ground.toFixed(1)+' m)'; }
+      else if(SM.src.H > 0) hInfo = '건축물대장 높이 '+SM.src.H.toFixed(1)+' m';
+      else if(SM.src.floors > 0){ SM.src.H = SM.src.floors*3; hInfo = '대장 높이 없음 → 층수 '+SM.src.floors+' × 3 m = '+SM.src.H+' m'; }
+      else hInfo = '층수·높이 정보 없음 → 지면 발화';
+      if(SM.src.floors > 0) hInfo = '지상 '+SM.src.floors+'층 · '+hInfo;
+    } else { hInfo = '이 지점에 건축물대장 없음 → 지면 발화 (높이 직접 입력 가능)'; }
+    $('#smSrcN').textContent = SM.src.name || (B ? '이름 없는 건물' : '지도 지점'); $('#smSrcS').textContent = lat.toFixed(5)+', '+lon.toFixed(5)+(SM.src.floors?' · 지상 '+SM.src.floors+'층':''); $('#smBldg').textContent = SM.src.name ? '브이월드 건축물대장' : '';
+    $('#smHInfo').textContent = hInfo; fillFloor(); SM.fireH = floorH('roof'); syncInputs();
+    recompute(true); flyIfFar(); loadWind(false);
+  }
+  function flyIfFar(){ const d = C.Cartesian3.distance(camera.positionWC, C.Cartesian3.fromDegrees(SM.src.lon, SM.src.lat, SM.src.ground||0)); if(d > 6000) flyPlume(); }
+  function otherBusy(){ return !!(STATE.measure || (window.__GT && window.__GT.picking) || (window.sistechViewshed && window.sistechViewshed.active)); }
+  const _smClick = handler.getInputAction(C.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction(e => {
+    if(!SM.on || STATE.mode!=='site' || otherBusy()) return _smClick && _smClick(e);
+    const pk = scene.pick(e.position);
+    if(C.defined(pk) && pk.id && pk.id.properties && !pk.id._sm54) return _smClick && _smClick(e);
+    const ll = pickLL(e.position); if(!ll) return _smClick && _smClick(e);
+    setSource(ll[0], ll[1], ll[2]).catch(err => { console.error(err); toast('발화 지점 오류: '+err.message, 3000); });
+  }, C.ScreenSpaceEventType.LEFT_CLICK);
+  scene.camera.changed.addEventListener(()=>{ if(SM.on) lod(); });
+
+  /* ---- 켜기/끄기 ---- */
+  function on(){ SM.on = true; SM.waitClick = true; P.classList.add('open'); viewer.canvas.style.cursor = 'crosshair'; setTag('wait', '클릭 대기'); syncInputs(); if(SM.src){ fillFloor(); recompute(); } toast('화재 연기 확산 · 건물(또는 지도)을 클릭해 발화 지점을 지정하세요', 3500); }
+  function off(){ SM.on = false; SM.waitClick = false; SM.seq++; SM.wseq++; stop(); P.classList.remove('open'); clearPrim(); clearParticles(); clearMarks(); SM.grid = null; SM.res = null; SM.bl = null; if(viewer.canvas.style.cursor==='crosshair') viewer.canvas.style.cursor = ''; scene.requestRender && scene.requestRender(); }
+  const _t54 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(id === 'smoke'){
+      const want = force!==undefined ? force : !STATE.on.has('smoke');
+      if(want && STATE.mode!=='site'){ toast('화재 연기 확산은 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ STATE.on.add('smoke'); on(); } else { STATE.on.delete('smoke'); off(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){}
+      return;
+    }
+    const r = await _t54.apply(this, arguments);
+    if(SM.on && !STATE.on.has('smoke')) off();
+    return r;
+  };
+  const _us54 = updateSrc;
+  updateSrc = function(){ _us54.apply(this, arguments); if(!SM.on) return; const el = document.getElementById('hudSrc'); if(el && !el.innerHTML.includes('연기 확산')) el.innerHTML = '<b>화재 연기 확산</b> 가우시안 플룸(Briggs 도심 계수 · DERIVED · 참고용) · <b>Open-Meteo</b> 바람 실황 · <b>브이월드</b> 건축물정보 · ' + el.innerHTML; };
+  if(STATE.on.has('smoke')){ if(STATE.mode==='site') on(); else STATE.on.delete('smoke'); }
+
+  window.__SM54 = { version:'54.1', SM, CLS, sigmas, stability, emission, buoyFlux, riseFinal, rise, conc, model, massFlux, buildGrid, paint, setSource, setT, recompute, loadWind, travelDir, windVec, get grid(){ return SM.grid; }, get res(){ return SM.res; }, get show(){ return show; } };
+})();
+
+</script>
 </body>
 </html>
