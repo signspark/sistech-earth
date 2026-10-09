@@ -5941,5 +5941,283 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
 })();
 
 </script>
+<script>
+/* ---------- 49. SITE › 분석 › 건물 속성 조회 (2026-10-09) ----------
+   - 켜고 건물(3D 모델·지도)을 클릭 → 브이월드 건축물정보 LT_C_BLDGINFO(전국, 건축물대장 기반) + 연속지적 LP_PA_CBND_BUBUN(지번·PNU·공시지가) + 주소 API(도로명) 병렬 조회 (JSONP · 키 도메인 signspark.github.io)
+   - 같은 지점 대장이 여러 건이면 연면적 큰 레코드를 대표로, 빈 값은 다른 레코드에서 보충 (예: 인천시청 = 총괄 + "본관" 빈 레코드)
+   - 건물 외곽선을 3D 모델·지형 위에 노란색으로 덧칠(classification) + 외곽선 · 지붕 위 이름 라벨
+   - 높이: 대장 높이가 0이면 3D 모델에서 실측 (외곽선 안 지붕 95% 분위 - 외곽선 밖 4 m 지면 25% 분위, scene.sampleHeight)
+   - 카드: 주용도·구조·층수·높이·면적·건폐율·용적률·사용승인일 / 필지 지번·지목·PNU·공시지가 / GeoJSON·CSV 내보내기 · 위에서 보기
+   - 분석 단일 활성(19·41) · 모드 전환 정리(46) · 측정/정사영상 구역 선택 중에는 양보 · 결과 캐시
+   - 자료는 참고용 (측량·법적 효력 없음)
+*/
+(function(){
+  const C = Cesium;
+  const VW_KEY = '57C7018D-1A36-4873-99CD-A2272BD3040E';
+  const VW_DOMAIN = 'https://signspark.github.io';
+  const BD = { on:false, seq:0, ents:[], sel:null, cache:new Map(), cardOpen:false };
+  const deg = r=>r*180/Math.PI, rad = d=>d*Math.PI/180;
+  const YEL = C.Color.fromCssColorString('#FFD400');
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  /* ---- 메뉴: 분석 맨 위 ---- */
+  const an = MENUS.site.find(c=>c.id==='analysis');
+  if(an && !an.items.some(i=>i.id==='bldg')) an.items.unshift({ id:'bldg', q:'이 건물은 무엇이고 몇 층인가', name:'건물 속성 조회', src:'건물을 클릭 → 건축물대장(브이월드, 전국) 용도·구조·층수·면적·준공 · 필지·공시지가·도로명주소 · 3D 모델 실측 높이 · 외곽선 하이라이트 · GeoJSON/CSV', type:'layer' });
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  /* ---- 코드표 ---- */
+  const USE = { '01000':'단독주택','01001':'단독주택','01002':'다중주택','01003':'다가구주택','01004':'공관',
+    '02000':'공동주택','02001':'아파트','02002':'연립주택','02003':'다세대주택','02004':'기숙사',
+    '03000':'제1종 근린생활시설','04000':'제2종 근린생활시설','05000':'문화 및 집회시설','06000':'종교시설','07000':'판매시설','08000':'운수시설',
+    '09000':'의료시설','10000':'교육연구시설','11000':'노유자시설','12000':'수련시설','13000':'운동시설','14000':'업무시설','14100':'공공업무시설','14200':'일반업무시설',
+    '15000':'숙박시설','16000':'위락시설','17000':'공장','18000':'창고시설','19000':'위험물 저장·처리시설','20000':'자동차 관련시설','21000':'동물·식물 관련시설',
+    '22000':'자원순환 관련시설','23000':'교정 및 군사시설','24000':'방송통신시설','25000':'발전시설','26000':'묘지 관련시설','27000':'관광 휴게시설','28000':'장례시설','29000':'야영장시설','30000':'가설건축물' };
+  const STR = { '10':'조적구조','11':'벽돌구조','12':'블록구조','13':'석구조','19':'기타조적구조',
+    '20':'콘크리트구조','21':'철근콘크리트구조','22':'프리캐스트콘크리트구조','26':'철골철근콘크리트구조','29':'기타콘크리트구조',
+    '30':'철골구조','31':'일반철골구조','32':'경량철골구조','33':'강파이프구조','39':'기타강구조',
+    '40':'목구조','41':'일반목구조','42':'통나무구조','49':'기타목구조','50':'기타구조','51':'기타구조' };
+  const useName = c => { c = String(c||'').trim(); if(!c) return ''; if(USE[c]) return USE[c]; const g = c.slice(0,2)+'000'; return USE[g] ? USE[g]+' ('+c+')' : '코드 '+c; };
+  const strName = c => { c = String(c||'').trim(); if(!c) return ''; return STR[c] || STR[c.slice(0,1)+'0'] || '코드 '+c; };
+  const JIMOK = { '전':'전','답':'답','과':'과수원','목':'목장용지','임':'임야','광':'광천지','염':'염전','대':'대','장':'공장용지','학':'학교용지','차':'주차장','주':'주유소용지','창':'창고용지','도':'도로','철':'철도용지','제':'제방','천':'하천','구':'구거','유':'유지','양':'양어장','수':'수도용지','공':'공원','체':'체육용지','원':'유원지','종':'종교용지','사':'사적지','묘':'묘지','잡':'잡종지' };
+
+  /* ---- 브이월드 JSONP ---- */
+  function jsonp(url, ms){
+    return new Promise((res, rej) => {
+      const cb = '__vw49_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+      const s = document.createElement('script'); let done = false;
+      const fin = () => { done = true; clearTimeout(t); try{ delete window[cb]; }catch(e){ window[cb] = undefined; } s.remove(); };
+      const t = setTimeout(()=>{ if(!done){ fin(); window[cb] = ()=>{}; rej(new Error('응답 시간 초과')); } }, ms||9000);
+      window[cb] = d => { if(done) return; fin(); res(d); };
+      s.onerror = () => { if(done) return; fin(); rej(new Error('네트워크 오류')); };
+      s.src = url + (url.includes('?')?'&':'?') + 'callback=' + cb;
+      document.head.appendChild(s);
+    });
+  }
+  async function cached(key, fn){ if(BD.cache.has(key)) return BD.cache.get(key); const p = fn(); BD.cache.set(key, p); p.catch(()=>BD.cache.delete(key)); if(BD.cache.size > 400){ BD.cache.delete(BD.cache.keys().next().value); } return p; }
+  const pt = (lon,lat) => lon.toFixed(7)+' '+lat.toFixed(7);
+  function vwData(layer, lon, lat){
+    return cached(layer+':'+lon.toFixed(6)+','+lat.toFixed(6), async ()=>{
+      const d = await jsonp('https://api.vworld.kr/req/data?service=data&request=GetFeature&data='+layer+'&key='+VW_KEY+'&domain='+encodeURIComponent(VW_DOMAIN)+'&geomFilter=POINT('+encodeURIComponent(pt(lon,lat))+')&geometry=true&crs=EPSG:4326&format=json&size=20');
+      const r = d && d.response; if(!r) throw new Error('응답 없음');
+      if(r.status==='NOT_FOUND') return [];
+      if(r.status!=='OK') throw new Error((r.error && (r.error.text||r.error.code)) || r.status);
+      return (r.result && r.result.featureCollection && r.result.featureCollection.features) || [];
+    });
+  }
+  function vwAddr(lon, lat){
+    return cached('addr:'+lon.toFixed(5)+','+lat.toFixed(5), async ()=>{
+      const d = await jsonp('https://api.vworld.kr/req/address?service=address&request=getAddress&version=2.0&crs=epsg:4326&point='+lon.toFixed(7)+','+lat.toFixed(7)+'&format=json&type=both&zipcode=true&simple=false&key='+VW_KEY);
+      const r = d && d.response; if(!r || r.status!=='OK') return {};
+      const o = {}; for(const x of (r.result||[])){ o[x.type] = x; } return o;
+    });
+  }
+
+  /* ---- 레코드 병합 ---- */
+  const num = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+  const filled = p => ['usability','archarea','totalarea','platarea','useapr_day','strct_cd','grnd_flr','height'].filter(k=>{ const v=p[k]; return v!==undefined && v!=='' && v!=='0' && v!==0; }).length;
+  function merge(feats){
+    if(!feats.length) return null;
+    const sorted = feats.slice().sort((a,b)=> (num(b.properties.totalarea)-num(a.properties.totalarea)) || (filled(b.properties)-filled(a.properties)));
+    const main = sorted[0]; const P = Object.assign({}, main.properties);
+    for(const f of sorted.slice(1)){ const q = f.properties; for(const k in q){ const v = P[k]; if((v===undefined || v==='' || v==='0' || v===0) && q[k]!=='' && q[k]!=='0') P[k] = q[k]; } }
+    const names = [...new Set(sorted.map(f=>f.properties.bld_nm).filter(Boolean))];
+    const dongs = [...new Set(sorted.map(f=>f.properties.dong_nm).filter(Boolean))];
+    let geom = main.geometry; if(!geom){ const g = sorted.find(f=>f.geometry); geom = g && g.geometry; }
+    return { P, names, dongs, geom, n: feats.length, ids: sorted.map(f=>f.id) };
+  }
+  function ringsOf(geom){ const out=[]; if(!geom) return out; if(geom.type==='Polygon') out.push(geom.coordinates[0]); else if(geom.type==='MultiPolygon') for(const p of geom.coordinates) out.push(p[0]); return out.filter(r=>r && r.length>=4); }
+  function inRing(x, y, ring){ let inside=false; for(let i=0, j=ring.length-1; i<ring.length; j=i++){ const xi=ring[i][0], yi=ring[i][1], xj=ring[j][0], yj=ring[j][1]; if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi)) inside=!inside; } return inside; }
+  function geoArea(ring){ const R=6371008.8; let s=0; for(let i=0;i<ring.length-1;i++){ const a=ring[i], b=ring[i+1]; s += (rad(b[0])-rad(a[0]))*(2+Math.sin(rad(a[1]))+Math.sin(rad(b[1]))); } return Math.abs(s*R*R/2); }
+  function centroid(ring){ let a=0, cx=0, cy=0; for(let i=0;i<ring.length-1;i++){ const [x0,y0]=ring[i], [x1,y1]=ring[i+1]; const f = x0*y1 - x1*y0; a += f; cx += (x0+x1)*f; cy += (y0+y1)*f; } if(Math.abs(a)<1e-14) return ring[0]; a*=0.5; return [cx/(6*a), cy/(6*a)]; }
+
+  /* ---- 3D 모델 실측 높이 ---- */
+  function q(arr, p){ if(!arr.length) return null; const s = arr.slice().sort((a,b)=>a-b); const i = Math.min(s.length-1, Math.max(0, Math.round((s.length-1)*p))); return s[i]; }
+  function samplePts(rings){
+    const ring = rings.slice().sort((a,b)=>geoArea(b)-geoArea(a))[0];
+    let w=180,s=90,e=-180,n=-90; for(const [x,y] of ring){ if(x<w)w=x; if(x>e)e=x; if(y<s)s=y; if(y>n)n=y; }
+    const ins = []; const N = 6;
+    for(let i=0;i<N;i++) for(let j=0;j<N;j++){ const x = w+(e-w)*(i+.5)/N, y = s+(n-s)*(j+.5)/N; if(inRing(x,y,ring)) ins.push([x,y]); }
+    const c = centroid(ring); if(inRing(c[0],c[1],ring)) ins.push(c);
+    const outs = []; const mLat = 111320, mLon = 111320*Math.cos(rad(c[1]));
+    // 외곽선 둘레를 따라 약 20점: 각 변의 바깥쪽 법선 방향 4 m (안쪽이면 반대편)
+    let per = 0; for(let i=0;i<ring.length-1;i++) per += Math.hypot((ring[i+1][0]-ring[i][0])*mLon, (ring[i+1][1]-ring[i][1])*mLat);
+    const gap = Math.max(3, per/20);
+    outer: for(let i=0;i<ring.length-1;i++){ const a = ring[i], b = ring[i+1]; const ex_=(b[0]-a[0])*mLon, ey_=(b[1]-a[1])*mLat; const L = Math.hypot(ex_,ey_); if(L < 0.5) continue; const nx = ey_/L, ny = -ex_/L; const k = Math.max(1, Math.round(L/gap));
+      for(let j=0;j<k;j++){ const t = (j+.5)/k; const px = a[0]+(b[0]-a[0])*t, py = a[1]+(b[1]-a[1])*t; let x = px + nx*4/mLon, y = py + ny*4/mLat; if(inRing(x,y,ring)){ x = px - nx*4/mLon; y = py - ny*4/mLat; if(inRing(x,y,ring)) continue; } outs.push([x,y]); if(outs.length >= 28) break outer; } }
+    return { ins, outs };
+  }
+  function evalHeights(hIn, hOut){
+    const ins = hIn.filter(h=>h!=null && isFinite(h)), outs = hOut.filter(h=>h!=null && isFinite(h));
+    if(ins.length < 2 || outs.length < 2) return { ok:false, why:'3D 모델 높이를 읽지 못함', nIn:ins.length, nOut:outs.length };
+    const roof = q(ins, .95), ground = q(outs, .25); const H = roof - ground;
+    if(!(H > 1.5) || H > 700) return { ok:false, why:'3D 모델 범위 밖이거나 지면과 구분 안 됨', roof, ground, nIn:ins.length, nOut:outs.length };
+    return { ok:true, H, roof, ground, nIn:ins.length, nOut:outs.length };
+  }
+  // 비동기(타일 최상세 로드 후 샘플링 · 화면 밖 건물도 가능 · 화면 멈춤 없음) → 실패/8초 초과 시 동기 샘플(점 수 축소)로 대체
+  async function measureHeight(rings){
+    if(!scene.sampleHeightSupported) return { ok:false, why:'이 브라우저는 높이 샘플링 미지원' };
+    const { ins, outs } = samplePts(rings); const ex = BD.ents.slice();
+    const all = ins.concat(outs).map(([x,y])=>C.Cartographic.fromDegrees(x,y));
+    try{
+      const r = await Promise.race([ scene.sampleHeightMostDetailed(all, ex), new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), 8000)) ]);
+      const hs = r.map(c=>c && c.height); const res = evalHeights(hs.slice(0, ins.length), hs.slice(ins.length)); res.mode = 'async'; return res;
+    }catch(e){
+      const sh = (x,y) => { try{ const h = scene.sampleHeight(C.Cartographic.fromDegrees(x,y), ex); return (h!==undefined && isFinite(h)) ? h : null; }catch(err){ return null; } };
+      const pick = (arr, n) => arr.filter((_,i)=> i % Math.max(1, Math.ceil(arr.length/n)) === 0);
+      const res = evalHeights(pick(ins,12).map(p=>sh(...p)), pick(outs,10).map(p=>sh(...p))); res.mode = 'sync'; return res;
+    }
+  }
+
+  /* ---- 하이라이트 ---- */
+  function clearHL(){ for(const e of BD.ents) try{ viewer.entities.remove(e); }catch(err){} BD.ents = []; }
+  function drawHL(rings){
+    clearHL();
+    for(const r of rings){
+      const pos = C.Cartesian3.fromDegreesArray(r.flat());
+      BD.ents.push(viewer.entities.add({ polygon:{ hierarchy: new C.PolygonHierarchy(pos), material: YEL.withAlpha(.38), classificationType: C.ClassificationType.BOTH } }));
+      BD.ents.push(viewer.entities.add({ polyline:{ positions: pos, width: 3.5, clampToGround: true, classificationType: C.ClassificationType.BOTH, material: YEL } }));
+    }
+    for(const e of BD.ents) e._bd49 = true;
+  }
+  function addLabel(lon, lat, h, text){ const e = viewer.entities.add({ position: C.Cartesian3.fromDegrees(lon, lat, h), label:{ text, font:'600 13px Inter, "Noto Sans KR", sans-serif', fillColor: C.Color.WHITE, outlineColor: C.Color.fromCssColorString('#03122A'), outlineWidth: 4, style: C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin: C.VerticalOrigin.BOTTOM, pixelOffset: new C.Cartesian2(0,-6), disableDepthTestDistance: Number.POSITIVE_INFINITY, showBackground: true, backgroundColor: C.Color.fromCssColorString('#03122A').withAlpha(.65), backgroundPadding: new C.Cartesian2(7,4) } }); e._bd49 = true; BD.ents.push(e); }
+
+  /* ---- 카드 ---- */
+  function CARD(title, sub, html){ STATE.point = null; const c = document.getElementById('card'); c.classList.add('open'); document.getElementById('cardTitle').innerHTML = title + '<small>' + (sub||'') + '</small>'; document.getElementById('cardBody').innerHTML = html; BD.cardOpen = true; }
+  const m2 = v => { const n = num(v); return n>0 ? n.toLocaleString(undefined,{maximumFractionDigits:2})+' ㎡ <span style="color:var(--text-dim);font-weight:400">('+(n/3.3058).toLocaleString(undefined,{maximumFractionDigits:0})+'평)</span>' : '-'; };
+  const pct = v => { const n = num(v); return n>0 ? n.toFixed(2)+' %' : '-'; };
+  const ymd = v => { v = String(v||''); if(!/^\d{8}$/.test(v)) return '-'; const y=+v.slice(0,4); const age = new Date().getFullYear()-y; return v.slice(0,4)+'-'+v.slice(4,6)+'-'+v.slice(6,8)+' <span style="color:var(--text-dim);font-weight:400">('+age+'년)</span>'; };
+  const kv = (k, v) => `<div>${k}<b>${v}</b></div>`;
+  function heightHtml(S){
+    const reg = num(S.B && S.B.P.height); const parts = [];
+    if(reg > 0) parts.push(reg.toFixed(1)+' m <span style="color:var(--text-dim);font-weight:400">(대장)</span>');
+    if(S.mh === undefined) parts.push('<span style="color:var(--text-dim);font-weight:400">3D 모델 실측 중…</span>');
+    else if(S.mh && S.mh.ok){ const f = num(S.B && S.B.P.grnd_flr); parts.push(S.mh.H.toFixed(1)+' m <span style="color:var(--text-dim);font-weight:400">(3D 실측'+(f>0?' · 층당 '+(S.mh.H/f).toFixed(1)+' m':'')+')</span>'); }
+    else if(!reg) parts.push('<span style="color:var(--text-dim);font-weight:400">- ('+esc(S.mh ? S.mh.why : '실측 불가')+')</span>');
+    return parts.join('<br>') || '-';
+  }
+  function render(S){
+    const B = S.B, Pc = S.parcel, A = S.addr || {};
+    const road = A.road ? A.road.text : '', jibunAddr = (Pc && Pc.addr) || (A.parcel ? A.parcel.text : '');
+    let title, sub;
+    if(B){ title = esc(B.names[0] || (A.road && A.road.structure && A.road.structure.detail) || '이름 없는 건물') + (B.dongs.length? ' <small style="display:inline;font-size:13px;color:var(--lime-bright)">'+esc(B.dongs.join('·'))+'</small>' : ''); sub = esc(road || jibunAddr || (S.lat.toFixed(5)+', '+S.lon.toFixed(5))); }
+    else { title = '건축물 정보 없음'; sub = esc(road || jibunAddr || (S.lat.toFixed(5)+', '+S.lon.toFixed(5))); }
+    let html = '';
+    if(B){ const P = B.P;
+      const cells = [ ['주용도', esc(useName(P.usability))], ['구조', esc(strName(P.strct_cd))], ['층수', (num(P.grnd_flr)||num(P.ugrnd_flr)) ? '지상 '+num(P.grnd_flr)+' / 지하 '+num(P.ugrnd_flr) : ''],
+        ['건축면적', num(P.archarea)>0 ? m2(P.archarea) : ''], ['연면적', num(P.totalarea)>0 ? m2(P.totalarea) : ''], ['대지면적', num(P.platarea)>0 ? m2(P.platarea) : ''],
+        ['사용승인일', /^\d{8}$/.test(String(P.useapr_day||'')) ? ymd(P.useapr_day) : ''], ['건폐율', num(P.bc_rat)>0 ? pct(P.bc_rat) : ''], ['용적률', num(P.vl_rat)>0 ? pct(P.vl_rat) : ''] ];
+      const shown = cells.filter(c=>c[1]); const missing = cells.filter(c=>!c[1]).map(c=>c[0]);
+      html += `<div class="sec"><div class="kv">${shown.slice(0,3).map(c=>kv(c[0],c[1])).join('')}<div id="bd49h">높이<b>${heightHtml(S)}</b></div>${shown.slice(3).map(c=>kv(c[0],c[1])).join('')}</div>
+      ${missing.length ? '<div class="meta" style="margin-top:8px">대장 값 없음: '+missing.join('·')+(missing.length>=5?' (브이월드에 이 동의 상세값이 비어 있음 · 건축HUB 연동 시 보강 예정)':'')+'</div>' : ''}
+      ${B.names.length>1 ? `<div class="meta" style="margin-top:8px">같은 위치 대장 ${B.n}건 병합: ${B.names.map(esc).join(' · ')}</div>` : ''}
+      <div class="meta"><span class="tag obs">OFFICIAL</span> 브이월드 건축물정보 (국토교통부 건축물대장 기반) · 외곽선 도형 면적 ${S.fpArea? Math.round(S.fpArea).toLocaleString()+' ㎡':'-'}</div></div>`;
+    } else {
+      html += `<div class="sec"><p class="lead">이 지점에는 등록된 건축물 정보가 없습니다 (도로·공터·미등록 건물이거나 건물 경계 밖을 클릭).</p></div>`;
+    }
+    if(Pc){ const jb = String(Pc.jibun||''); const jm = (jb.match(/([가-힣])$/)||[])[1]||''; const jiga = num(Pc.jiga);
+      html += `<div class="sec"><h3 style="margin:0 0 6px;font-size:13px;color:var(--lime-bright)">필지</h3><div class="kv">
+        ${kv('지번', esc(jb.replace(/\s*[가-힣]$/,'')||'-'))}${kv('지목', esc(JIMOK[jm]||jm||'-'))}
+        ${kv('공시지가', jiga>0 ? jiga.toLocaleString()+' 원/㎡ <span style="color:var(--text-dim);font-weight:400">('+esc(Pc.gosi_year||'')+'.'+esc(Pc.gosi_month||'')+')</span>' : '-')}${kv('PNU', '<span style="font-size:12px;letter-spacing:.02em">'+esc(Pc.pnu||'-')+'</span>')}
+      </div><div class="meta">${esc(jibunAddr)}${road? ' · '+esc(road):''}</div></div>`;
+    }
+    html += `<div class="sec" style="display:flex;gap:6px;flex-wrap:wrap">
+      ${B && B.geom ? '<button class="cta ghost" data-bd="top" style="flex:1">위에서 보기</button><button class="cta ghost" data-bd="geojson" style="flex:1">GeoJSON</button>' : ''}
+      <button class="cta ghost" data-bd="csv" style="flex:1">CSV</button>
+      <a class="cta ghost" href="https://www.eais.go.kr/" target="_blank" rel="noopener" style="flex:1;text-align:center">세움터 ↗</a></div>
+      <div class="sec"><div class="meta">건축물대장·연속지적 자료는 참고용입니다 (측량·법적 효력 없음). 3D 실측 높이는 드론 메시 표면 기준 추정값입니다.</div></div>`;
+    CARD(title, sub, html);
+    const body = document.getElementById('cardBody');
+    body.querySelectorAll('[data-bd]').forEach(b => b.onclick = () => action(b.dataset.bd, S));
+  }
+  function updateHeightCell(S){ const el = document.getElementById('bd49h'); if(el && BD.sel===S) el.innerHTML = '높이<b>'+heightHtml(S)+'</b>'; }
+
+  /* ---- 내보내기 ---- */
+  function dl(name, blob){ const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1500); }
+  function rowOf(S){ const P = (S.B && S.B.P) || {}; const Pc = S.parcel || {}; const A = S.addr || {};
+    return { 건물명: (S.B && S.B.names.join(' / ')) || '', 동명: (S.B && S.B.dongs.join(' / ')) || '', 도로명주소: A.road ? A.road.text : '', 지번주소: Pc.addr || (A.parcel ? A.parcel.text : ''), PNU: Pc.pnu || '',
+      주용도: useName(P.usability), 용도코드: P.usability || '', 구조: strName(P.strct_cd), 구조코드: P.strct_cd || '', 지상층수: P.grnd_flr || '', 지하층수: P.ugrnd_flr || '',
+      대장높이_m: num(P.height) || '', 실측높이_m: S.mh && S.mh.ok ? +S.mh.H.toFixed(2) : '', 건축면적_m2: P.archarea || '', 연면적_m2: P.totalarea || '', 대지면적_m2: P.platarea || '',
+      건폐율_pct: P.bc_rat || '', 용적률_pct: P.vl_rat || '', 사용승인일: P.useapr_day || '', 공시지가_원m2: Pc.jiga || '', 공시기준: Pc.gosi_year ? Pc.gosi_year+'-'+Pc.gosi_month : '',
+      클릭_경도: +S.lon.toFixed(7), 클릭_위도: +S.lat.toFixed(7), 출처: '브이월드 LT_C_BLDGINFO · LP_PA_CBND_BUBUN · 주소API (참고용)', 조회시각: new Date().toISOString() }; }
+  function fileBase(S){ const nm = ((S.B && S.B.names[0]) || 'building').replace(/[\\/:*?"<>|\s]+/g,'_'); const d = new Date(); return '건물_'+nm+'_'+d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0'); }
+  function action(kind, S){
+    if(kind==='top'){ const rs = ringsOf(S.B.geom); const all = rs.flat(); const bs = C.BoundingSphere.fromPoints(all.map(([x,y])=>C.Cartesian3.fromDegrees(x,y,(S.mh&&S.mh.ok)?S.mh.roof:0))); camera.flyToBoundingSphere(bs, { offset: new C.HeadingPitchRange(camera.heading, rad(-89.9), Math.max(80, bs.radius*3.2)), duration: 1.4 }); return; }
+    const row = rowOf(S);
+    if(kind==='geojson'){ const fc = { type:'FeatureCollection', name: fileBase(S), crs:{ type:'name', properties:{ name:'urn:ogc:def:crs:OGC:1.3:CRS84' } }, features:[{ type:'Feature', properties: row, geometry: S.B.geom }] }; dl(fileBase(S)+'.geojson', new Blob([JSON.stringify(fc, null, 1)], { type:'application/geo+json' })); toast('GeoJSON 저장: '+fileBase(S)+'.geojson', 2200); return; }
+    if(kind==='csv'){ const keys = Object.keys(row); const cell = v => { v = String(v); return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }; const txt = '\ufeff' + keys.map(cell).join(',') + '\r\n' + keys.map(k=>cell(row[k])).join(',') + '\r\n'; dl(fileBase(S)+'.csv', new Blob([txt], { type:'text/csv;charset=utf-8' })); toast('CSV 저장: '+fileBase(S)+'.csv', 2200); return; }
+  }
+
+  /* ---- 클릭 → 조회 ---- */
+  function pickLL(pos){ let c = null; const pk = scene.pick(pos); if(C.defined(pk) && scene.pickPositionSupported) c = scene.pickPosition(pos); if(!c){ const ray = camera.getPickRay(pos); c = ray && globe.pick(ray, scene); } if(!c) c = camera.pickEllipsoid(pos, globe.ellipsoid); if(!c) return null; const ct = C.Cartographic.fromCartesian(c); return [deg(ct.longitude), deg(ct.latitude)]; }
+  async function query(lon, lat){
+    const my = ++BD.seq;
+    CARD('건물 조회 중…', lat.toFixed(5)+', '+lon.toFixed(5), '<div class="sec"><p class="lead" style="color:var(--text-dim)">브이월드 건축물정보·필지·주소를 조회하고 있습니다…</p></div>');
+    const [bR, pR, aR] = await Promise.allSettled([ vwData('LT_C_BLDGINFO', lon, lat), vwData('LP_PA_CBND_BUBUN', lon, lat), vwAddr(lon, lat) ]);
+    if(my !== BD.seq || !BD.on) return;
+    if(bR.status==='rejected' && pR.status==='rejected'){ clearHL(); CARD('조회 실패', lat.toFixed(5)+', '+lon.toFixed(5), '<div class="sec"><p class="lead"><span class="warn">브이월드 응답 오류: '+esc(bR.reason && bR.reason.message)+'</span></p><div class="meta">잠시 후 다시 클릭해 주세요 (일일 호출 한도 또는 네트워크 문제일 수 있음)</div></div>'); return; }
+    const B = bR.status==='fulfilled' ? merge(bR.value) : null;
+    const parcel = pR.status==='fulfilled' && pR.value[0] ? pR.value[0].properties : null;
+    const S = { lon, lat, B, parcel, addr: aR.status==='fulfilled' ? aR.value : {}, mh: undefined, fpArea: 0 };
+    BD.sel = S;
+    const rs = B ? ringsOf(B.geom) : [];
+    if(rs.length){ S.fpArea = rs.reduce((s,r)=>s+geoArea(r),0); }
+    clearHL();
+    render(S);
+    if(rs.length){
+      drawHL(rs);
+      const P = B.P; const fl = num(P.grnd_flr);
+      const c = centroid(rs.slice().sort((a,b)=>geoArea(b)-geoArea(a))[0]);
+      measureHeight(rs).then(mh => {
+        if(BD.sel!==S) return;
+        S.mh = mh;
+        const g0 = (mh && mh.ground!=null) ? mh.ground : (globe.getHeight(C.Cartographic.fromDegrees(c[0],c[1]))||0);
+        const top = (mh && mh.ok) ? mh.roof + 2 : g0 + Math.max(num(P.height), fl*3.3, 6);
+        addLabel(c[0], c[1], top, (B.names[0]||'건물') + (fl? ' · '+fl+'F':'') + (mh && mh.ok ? ' · '+mh.H.toFixed(1)+' m' : ''));
+        updateHeightCell(S);
+        window.__BD49.last = S;
+      }).catch(err => { S.mh = { ok:false, why:err.message }; updateHeightCell(S); });
+      window.__BD49.last = S;
+    } else { S.mh = null; window.__BD49.last = S; if(!B) toast('이 지점에는 건축물 정보가 없습니다 · 필지 정보만 표시', 2200); }
+  }
+  function otherBusy(){ return !!(STATE.measure || (window.__GT && window.__GT.picking) || (window.sistechViewshed && window.sistechViewshed.active)); }
+  const _bdClick = handler.getInputAction(C.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction(e => {
+    if(!BD.on || STATE.mode!=='site' || otherBusy()) return _bdClick && _bdClick(e);
+    const pk = scene.pick(e.position);
+    if(C.defined(pk) && pk.id && pk.id.properties && !pk.id._bd49) return _bdClick && _bdClick(e); // 프로젝트 핀 등 개체 클릭은 기존 동작
+    const ll = pickLL(e.position); if(!ll) return _bdClick && _bdClick(e);
+    query(ll[0], ll[1]).catch(err => { console.error(err); toast('건물 조회 오류: '+err.message, 3000); });
+  }, C.ScreenSpaceEventType.LEFT_CLICK);
+
+  /* ---- 켜기/끄기 (분석 단일 활성 포함) ---- */
+  function on(){ BD.on = true; viewer.canvas.style.cursor = 'crosshair'; toast('건물 속성 조회 켜짐 · 건물을 클릭하세요 (전국 건축물대장 · 3D 모델 위에서는 실측 높이)', 3000); }
+  function off(){ BD.on = false; BD.seq++; clearHL(); if(viewer.canvas.style.cursor==='crosshair') viewer.canvas.style.cursor = ''; if(BD.cardOpen){ document.getElementById('card').classList.remove('open'); BD.cardOpen = false; } BD.sel = null; }
+  const _t49 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(id === 'bldg'){
+      const want = force!==undefined ? force : !STATE.on.has('bldg');
+      if(want && STATE.mode!=='site'){ toast('건물 속성 조회는 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ const others = an ? an.items.filter(x=>x.id!=='bldg' && STATE.on.has(x.id)) : []; for(const o of others){ try{ await _t49(o.id, false); }catch(e){} } if(others.length) try{ toast('이전 분석 닫힘: '+others.map(o=>(o.name||o.id).replace(/\s*\(.*$/,'')).join(', '), 1800); }catch(e){} }
+      if(want){ STATE.on.add('bldg'); on(); } else { STATE.on.delete('bldg'); off(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){}
+      return;
+    }
+    const r = await _t49.apply(this, arguments);
+    if(BD.on && !STATE.on.has('bldg')) off(); // 다른 분석이 켜지며 내부 체인에서 해제된 경우 동기화
+    return r;
+  };
+  const _us49 = updateSrc;
+  updateSrc = function(){ _us49.apply(this, arguments); if(!BD.on) return; const el = document.getElementById('hudSrc'); if(el && !el.innerHTML.includes('건축물정보')) el.innerHTML = '<b>브이월드</b> 건축물정보·연속지적 (OFFICIAL · 참고용) · ' + el.innerHTML; };
+  // 카드 닫기·전체 닫기 시 하이라이트 제거
+  const cc = document.getElementById('cardClose'); if(cc) cc.addEventListener('click', ()=>{ if(BD.cardOpen){ BD.cardOpen = false; BD.seq++; clearHL(); BD.sel = null; } });
+  try{ const _cap49 = closeAllPanels; closeAllPanels = function(){ const r = _cap49.apply(this, arguments); if(BD.cardOpen){ BD.cardOpen = false; clearHL(); BD.sel = null; } return r; }; }catch(e){}
+  // 다른 카드가 열리면 내 카드 플래그 해제 (하이라이트는 유지하지 않음)
+  try{ new MutationObserver(()=>{ if(!BD.cardOpen) return; const t = document.getElementById('cardTitle'); if(BD.sel && t && !document.getElementById('bd49h') && !/건물 조회|건축물 정보 없음|조회 실패/.test(t.textContent)){ BD.cardOpen = false; clearHL(); BD.sel = null; } }).observe(document.getElementById('cardBody'), { childList:true }); }catch(e){}
+  // 주소(#on=…)에 bldg가 남아 있으면 SITE에서만 다시 켬
+  if(STATE.on.has('bldg')){ if(STATE.mode==='site') on(); else STATE.on.delete('bldg'); }
+  window.__BD49 = { BD, query, merge, measureHeight, vwData, vwAddr, last:null, version:'49.2' };
+})();
+
+</script>
 </body>
 </html>
