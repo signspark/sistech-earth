@@ -5500,6 +5500,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
         닫힌 안쪽 중 검정(빈 건물 내부) 우세 = 건물 단면, 메시가 보이는 안쪽(중정) = 구멍 → 침식 → 외곽선 추적 → 단순화
      ② 영상용: 평소 화면(연두 절단선)을 GeoTIFF로
    좌표: 한국 TM (EPSG:5186 중부 / 5187 동부 / 5185 서부, GRS80) · 자동 = 현장 경도 기준
+   외곽선 정리(2026-10-09): 원본/약하게/보통/강하게 + 직각 정리 → 폴리곤 + 외곽 선(LineString) 레이어
    속성(한글 UTF-8): floor 층 · cut_h 지상 절단 높이 m · cut_z 절단 표고 m · area_m2 · perim_m · bld_nm 건물명(인천시 도로명주소 건물/OSM) · src · date
 */
 (function(){
@@ -5539,9 +5540,10 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   const sec = document.createElement('div'); sec.className = 'sec'; sec.id = 'xsExSec'; sec.innerHTML = `
 <h4>단면 내보내기 (QGIS · 캐드용)</h4>
 <div class="row"><label>좌표계</label><select id="xsExCrs"><option value="auto">자동 (현장 기준 TM)</option><option value="5186">EPSG:5186 TM 중부원점</option><option value="5187">EPSG:5187 TM 동부원점</option><option value="5185">EPSG:5185 TM 서부원점</option></select></div>
+<div class="row"><label>외곽선 정리</label><select id="xsExSimp"><option value="raw">원본 (픽셀 경계)</option><option value="light">약하게 (0.3 m)</option><option value="mid" selected>보통 (0.8 m)</option><option value="strong">강하게 (1.2 m)</option></select><label style="display:flex;align-items:center;gap:4px;color:var(--text)"><input type="checkbox" id="xsExOrtho" checked style="accent-color:var(--lime)"> 직각 정리</label></div>
 <div class="fmt"><label><input type="checkbox" id="xsExGpkg" checked> GeoPackage</label><label><input type="checkbox" id="xsExShp" checked> SHP</label><label><input type="checkbox" id="xsExDxf" checked> DXF</label><label><input type="checkbox" id="xsExTif" checked> GeoTIFF</label></div>
 <div class="btns"><button id="xsExBtn">⬇ 단면 내보내기 (ZIP)</button></div>
-<div class="hint" id="xsExMsg">절단된 건물 안쪽(빈 공간)을 위에서 추출해 <b>건물 단면 폴리곤</b>으로 저장 · <b>건물만 표시</b>와 함께 쓰면 나무 제외 · 좌표 TM(m) · 한글 속성 UTF-8 · ZIP 안: .gpkg / .shp·.shx·.dbf·.prj·.cpg / .dxf / .tif</div>`;
+<div class="hint" id="xsExMsg">절단된 건물 안쪽(빈 공간)을 위에서 추출해 <b>건물 단면 폴리곤</b>으로 저장 · <b>건물만 표시</b>와 함께 쓰면 나무 제외 · 외곽선은 직선으로 단순화(벽 방향·직각 맞춤) · 폴리곤 + 외곽 선 레이어 · 좌표 TM(m) · 한글 속성 UTF-8 · ZIP 안: .gpkg / .shp(면·선) / .dxf / .tif</div>`;
   const bd = P.querySelector('.bd'); const lastHint = bd.lastElementChild; bd.insertBefore(sec, lastHint);
   const msg = t => { q('#xsExMsg').innerHTML = t; };
 
@@ -5633,6 +5635,44 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     return { polys: res, edgePx: nb };
   }
 
+  /* ---- 벡터 단순화·직각 정리: DP → 주 방향(90° 주기) 맞춤 → 같은 방향 이웃 변 합치기 → 이웃 선 교차로 꼭짓점 재계산 → 짧은 변 제거 → 면적·위치 검증 ---- */
+  function regularize(ring, opt){
+    opt = opt || {}; const tolDP = opt.tol || 0.35, snapDeg = opt.snapDeg || 15, minLen = opt.minLen || 0.6, ortho = opt.ortho !== false;
+    const A = r => { let a = 0; for(let i=0;i<r.length;i++){ const p = r[i], q = r[(i+1)%r.length]; a += p[0]*q[1]-q[0]*p[1]; } return a/2; };
+    function dpOpen(pts, tol){ if(pts.length<3) return pts; const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length-1] = 1; const st = [[0, pts.length-1]];
+      while(st.length){ const [a,b] = st.pop(); const [ax,ay] = pts[a], [bx,by] = pts[b]; const L = Math.hypot(bx-ax, by-ay)||1e-9; let md = -1, mi = -1;
+        for(let i=a+1;i<b;i++){ const d = Math.abs((bx-ax)*(ay-pts[i][1]) - (ax-pts[i][0])*(by-ay))/L; if(d>md){ md = d; mi = i; } } if(md>tol){ keep[mi] = 1; st.push([a,mi],[mi,b]); } }
+      return pts.filter((_,i)=>keep[i]); }
+    function dpClosed(r, tol){ let far = 0, fd = -1; for(let i=1;i<r.length;i++){ const d = Math.hypot(r[i][0]-r[0][0], r[i][1]-r[0][1]); if(d>fd){ fd = d; far = i; } } const a = dpOpen(r.slice(0,far+1), tol), b = dpOpen(r.slice(far).concat([r[0]]), tol); return a.concat(b.slice(1,-1)); }
+    let pts = ring.slice(); if(pts.length>2 && Math.hypot(pts[0][0]-pts[pts.length-1][0], pts[0][1]-pts[pts.length-1][1])<1e-6) pts.pop();
+    const a0 = Math.abs(A(pts)); const src = pts.slice();
+    pts = dpClosed(pts, tolDP); if(pts.length<4 || !ortho) return pts;
+    let Cs = 0, Sn = 0; for(let i=0;i<pts.length;i++){ const p = pts[i], q = pts[(i+1)%pts.length]; const dx = q[0]-p[0], dy = q[1]-p[1], L = Math.hypot(dx,dy); const al = Math.atan2(dy,dx); Cs += L*Math.cos(4*al); Sn += L*Math.sin(4*al); }
+    const th = Math.atan2(Sn, Cs)/4;
+    let lines = [];
+    for(let i=0;i<pts.length;i++){ const p = pts[i], q = pts[(i+1)%pts.length]; const dx = q[0]-p[0], dy = q[1]-p[1], L = Math.hypot(dx,dy); if(L<1e-6) continue; let al = Math.atan2(dy,dx);
+      const k = Math.round((al-th)/(Math.PI/2)); const sn = th + k*Math.PI/2; if(Math.abs(al-sn) < snapDeg*Math.PI/180) al = sn;
+      lines.push({ m:[(p[0]+q[0])/2, (p[1]+q[1])/2], d:[Math.cos(al), Math.sin(al)], L }); }
+    const off = (ln, p) => (p[0]-ln.m[0])*(-ln.d[1]) + (p[1]-ln.m[1])*ln.d[0];
+    let changed = true, guard = 0;
+    while(changed && guard++ < 60 && lines.length>3){ changed = false;
+      for(let i=0;i<lines.length && lines.length>3;i++){ const a = lines[i], j = (i+1)%lines.length, b = lines[j];
+        const par = Math.abs(a.d[0]*b.d[1]-a.d[1]*b.d[0]) < 1e-6 && (a.d[0]*b.d[0]+a.d[1]*b.d[1]) > 0;
+        if(par && Math.abs(off(a, b.m)) < minLen){ const w = a.L+b.L; a.m = [(a.m[0]*a.L+b.m[0]*b.L)/w, (a.m[1]*a.L+b.m[1]*b.L)/w]; a.L = w; lines.splice(j,1); changed = true; } } }
+    function build(){ const out = []; for(let i=0;i<lines.length;i++){ const a = lines[i], b = lines[(i+1)%lines.length]; const den = a.d[0]*b.d[1]-a.d[1]*b.d[0];
+        if(Math.abs(den)<1e-9){ const t = (b.m[0]-a.m[0])*a.d[0]+(b.m[1]-a.m[1])*a.d[1]; const pa = [a.m[0]+a.d[0]*t*0.5, a.m[1]+a.d[1]*t*0.5]; const s2 = off(a, b.m); out.push(pa, [pa[0]-a.d[1]*s2, pa[1]+a.d[0]*s2]); continue; }
+        const t = ((b.m[0]-a.m[0])*b.d[1]-(b.m[1]-a.m[1])*b.d[0])/den; out.push([a.m[0]+a.d[0]*t, a.m[1]+a.d[1]*t]); }
+      return out; }
+    let res = build();
+    for(let it=0; it<60 && lines.length>4; it++){ let mi = -1, ml = 1e9; for(let i=0;i<res.length;i++){ const p = res[i], q = res[(i+1)%res.length]; const L = Math.hypot(q[0]-p[0], q[1]-p[1]); if(L<ml){ ml = L; mi = i; } } if(ml>=minLen) break;
+      // res 꼭짓점 i는 lines[i]∩lines[i+1] (평행 연결점은 2개라 인덱스가 어긋날 수 있어 가장 가까운 선 제거)
+      const p = res[mi], q = res[(mi+1)%res.length], mid = [(p[0]+q[0])/2, (p[1]+q[1])/2]; let bi = 0, bd = 1e9; for(let i=0;i<lines.length;i++){ const d = Math.abs(off(lines[i], mid)) + 0.001*lines[i].L; if(d<bd){ bd = d; bi = i; } }
+      lines.splice(bi,1); res = build(); }
+    const a1 = Math.abs(A(res)); let maxJump = 0; for(const p of res){ let md = 1e9; for(let i=0;i<src.length;i++){ const a = src[i], b = src[(i+1)%src.length]; const dx = b[0]-a[0], dy = b[1]-a[1], L2 = dx*dx+dy*dy||1e-9; let t = ((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2; t = Math.max(0,Math.min(1,t)); md = Math.min(md, Math.hypot(a[0]+t*dx-p[0], a[1]+t*dy-p[1])); } maxJump = Math.max(maxJump, md); }
+    if(!(a1>0) || Math.abs(a1-a0)/a0 > 0.10 || maxJump > 2.5) return pts;
+    return res;
+  }
+
   /* ---- 건물명 (인천: 도로명주소 건물 · 그 밖: OSM) ---- */
   async function buildingNames(G, polys){
     const bb = [G.llBB[0]-0.0005, G.llBB[1]-0.0005, G.llBB[2]+0.0005, G.llBB[3]+0.0005]; const feats = [];
@@ -5685,8 +5725,20 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     const shp = concat([hdr(off), ...shpParts]), shx = concat([hdr(100+8*recs.length), ...shxParts]);
     return { shp, shx, bb };
   }
-  const FIELDS = [ ['id','N',10,0], ['floor','N',4,0], ['cut_h','N',10,2], ['cut_z','N',10,2], ['area_m2','N',12,2], ['perim_m','N',12,2], ['bld_nm','C',120,0], ['bld_flr','N',4,0], ['src','C',120,0], ['date','C',10,0] ];
-  function writeDbf(rows){
+  function writeShpLines(lrows){
+    const recs = lrows.map(lr=>{ const r = lr.ring.concat([lr.ring[0]]); const xs = r.map(v=>v[0]), ys = r.map(v=>v[1]); const b = new DataView(new ArrayBuffer(44 + 4 + 16*r.length));
+      b.setInt32(0,3,true); b.setFloat64(4,Math.min(...xs),true); b.setFloat64(12,Math.min(...ys),true); b.setFloat64(20,Math.max(...xs),true); b.setFloat64(28,Math.max(...ys),true); b.setInt32(36,1,true); b.setInt32(40,r.length,true); b.setInt32(44,0,true);
+      let k = 48; for(const v of r){ b.setFloat64(k,v[0],true); b.setFloat64(k+8,v[1],true); k += 16; } return { u8: new Uint8Array(b.buffer), bb:[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)] }; });
+    const bb = recs.length ? [Math.min(...recs.map(r=>r.bb[0])), Math.min(...recs.map(r=>r.bb[1])), Math.max(...recs.map(r=>r.bb[2])), Math.max(...recs.map(r=>r.bb[3]))] : [0,0,0,0];
+    const hdr = (lenBytes) => { const h = new DataView(new ArrayBuffer(100)); h.setInt32(0,9994,false); h.setInt32(24,lenBytes/2,false); h.setInt32(28,1000,true); h.setInt32(32,3,true); h.setFloat64(36,bb[0],true); h.setFloat64(44,bb[1],true); h.setFloat64(52,bb[2],true); h.setFloat64(60,bb[3],true); return new Uint8Array(h.buffer); };
+    const sp = [], sx = []; let off = 100;
+    recs.forEach((r,i)=>{ const rh = new DataView(new ArrayBuffer(8)); rh.setInt32(0,i+1,false); rh.setInt32(4,r.u8.length/2,false); sp.push(new Uint8Array(rh.buffer), r.u8); const x = new DataView(new ArrayBuffer(8)); x.setInt32(0,off/2,false); x.setInt32(4,r.u8.length/2,false); sx.push(new Uint8Array(x.buffer)); off += 8 + r.u8.length; });
+    return { shp: concat([hdr(off), ...sp]), shx: concat([hdr(100+8*recs.length), ...sx]) };
+  }
+  const LFIELDS = [ ['id','N',10,0], ['poly_id','N',10,0], ['ring_type','C',12,0], ['len_m','N',12,2], ['n_vert','N',6,0], ['floor','N',4,0], ['cut_z','N',10,2] ];
+  const FIELDS0 = [ ['id','N',10,0], ['floor','N',4,0], ['cut_h','N',10,2], ['cut_z','N',10,2], ['area_m2','N',12,2], ['perim_m','N',12,2], ['bld_nm','C',120,0], ['bld_flr','N',4,0], ['src','C',120,0], ['date','C',10,0] ];
+  function writeDbf(rows, FIELDS_){
+    const FIELDS = FIELDS_ || FIELDS0;
     const nf = FIELDS.length, hl = 32 + 32*nf + 1, rl = 1 + FIELDS.reduce((s,f)=>s+f[2],0);
     const b = new Uint8Array(hl + rl*rows.length + 1); const dv = new DataView(b.buffer); const d = new Date();
     b[0] = 3; b[1] = d.getFullYear()-1900; b[2] = d.getMonth()+1; b[3] = d.getDate(); dv.setUint32(4,rows.length,true); dv.setUint16(8,hl,true); dv.setUint16(10,rl,true);
@@ -5709,7 +5761,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     let k = 40; b.setUint8(k,1); b.setUint32(k+1,3,true); b.setUint32(k+5,rings.length,true); k += 9;
     for(const r of rings){ b.setUint32(k,r.length,true); k += 4; for(const v of r){ b.setFloat64(k,v[0],true); b.setFloat64(k+8,v[1],true); k += 16; } }
     return new Uint8Array(b.buffer); }
-  async function writeGpkg(G, polys, rows, table, ident){
+  async function writeGpkg(G, polys, rows, table, ident, opt2){
     const SQL = await loadSql(); const db = new SQL.Database();
     db.run('PRAGMA application_id = 1196444487; PRAGMA user_version = 10300;');
     db.run(`CREATE TABLE gpkg_spatial_ref_sys (srs_name TEXT NOT NULL, srs_id INTEGER NOT NULL PRIMARY KEY, organization TEXT NOT NULL, organization_coordsys_id INTEGER NOT NULL, definition TEXT NOT NULL, description TEXT);
@@ -5726,6 +5778,16 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     db.run(`CREATE TABLE "${table}" (fid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, geom POLYGON, floor INTEGER, cut_h REAL, cut_z REAL, area_m2 REAL, perim_m REAL, bld_nm TEXT, bld_flr INTEGER, src TEXT, date TEXT)`);
     const st = db.prepare(`INSERT INTO "${table}" (geom,floor,cut_h,cut_z,area_m2,perim_m,bld_nm,bld_flr,src,date) VALUES (?,?,?,?,?,?,?,?,?,?)`);
     polys.forEach((p,i)=>{ const r = rows[i]; st.run([gpkgGeom(p, G.code), r.floor, r.cut_h, r.cut_z, r.area_m2, r.perim_m, r.bld_nm, r.bld_flr, r.src, r.date]); }); st.free();
+    if(opt2 && opt2.lineRows){ const lt = table+'_line';
+      const lxs = opt2.lineRows.flatMap(l=>l.ring.map(v=>v[0])), lys = opt2.lineRows.flatMap(l=>l.ring.map(v=>v[1]));
+      db.run('INSERT INTO gpkg_contents (table_name,data_type,identifier,description,min_x,min_y,max_x,max_y,srs_id) VALUES (?,?,?,?,?,?,?,?,?)', [lt, 'features', ident+'_외곽선', 'SISTECH EARTH 수평 단면 외곽선 (단순화·직각 정리)', lxs.length?Math.min(...lxs):bbx[0], lys.length?Math.min(...lys):bbx[1], lxs.length?Math.max(...lxs):bbx[2], lys.length?Math.max(...lys):bbx[3], G.code]);
+      db.run('INSERT INTO gpkg_geometry_columns VALUES (?,?,?,?,?,?)', [lt, 'geom', 'LINESTRING', G.code, 0, 0]);
+      db.run('CREATE TABLE "'+lt+'" (fid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, geom LINESTRING, poly_id INTEGER, ring_type TEXT, len_m REAL, n_vert INTEGER, floor INTEGER, cut_z REAL)');
+      const sl = db.prepare('INSERT INTO "'+lt+'" (geom,poly_id,ring_type,len_m,n_vert,floor,cut_z) VALUES (?,?,?,?,?,?,?)');
+      for(const l of opt2.lineRows){ const r = l.ring.concat([l.ring[0]]); const xs = r.map(v=>v[0]), ys = r.map(v=>v[1]); const b = new DataView(new ArrayBuffer(40 + 9 + 16*r.length));
+        b.setUint8(0,0x47); b.setUint8(1,0x50); b.setUint8(2,0); b.setUint8(3,0x03); b.setInt32(4,G.code,true); b.setFloat64(8,Math.min(...xs),true); b.setFloat64(16,Math.max(...xs),true); b.setFloat64(24,Math.min(...ys),true); b.setFloat64(32,Math.max(...ys),true);
+        b.setUint8(40,1); b.setUint32(41,2,true); b.setUint32(45,r.length,true); let k = 49; for(const v of r){ b.setFloat64(k,v[0],true); b.setFloat64(k+8,v[1],true); k += 16; }
+        sl.run([new Uint8Array(b.buffer), l.poly_id, l.ring_type, l.len_m, l.n_vert, l.floor, l.cut_z]); } sl.free(); }
     const out = db.export(); db.close(); return out;
   }
 
@@ -5825,7 +5887,14 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
         for(let x=0;x<W;x++){ let run=-1e9; for(let y=0;y<H;y++){ if(t1[y*W+x]) run=y; if(y-run<=bufPx) t2[y*W+x]=1; } run=1e9; for(let y=H-1;y>=0;y--){ if(t1[y*W+x]) run=y; if(run-y<=bufPx) t2[y*W+x]=1; } }
         foot = t2; }
       const ex = extract(G, rgba, foot);
-      const polys = ex.polys;
+      const polys = ex.polys; const nv0 = polys.reduce((s,p)=>s+p.outer.length+p.holes.reduce((t,h)=>t+h.length,0),0);
+      const lvl = q('#xsExSimp').value, orthoOn = q('#xsExOrtho').checked;
+      const PRM = { light:{ tol:0.3, snapDeg:15, minLen:0.6 }, mid:{ tol:0.8, snapDeg:25, minLen:1.2 }, strong:{ tol:1.2, snapDeg:30, minLen:1.8 } }[lvl];
+      const ringA = r => { let a = 0; for(let i=0;i<r.length;i++){ const p = r[i], o = r[(i+1)%r.length]; a += p[0]*o[1]-o[0]*p[1]; } return Math.abs(a/2); };
+      const ringL = r => { let L = 0; for(let i=0;i<r.length;i++){ const p = r[i], o = r[(i+1)%r.length]; L += Math.hypot(o[0]-p[0], o[1]-p[1]); } return L; };
+      if(PRM){ for(const p of polys){ p.outer = regularize(p.outer, { ...PRM, ortho: orthoOn }); p.holes = p.holes.map(h=>regularize(h, { ...PRM, ortho: orthoOn })).filter(h=>h.length>=3 && ringA(h)>=1); p.area = ringA(p.outer) - p.holes.reduce((s,h)=>s+ringA(h),0); p.perim = ringL(p.outer) + p.holes.reduce((s,h)=>s+ringL(h),0); } }
+      const nv1 = polys.reduce((s,p)=>s+p.outer.length+p.holes.reduce((t,h)=>t+h.length,0),0);
+      const lineRows = []; polys.forEach((p,i)=>{ [p.outer, ...p.holes].forEach((r,j)=>lineRows.push({ ring:r, id: lineRows.length+1, poly_id: i+1, ring_type: j===0 ? '외곽' : '구멍', len_m: Math.round(ringL(r)*100)/100, floor: XS.floor, cut_z: Math.round((XS.base+XS.h)*100)/100, n_vert: r.length })); });
       msg('④ 건물명 붙이는 중…'); const nameSrc = await buildingNames(G, polys);
       const today = new Date(); const ds = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
       const proj = (PROJECTS.find(p=>p.ts && p.ts.show)||{}).name || '';
@@ -5834,16 +5903,16 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
       const stamp = ds.replace(/-/g,'') + '_' + String(today.getHours()).padStart(2,'0') + String(today.getMinutes()).padStart(2,'0');
       const base = 'xsec_F'+XS.floor+'_'+stamp; const files = [];
       msg('⑤ 파일 쓰는 중…'); await sleep(20);
-      if(fm.gpkg){ try{ files.push({ name: base+'.gpkg', data: await writeGpkg(G, polys, rows, 'xsec_f'+XS.floor, '수평단면_'+XS.floor+'층') }); }catch(e){ console.warn(e); toast('GeoPackage 만들기 실패: '+e.message, 4000); } }
-      if(fm.shp){ const s = writeShp(polys); files.push({ name: base+'.shp', data: s.shp }, { name: base+'.shx', data: s.shx }, { name: base+'.dbf', data: writeDbf(rows) }, { name: base+'.prj', data: enc.encode(esriWkt(code)) }, { name: base+'.cpg', data: enc.encode('UTF-8') }); }
+      if(fm.gpkg){ try{ files.push({ name: base+'.gpkg', data: await writeGpkg(G, polys, rows, 'xsec_f'+XS.floor, '수평단면_'+XS.floor+'층', { lineRows }) }); }catch(e){ console.warn(e); toast('GeoPackage 만들기 실패: '+e.message, 4000); } }
+      if(fm.shp){ const s = writeShp(polys); files.push({ name: base+'.shp', data: s.shp }, { name: base+'.shx', data: s.shx }, { name: base+'.dbf', data: writeDbf(rows) }, { name: base+'.prj', data: enc.encode(esriWkt(code)) }, { name: base+'.cpg', data: enc.encode('UTF-8') }); const sl2 = writeShpLines(lineRows); files.push({ name: base+'_line.shp', data: sl2.shp }, { name: base+'_line.shx', data: sl2.shx }, { name: base+'_line.dbf', data: writeDbf(lineRows, LFIELDS) }, { name: base+'_line.prj', data: enc.encode(esriWkt(code)) }, { name: base+'_line.cpg', data: enc.encode('UTF-8') }); }
       if(fm.dxf) files.push({ name: base+'.dxf', data: writeDxf(G, polys, rows) });
       if(fm.tif && imgCap) files.push({ name: base+'.tif', data: await writeTif(G, imgCap.ctx) });
-      const info = ['SISTECH EARTH 수평 단면 내보내기', '날짜: '+today.toLocaleString('ko-KR'), '모델: '+proj, '층: '+XS.floor+'층 · 지상 '+XS.h.toFixed(2)+' m · 절단 표고 '+(XS.base+XS.h).toFixed(2)+' m (기준 지면 표고 '+XS.base.toFixed(2)+' m)', '구역: '+Math.round(XS.w)+' × '+Math.round(XS.d)+' m · 회전 '+Math.round(XS.ang)+'° · 중심 '+XS.lat.toFixed(6)+', '+XS.lon.toFixed(6), '좌표계: EPSG:'+code+' ('+CRS[code].name+') · 픽셀 '+g+' m', '폴리곤: '+polys.length+'개 · 건물만 표시: '+(XS.bld?'켬':'끔') + (nameSrc ? ' · 건물명 출처: '+nameSrc : ''), '주의: 3D 메시 절단선을 영상에서 추출한 추정 외곽 (측량 성과 아님)'].join('\r\n');
+      const info = ['SISTECH EARTH 수평 단면 내보내기', '날짜: '+today.toLocaleString('ko-KR'), '모델: '+proj, '층: '+XS.floor+'층 · 지상 '+XS.h.toFixed(2)+' m · 절단 표고 '+(XS.base+XS.h).toFixed(2)+' m (기준 지면 표고 '+XS.base.toFixed(2)+' m)', '구역: '+Math.round(XS.w)+' × '+Math.round(XS.d)+' m · 회전 '+Math.round(XS.ang)+'° · 중심 '+XS.lat.toFixed(6)+', '+XS.lon.toFixed(6), '좌표계: EPSG:'+code+' ('+CRS[code].name+') · 픽셀 '+g+' m', '외곽선 정리: '+({raw:'원본',light:'약하게 0.3 m',mid:'보통 0.8 m',strong:'강하게 1.2 m'}[lvl])+(orthoOn&&PRM?' + 직각 정리':'')+' · 꼭짓점 '+nv0+' → '+nv1, '폴리곤: '+polys.length+'개 · 건물만 표시: '+(XS.bld?'켬':'끔') + (nameSrc ? ' · 건물명 출처: '+nameSrc : ''), '주의: 3D 메시 절단선을 영상에서 추출한 추정 외곽 (측량 성과 아님)'].join('\r\n');
       files.push({ name: base+'_README.txt', data: enc.encode('\ufeff'+info) });
       const zipU8 = await zip(files); const zipName = '수평단면_'+XS.floor+'층_'+stamp+'.zip';
-      window.__xsExport.last = { zip: zipU8, name: zipName, files: files.map(f=>({ name:f.name, size:f.data.length })), polys: polys.length, G, rows, slow: (imgCap?imgCap.slow:0)+anCap.slow, ms: Math.round(performance.now()-t0) };
+      window.__xsExport.last = { nv0, nv1, lineRows: lineRows.length, zip: zipU8, name: zipName, files: files.map(f=>({ name:f.name, size:f.data.length })), polys: polys.length, G, rows, slow: (imgCap?imgCap.slow:0)+anCap.slow, ms: Math.round(performance.now()-t0) };
       if(!opt.noDownload){ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([zipU8], { type:'application/zip' })); a.download = zipName; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 4000); }
-      msg('✔ <b>'+polys.length+'개</b> 단면 폴리곤 · EPSG:'+code+' · '+(Math.round(zipU8.length/1024))+' KB · '+Math.round((performance.now()-t0)/1000)+'초 → <b>'+zipName+'</b>' + (((imgCap?imgCap.slow:0)+anCap.slow) ? ' <span class="warn">(일부 타일 로딩 지연)</span>' : ''));
+      msg('✔ <b>'+polys.length+'개</b> 단면 폴리곤 · 꼭짓점 '+nv0+'→'+nv1+' · EPSG:'+code+' · '+(Math.round(zipU8.length/1024))+' KB · '+Math.round((performance.now()-t0)/1000)+'초 → <b>'+zipName+'</b>' + (((imgCap?imgCap.slow:0)+anCap.slow) ? ' <span class="warn">(일부 타일 로딩 지연)</span>' : ''));
       toast('단면 내보내기 완료 · 폴리곤 '+polys.length+'개 · '+zipName, 3500);
       return window.__xsExport.last;
     }catch(e){ console.error(e); try{ restore(); }catch(e2){} msg('<span class="warn">내보내기 오류: '+e.message+'</span>'); toast('단면 내보내기 오류: '+e.message, 4000); }
