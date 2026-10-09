@@ -103,6 +103,7 @@ const CONFIG = {
   camHeadingRate: 2.2,      // 카메라 헤딩 추종 속도 (1/s)
   blendSec: 0.4,            // 새 픽스로 수렴하는 시간 (0.3~0.5 s)
   gpsWeakSec: 3,            // 이 시간 이상 픽스 없으면 'GPS 신호 약함' + 추측항법 정지
+  heightRate: 2, heightSnap: 10,   // 차량 높이 완화 (m/s) · 즉시 반영 임계 (m)
   // 지도정합
   match: { minR: 30, wHeading: 0.35, sameWay: -15, connected: -8, layerPenalty: 20, switchFixes: 2, fetchR: 1500, refetchMargin: 500, minFetchGap: 15000 },
   // 차선 오프셋 (OSM 폭 기준, index.html laneOffsets 와 동일 규칙)
@@ -336,8 +337,9 @@ function frame(){ const now=performance.now(); const dt=Math.min(0.1,(now-lastT)
   S.lon=est[0]; S.lat=est[1];
   // 높이 (0.5 s 마다 샘플, 완화)
   if(!S.hT || now-S.hT>500){ S.hT=now; let g; const carto=C.Cartographic.fromDegrees(S.lon,S.lat); try{ if(scene.sampleHeightSupported && TILES.active.length) g=scene.sampleHeight(carto,[carEnt,ringEnt]); }catch(e){} if(g==null||isNaN(g)) g=globe.getHeight(carto); if(g!=null&&!isNaN(g)) S.gVal=g; }
-  const g = S.gVal!=null? S.gVal : 0; if(S.hs==null) S.hs=g; else S.hs += clamp(g-S.hs, -Math.max(0.3,S.spd*dt*0.2), Math.max(0.3,S.spd*dt*0.2));
-  S.h=S.hs+0.05; S.pos=C.Cartesian3.fromDegrees(S.lon,S.lat,S.h);
+  // 높이 완화: 초당 최대 (2 m + 속도×25%) 변화, 10 m 이상 차이(LOD 전환·3D 타일 로드)는 즉시 반영
+  if(S.gVal!=null){ const g=S.gVal; if(S.hs==null || Math.abs(g-S.hs)>CONFIG.heightSnap) S.hs=g; else { const lim=(CONFIG.heightRate+S.spd*0.25)*dt; S.hs += clamp(g-S.hs, -lim, lim); } }
+  S.h=(S.hs!=null?S.hs:0)+0.05; S.pos=C.Cartesian3.fromDegrees(S.lon,S.lat,S.h);
   // 속도 기반 시점 (2.5 s 완화)
   const kmh=S.spd*3.6; const V=CONFIG.view; let tr=V[V.length-1][1], tp=V[V.length-1][2]; for(let i=1;i<V.length;i++){ if(kmh<=V[i][0]){ const f=(kmh-V[i-1][0])/(V[i][0]-V[i-1][0]||1); tr=V[i-1][1]+(V[i][1]-V[i-1][1])*f; tp=V[i-1][2]+(V[i][2]-V[i-1][2])*f; break; } }
   if(S.dim==='2D'){ tr*=CONFIG.view2D.rangeMul; tp=CONFIG.view2D.pitch; }
@@ -384,13 +386,19 @@ function updHud(kmh){ q('#spdV').textContent=Math.round(kmh);
   if(!S.started){ b.textContent = SIM? '시뮬레이션 준비 중…' : REPLAY? '재생 준비 중…' : 'GPS 대기 중…'; b.className=''; return; }
   b.textContent = S.matched ? (S.way && S.way.name ? S.way.name : '도로 정합') : '도로 미정합'; b.className = S.matched? 'ok' : 'warn'; }
 function updDbg(){ const sp = S.pos? scene.cartesianToCanvasCoordinates(S.pos) : null; const W=innerWidth,H=innerHeight;
-  q('#dbg').textContent = `viewport ${W}×${H}  DPR ${devicePixelRatio.toFixed(2)}  canvas ${scene.canvas.width}×${scene.canvas.height}\nFPS ${fps.toFixed(0)}  GPS interval ${(S.fixGap/1000).toFixed(2)} s  acc ${S.acc.toFixed(1)} m  fixes ${S.fixes}\nmatch ${S.matched?'ON':'off'}  way ${S.way?S.way.id+' '+(S.way.name||S.way.hw):'-'}  d ${S.matchDist.toFixed(1)} m  lane ${S.laneOff.toFixed(1)} m\nroads ${ROADS.ways.size}  tiles ${TILES.active.map(p=>p.id).join(',')||'-'}  q ${CONFIG.quality[S.qIdx][0]}\nspeed ${(S.spd*3.6).toFixed(1)} km/h  hdg ${S.hdg.toFixed(1)}  cam ${(S.camHdg||0).toFixed(1)}  range ${S.viewRange.toFixed(0)} pitch ${S.viewPitch.toFixed(1)}\ncar px ${sp?sp.x.toFixed(1)+','+sp.y.toFixed(1):'-'}  target ${(W*CONFIG.anchorX).toFixed(1)},${(H*CONFIG.anchorY).toFixed(1)}  Δ ${sp?(sp.x-W*CONFIG.anchorX).toFixed(1)+','+(sp.y-H*CONFIG.anchorY).toFixed(1):'-'}\nmatched ${S.stat.n?Math.round(100*S.stat.matched/S.stat.n):0}%  mean raw→matched ${S.stat.matched?(S.stat.sumD/S.stat.matched).toFixed(1):'-'} m  log ${LOG.trip?LOG.trip.id:'-'} buf ${LOG.buf.length}`; }
+  q('#dbg').textContent = `viewport ${W}×${H}  DPR ${devicePixelRatio.toFixed(2)}  canvas ${scene.canvas.width}×${scene.canvas.height}\nFPS ${fps.toFixed(0)}  GPS interval ${(S.fixGap/1000).toFixed(2)} s  acc ${S.acc.toFixed(1)} m  fixes ${S.fixes}\nmatch ${S.matched?'ON':'off'}  way ${S.way?S.way.id+' '+(S.way.name||S.way.hw):'-'}  d ${S.matchDist.toFixed(1)} m  lane ${S.laneOff.toFixed(1)} m\nroads ${ROADS.ways.size}  tiles ${TILES.active.map(p=>p.id).join(',')||'-'}  q ${CONFIG.quality[S.qIdx][0]}\nspeed ${(S.spd*3.6).toFixed(1)} km/h  hdg ${S.hdg.toFixed(1)}  cam ${(S.camHdg||0).toFixed(1)}  range ${S.viewRange.toFixed(0)} pitch ${S.viewPitch.toFixed(1)}\ncar px ${sp?sp.x.toFixed(1)+','+sp.y.toFixed(1):'-'}  target ${(W*CONFIG.anchorX).toFixed(1)},${(H*CONFIG.anchorY).toFixed(1)}  Δ ${sp?(sp.x-W*CONFIG.anchorX).toFixed(1)+','+(sp.y-H*CONFIG.anchorY).toFixed(1):'-'}\nmatched ${S.stat.n?Math.round(100*S.stat.matched/S.stat.n):0}%  mean raw→matched ${S.stat.matched?(S.stat.sumD/S.stat.matched).toFixed(1):'-'} m  log ${LOG.trip?LOG.trip.id:'-'} buf ${LOG.buf.length} db ${LOG.db?'idb':'mem'+(LOG.dbErr?'('+LOG.dbErr.slice(0,30)+')':'')}`; }
 if(DEBUG) q('#dbg').classList.add('show');
 
 /* ---------- 주행 기록 (IndexedDB 'sistech-tesla') ---------- */
-const LOG = { db:null, trip:null, buf:[], aboveSince:0, idleSince:0, flashTxt:'', flashUntil:0, pendingUp:0, lastLL:null, lastT:0,
-  open(){ return new Promise((res,rej)=>{ const r=indexedDB.open('sistech-tesla',1); r.onupgradeneeded=()=>{ const d=r.result; if(!d.objectStoreNames.contains('trips')) d.createObjectStore('trips',{keyPath:'id'}); if(!d.objectStoreNames.contains('fixes')){ const s=d.createObjectStore('fixes',{autoIncrement:true}); s.createIndex('trip','tripId'); } if(!d.objectStoreNames.contains('upload')) d.createObjectStore('upload',{autoIncrement:true}); }; r.onsuccess=()=>{ this.db=r.result; res(); }; r.onerror=()=>rej(r.error); }); },
-  tx(store,mode,fn){ return new Promise((res,rej)=>{ if(!this.db) return rej(new Error('db')); const t=this.db.transaction(store,mode); const s=t.objectStore(store); const out=fn(s); t.oncomplete=()=>res(out&&out.result!==undefined?out.result:out); t.onerror=()=>rej(t.error); }); },
+const LOG = { db:null, mem:{ trips:new Map(), fixes:[], upload:[] }, trip:null, buf:[], aboveSince:0, idleSince:0, flashTxt:'', flashUntil:0, pendingUp:0, lastLL:null, lastT:0, dbErr:null,
+  open(){ return new Promise((res,rej)=>{ let r; try{ r=indexedDB.open('sistech-tesla',1); }catch(e){ return rej(e); } r.onupgradeneeded=()=>{ const d=r.result; if(!d.objectStoreNames.contains('trips')) d.createObjectStore('trips',{keyPath:'id'}); if(!d.objectStoreNames.contains('fixes')){ const s=d.createObjectStore('fixes',{autoIncrement:true}); s.createIndex('trip','tripId'); } if(!d.objectStoreNames.contains('upload')) d.createObjectStore('upload',{autoIncrement:true}); }; r.onsuccess=()=>{ this.db=r.result; res(); }; r.onerror=()=>rej(r.error); r.onblocked=()=>rej(new Error('blocked')); }); },
+  tx(store,mode,fn){ return new Promise((res,rej)=>{ const t=this.db.transaction(store,mode); const s=t.objectStore(store); const out=fn(s); t.oncomplete=()=>res(out&&out.result!==undefined?out.result:out); t.onerror=()=>rej(t.error); }); },
+  // 저장 계층: IndexedDB 우선, 실패 시(iframe·시크릿 등) 메모리 폴백 (세션 내 내보내기는 가능)
+  async putTrip(t){ this.mem.trips.set(t.id, Object.assign({}, t)); if(this.db) await this.tx('trips','readwrite',s=>s.put(t)); },
+  async addFixes(batch){ if(this.db) await this.tx('fixes','readwrite',s=>{ for(const r of batch) s.add(r); }); else this.mem.fixes.push(...batch); },
+  async trips(){ if(this.db) return this.tx('trips','readonly',s=>s.getAll()); return [...this.mem.trips.values()]; },
+  async fixes(id){ if(this.db) return this.tx('fixes','readonly',s=>s.index('trip').getAll(id)); return this.mem.fixes.filter(f=>f.tripId===id); },
+  async del(id){ if(this.db){ const keys = await this.tx('fixes','readonly',s=>s.index('trip').getAllKeys(id)); await this.tx('fixes','readwrite',s=>{ for(const k of keys) s.delete(k); }); await this.tx('trips','readwrite',s=>s.delete(id)); } this.mem.trips.delete(id); this.mem.fixes=this.mem.fixes.filter(f=>f.tripId!==id); },
   onFix(f,kmh){ if(REPLAY) return; const now=Date.now();
     if(!this.trip){ if(kmh>CONFIG.log.startKmh){ if(!this.aboveSince) this.aboveSince=now; else if(now-this.aboveSince>=CONFIG.log.startSec*1000) this.start(now); } else this.aboveSince=0; }
     if(!this.trip) return;
@@ -398,24 +406,23 @@ const LOG = { db:null, trip:null, buf:[], aboveSince:0, idleSince:0, flashTxt:''
     this.buf.push(rec); this.trip.n++; if(this.lastLL) this.trip.dist+=hav(this.lastLL,[f.lon,f.lat]); this.lastLL=[f.lon,f.lat];
     if(kmh<1){ if(!this.idleSince) this.idleSince=now; else if(now-this.idleSince>CONFIG.log.endIdleMin*60000) this.end(); } else this.idleSince=0;
     if(now-this.lastT>CONFIG.log.flushMs) this.flush(); },
-  start(now){ this.trip={ id:'T'+new Date(now).toISOString().replace(/[-:T]/g,'').slice(0,14), start:now, end:null, n:0, dist:0, src: SIM?'sim':'gps' }; this.lastLL=null; this.lastT=now; this.tx('trips','readwrite',s=>s.put(this.trip)).catch(()=>{}); toast('주행 기록 시작'); },
-  async flush(final){ if(!this.db) return; this.lastT=Date.now(); if(!this.buf.length && !final) return;
+  start(now){ this.trip={ id:'T'+new Date(now).toISOString().replace(/[-:T]/g,'').slice(0,14), start:now, end:null, n:0, dist:0, src: SIM?'sim':'gps' }; this.lastLL=null; this.lastT=now; this.putTrip(this.trip).catch(()=>{}); toast(this.db? '주행 기록 시작' : '주행 기록 시작 (저장소 사용 불가: 세션 메모리에만 보관)', 3000); },
+  async flush(final){ this.lastT=Date.now(); if(!this.buf.length && !final) return;
     const batch=this.buf; this.buf=[]; this.flashTxt='⏳ 저장 중…'; this.flashCls='warn'; this.flashUntil=performance.now()+1500;
-    try{ await this.tx('fixes','readwrite',s=>{ for(const r of batch) s.add(r); }); if(this.trip) await this.tx('trips','readwrite',s=>s.put(this.trip)); this.flashTxt='✓ 저장됨 '+hhmm(Date.now()); this.flashCls='ok'; this.flashUntil=performance.now()+2500; }
+    try{ await this.addFixes(batch); if(this.trip) await this.putTrip(this.trip); this.flashTxt='✓ 저장됨 '+hhmm(Date.now()); this.flashCls='ok'; this.flashUntil=performance.now()+2500; }
     catch(e){ this.buf=batch.concat(this.buf); this.flashTxt='저장 실패'; this.flashCls='warn'; this.flashUntil=performance.now()+2500; }
     this.upload(batch); },
-  end(){ if(!this.trip) return; this.trip.end=Date.now(); const t=this.trip; this.flush(true).then(()=>this.tx('trips','readwrite',s=>s.put(t))).catch(()=>{}); this.trip=null; this.aboveSince=0; this.idleSince=0; this.lastLL=null; toast('주행 기록 종료'); },
-  // 클라우드 업로드 훅 (기본 OFF: localStorage 'tesla.uploadUrl' 설정 시에만)
+  end(){ if(!this.trip) return; this.trip.end=Date.now(); const t=this.trip; this.flush(true).then(()=>this.putTrip(t)).catch(()=>{}); this.trip=null; this.aboveSince=0; this.idleSince=0; this.lastLL=null; toast('주행 기록 종료'); },
+  // 클라우드 업로드 훅 (기본 OFF: localStorage 'tesla.uploadUrl' 설정 시에만 JSON POST)
   async upload(batch){ let url=null; try{ url=localStorage.getItem('tesla.uploadUrl'); }catch(e){} if(!url) return;
-    if(batch && batch.length) await this.tx('upload','readwrite',s=>s.add({ tripId:this.trip&&this.trip.id, fixes:batch })).catch(()=>{});
-    const items = await this.tx('upload','readonly',s=>{ const o={}; const r=s.openCursor(); const arr=[]; r.onsuccess=()=>{ const c=r.result; if(c){ arr.push({k:c.key,v:c.value}); c.continue(); } else o.result=arr; }; return o; }).catch(()=>[]);
-    this.pendingUp = items.length; if(!navigator.onLine) return;
-    for(const it of items){ try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(it.v)}); if(!r.ok) break; await this.tx('upload','readwrite',s=>s.delete(it.k)); this.pendingUp--; }catch(e){ break; } } },
-  async trips(){ return this.tx('trips','readonly',s=>s.getAll()); },
-  async fixes(id){ return this.tx('fixes','readonly',s=>s.index('trip').getAll(id)); },
-  async del(id){ const keys = await this.tx('fixes','readonly',s=>s.index('trip').getAllKeys(id)); await this.tx('fixes','readwrite',s=>{ for(const k of keys) s.delete(k); }); await this.tx('trips','readwrite',s=>s.delete(id)); },
+    try{
+      if(batch && batch.length){ const item={ tripId:this.trip&&this.trip.id, fixes:batch }; if(this.db) await this.tx('upload','readwrite',s=>s.add(item)); else this.mem.upload.push({k:Date.now()+Math.random(), v:item}); }
+      let items; if(this.db) items = await this.tx('upload','readonly',s=>{ const o={}; const r=s.openCursor(); const arr=[]; r.onsuccess=()=>{ const c=r.result; if(c){ arr.push({k:c.key,v:c.value}); c.continue(); } else o.result=arr; }; return o; }); else items=this.mem.upload.slice();
+      this.pendingUp = items.length; if(!navigator.onLine) return;
+      for(const it of items){ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(it.v)}); if(!r.ok) break; if(this.db) await this.tx('upload','readwrite',s=>s.delete(it.k)); else this.mem.upload=this.mem.upload.filter(x=>x.k!==it.k); this.pendingUp--; }
+    }catch(e){ console.warn('upload', e.message); } },
 };
-LOG.open().catch(e=>console.warn('idb',e));
+LOG.open().catch(e=>{ LOG.dbErr=String(e&&e.message||e); console.warn('idb', LOG.dbErr); });
 addEventListener('pagehide', ()=>{ if(LOG.trip) LOG.end(); else LOG.flush(true); });
 addEventListener('online', ()=>LOG.upload());
 
@@ -475,7 +482,7 @@ async function startSim(){
     onFix({ ts:Date.now(), lon:ll[0], lat:ll[1], spd: Math.max(0, v+gauss()*0.3), hdg: v>1? (br+gauss()*CONFIG.sim.hdgSigma+360)%360 : null, acc: 5+Math.abs(gauss())*4 }); }, dt*1000);
   toast('시뮬레이션: 인천 송도 (아암대로·컨벤시아대로·아카데미로)', 3000);
 }
-async function startReplay(id){ await LOG.open().catch(()=>{}); const fx=(await LOG.fixes(id).catch(()=>[])).sort((a,b)=>a.ts-b.ts); if(!fx.length){ toast('재생할 기록이 없습니다: '+id, 4000); return; }
+async function startReplay(id){ if(!LOG.db) await LOG.open().catch(()=>{}); const fx=(await LOG.fixes(id).catch(()=>[])).sort((a,b)=>a.ts-b.ts); if(!fx.length){ toast('재생할 기록이 없습니다: '+id, 4000); return; }
   toast(`재생: ${id} (${fx.length}점)`, 3000); let i=0; const step=()=>{ if(i>=fx.length){ toast('재생 종료'); return; } const f=fx[i]; onFix({ ts:f.ts, lon:f.lon, lat:f.lat, spd:f.speed/3.6, hdg:f.heading, acc:f.accuracy }); i++; if(i<fx.length) setTimeout(step, clamp(fx[i].ts-f.ts, 200, 3000)); }; step(); }
 function startGps(){ if(!navigator.geolocation){ toast('이 브라우저는 위치 정보를 지원하지 않습니다', 5000); return; }
   navigator.geolocation.watchPosition(p=>{ const c=p.coords; onFix({ ts:p.timestamp, lon:c.longitude, lat:c.latitude, spd: c.speed!=null&&!isNaN(c.speed)? c.speed : null, hdg: c.heading!=null&&!isNaN(c.heading)? c.heading : null, acc:c.accuracy }); },
