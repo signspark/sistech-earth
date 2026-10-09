@@ -85,7 +85,7 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 #bar button.on small{color:var(--lime-bright)}
 #bar button:active{background:rgba(255,255,255,.14)}
 /* 출처(연한 표기) */
-#attr{position:fixed;right:10px;bottom:6px;font-size:10px;color:rgba(220,232,245,.42);z-index:4;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.7);white-space:nowrap}
+#attr{position:fixed;right:68px;bottom:6px;font-size:10px;color:rgba(220,232,245,.42);z-index:4;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.7);white-space:nowrap}
 /* 디버그 */
 #dbg{position:fixed;left:14px;bottom:10px;z-index:5;font:11px/1.45 ui-monospace,Consolas,monospace;color:#cfe;background:rgba(3,18,42,.72);padding:8px 10px;border-radius:8px;border:1px solid var(--line);white-space:pre;display:none;pointer-events:none}
 #dbg.show{display:block}
@@ -177,7 +177,7 @@ const CONFIG = {
   sim: { noiseSigma: 4, hdgSigma: 4, hz: 1 },
   // 메뉴 UI (2026-10-09 추가)
   ui: { zoomIn: 0.7, zoomOut: 1.4, zoomMin: 0.25, zoomMax: 4, modeTransSec: 0.8, northUpAnchorY: 0.5 },
-  nav: { offRouteM: 50, offRouteFixes: 3, rerouteGapMs: 20000, lineWidth: 8, lineColor: '#3E6AE1', nominatimGapMs: 1100, maxResults: 5 },
+  nav: { offRouteM: 50, offRouteFixes: 3, rerouteGapMs: 20000, lineWidth: 8, lineColor: '#3E6AE1', nominatimGapMs: 1100, maxResults: 5, voiceStartTimeoutMs: 4000 },
 };
 const R = 6371008.8, rad = d=>d*Math.PI/180, deg = r=>r*180/Math.PI, clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const q = s=>document.querySelector(s);
@@ -588,9 +588,12 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
   function closeDest(){ stopVoice(); q('#dest').classList.remove('show'); }
   function startVoice(){ if(!SRc){ msg('이 브라우저에서는 음성 인식을 지원하지 않습니다 · 키보드로 입력하세요', true); q('#dQ').focus(); return; }
     try{ rec=new SRc(); rec.lang='ko-KR'; rec.interimResults=true; rec.maxAlternatives=1; rec.continuous=false;
-      rec.onstart=()=>{ listening=true; q('#dMic').classList.add('listening'); msg('듣는 중… 목적지를 말하세요'); };
+      // 인식기가 있어도 엔진이 없는 Chromium(테슬라 등)은 이벤트가 전혀 오지 않음 → 타임아웃 후 키보드 폴백
+      const started={v:false}; const tmo=setTimeout(()=>{ if(!started.v){ stopVoice(); msg('음성 인식이 응답하지 않습니다 · 이 브라우저에서는 음성 인식을 지원하지 않을 수 있습니다 · 키보드로 입력하세요', true); q('#dQ').focus(); } }, CONFIG.nav.voiceStartTimeoutMs);
+      rec.onstart=()=>{ started.v=true; clearTimeout(tmo); listening=true; q('#dMic').classList.add('listening'); msg('듣는 중… 목적지를 말하세요'); };
+      rec.onaudiostart=()=>{ started.v=true; clearTimeout(tmo); };
       rec.onresult=ev=>{ let t=''; for(let i=ev.resultIndex;i<ev.results.length;i++) t+=ev.results[i][0].transcript; q('#dQ').value=t; if(ev.results[ev.results.length-1].isFinal){ msg('인식: '+t); search(t); } };
-      rec.onerror=ev=>{ stopVoice(); const k=ev.error; msg(k==='not-allowed'||k==='service-not-allowed' ? '마이크 권한이 없거나 음성 서비스가 꺼져 있습니다 · 키보드로 입력하세요' : k==='network' ? '음성 인식 서버에 연결할 수 없습니다 (이 브라우저는 음성 인식 미지원) · 키보드로 입력하세요' : k==='no-speech' ? '음성이 감지되지 않았습니다 · 다시 누르거나 입력하세요' : '음성 인식 오류('+k+') · 키보드로 입력하세요', true); q('#dQ').focus(); };
+      rec.onerror=ev=>{ started.v=true; clearTimeout(tmo); stopVoice(); const k=ev.error; msg(k==='not-allowed'||k==='service-not-allowed' ? '마이크 권한이 없거나 음성 서비스가 꺼져 있습니다 · 키보드로 입력하세요' : k==='network' ? '음성 인식 서버에 연결할 수 없습니다 (이 브라우저는 음성 인식 미지원) · 키보드로 입력하세요' : k==='no-speech' ? '음성이 감지되지 않았습니다 · 다시 누르거나 입력하세요' : '음성 인식 오류('+k+') · 키보드로 입력하세요', true); q('#dQ').focus(); };
       rec.onend=()=>{ listening=false; q('#dMic').classList.remove('listening'); };
       rec.start();
     }catch(e){ stopVoice(); msg('음성 인식을 시작할 수 없습니다 · 키보드로 입력하세요', true); q('#dQ').focus(); } }
