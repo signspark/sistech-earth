@@ -6215,6 +6215,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   try{ new MutationObserver(()=>{ if(!BD.cardOpen) return; const t = document.getElementById('cardTitle'); if(BD.sel && t && !document.getElementById('bd49h') && !/건물 조회|건축물 정보 없음|조회 실패/.test(t.textContent)){ BD.cardOpen = false; clearHL(); BD.sel = null; } }).observe(document.getElementById('cardBody'), { childList:true }); }catch(e){}
   // 주소(#on=…)에 bldg가 남아 있으면 SITE에서만 다시 켬
   if(STATE.on.has('bldg')){ if(STATE.mode==='site') on(); else STATE.on.delete('bldg'); }
+  // build 2026-10-09b
   window.__BD49 = { BD, query, merge, measureHeight, vwData, vwAddr, last:null, version:'49.2' };
 })();
 
