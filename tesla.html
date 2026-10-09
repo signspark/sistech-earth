@@ -700,14 +700,14 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
 (function(){
   const CL = CONFIG.labels;
   const box = q('#labels'), pill = q('#curRoad');
-  const LBL = window.LBL = { on:true, pois:[], jcts:[], fetched:new Set(), lastFetch:0, fetching:false, active:new Map(), lastSel:0, mctx:null, count:{jct:0,bld:0}, fetchErr:null };
+  const LBL = window.LBL = { on:true, pois:[], jcts:[], fetched:new Set(), lastFetch:-1e9, fetching:false, pending:null, active:new Map(), lastSel:0, mctx:null, count:{jct:0,bld:0}, fetchErr:null };
   try{ LBL.on = localStorage.getItem('tesla.labels')!=='0'; }catch(e){}
   const bBtn=q('#bLbl'); const renderBtn=()=>{ bBtn.classList.toggle('on', LBL.on); bBtn.innerHTML = LBL.on ? '지명<small>표시 중</small>' : '지명<small>숨김</small>'; }; renderBtn();
   bBtn.onclick=()=>{ LBL.on=!LBL.on; try{ localStorage.setItem('tesla.labels', LBL.on?'1':'0'); }catch(e){} renderBtn(); if(!LBL.on) clearAll(); toast(LBL.on?'지명 표시':'지명 숨김', 1200); };
   function measure(txt, font){ if(!LBL.mctx){ LBL.mctx=document.createElement('canvas').getContext('2d'); } LBL.mctx.font=font; return LBL.mctx.measureText(txt).width; }
 
   /* ---- Overpass: 교차로 노드 + 이름 있는 건물/POI (도로 질의와 별도, 20 s 간격, 엔드포인트 폴백) ---- */
-  LBL.fetch = async function(bb){ const key=bb.map(v=>(+v).toFixed(3)).join(','); if(this.fetching || this.fetched.has(key) || performance.now()-this.lastFetch<CL.fetchGapMs) return; this.fetching=true; this.lastFetch=performance.now();
+  LBL.fetch = async function(bb){ const key=bb.map(v=>(+v).toFixed(3)).join(','); if(this.fetched.has(key)) return; if(this.fetching || performance.now()-this.lastFetch<CL.fetchGapMs){ this.pending=bb; return; } this.fetching=true; this.lastFetch=performance.now();
     const B=bb.map(v=>(+v).toFixed(5)).join(',');
     const ql=`[out:json][timeout:25];(node["name"]["highway"~"^(traffic_signals|crossing|motorway_junction)$"](${B});node["name"]["junction"](${B});node["name"~"(사거리|삼거리|오거리|교차로|나들목|분기점)$"](${B}););out tags;(way["building"]["name"](${B});relation["building"]["name"](${B});nwr["name"]["amenity"~"^(hospital|university|college|school|townhall|police|fire_station|bus_station|library|theatre|arts_centre|community_centre|marketplace|conference_centre|exhibition_centre)$"](${B});nwr["name"]["tourism"~"^(attraction|museum|hotel|aquarium|zoo|theme_park|viewpoint)$"](${B});nwr["name"]["shop"="mall"](${B});nwr["name"]["office"="government"](${B}););out tags center;`;
     let j=null; for(const u of OVERPASS){ try{ const ac=new AbortController(); const tm=setTimeout(()=>ac.abort(),25000); const res=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(ql),headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ac.signal}); clearTimeout(tm); if(!res.ok) throw new Error(res.status); j=await res.json(); if(j&&j.elements) break; j=null; }catch(e){ this.fetchErr=e.message; console.warn('overpass poi', u, e.message); } }
@@ -767,6 +767,7 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
   // 매 프레임: 화면 좌표만 갱신 (저비용) · 현재 도로 필
   function place(){ for(const rec of LBL.active.values()){ const sp=scene.cartesianToCanvasCoordinates(worldPos(rec.it)); if(!sp){ rec.el.style.visibility='hidden'; continue; } rec.el.style.visibility=''; rec.el.style.transform=`translate(${sp.x.toFixed(1)}px,${sp.y.toFixed(1)}px) translate(-50%,-50%)`; } }
   LBL.tick=function(now){ const nm = (LBL.on && S.matched && S.way && S.way.name) ? S.way.name : ''; if(nm){ if(pill.textContent!==nm) pill.textContent=nm; pill.classList.add('show'); pill.classList.toggle('up', q('#bar').classList.contains('show')); } else pill.classList.remove('show');
+    if(this.pending && !this.fetching && now-this.lastFetch>=CL.fetchGapMs){ const b=this.pending; this.pending=null; this.fetch(b); }
     if(now-this.lastSel>CL.updateMs){ this.lastSel=now; try{ select(); }catch(e){ console.warn('labels', e.message); } } place(); };
 })();
 </script>
