@@ -721,7 +721,7 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
       if(seenP.has(e.type+e.id)) continue; seenP.add(e.type+e.id);
       const lv=parseFloat(tg['building:levels'])||0; let hgt=parseFloat(tg.height)||0; if(!hgt && lv) hgt=lv*3.2;
       const land = !!(tg.tourism||tg.amenity||tg.shop||tg.office||/타워|센터|컨벤시아|호텔|병원|대학교|시청|구청|청사|스퀘어|몰|백화점|도서관|경찰청|해양경찰/.test(tg.name));
-      const generic = /^(\d+동|상가|주차장|경비실|관리사무소|[A-Z]?\d{2,3}동)$/.test(tg.name) || /^\d+동$/.test(tg.name) || /\s\d{3}동$/.test(tg.name);
+      const generic = /^[A-Za-z]?\d+(동|호)?$/.test(tg.name) || /(동|호)$/.test(tg.name) && /\d/.test(tg.name) || /상가$|주차장|경비실|관리사무소|매점|주유소|편의점|맥도날드|스타벅스|버거킹|코노트리에/.test(tg.name);
       if(!land && lv<CL.minLevels && !hgt) continue;
       if(generic) continue;
       const imp = (land?60:0) + Math.min(hgt,300)/5 + (lv?Math.min(lv,70)*0.6:0);
@@ -739,7 +739,8 @@ window.__tesla = { S, CONFIG, ROADS, TILES, LOG, viewer };
     add('#top'); add('#speed'); add('#limit','show'); add('#rail'); add('#navCard','show'); add('#bar','show'); add('#compass'); add('#curRoad','show'); add('#dbg','show'); add('#attr'); add('#dest','show');
     const cx=innerWidth*CONFIG.anchorX, cy=innerHeight*S.anchorY; r.push([cx-CL.carPad, cy-CL.carPad, cx+CL.carPad, cy+CL.carPad]); return r; }
   const hit=(a,b)=> a[0]<b[2] && a[2]>b[0] && a[1]<b[3] && a[3]>b[1];
-  function worldPos(it){ if(!it.pos || performance.now()-(it.posT||0)>5000){ const carto=C.Cartographic.fromDegrees(it.lon,it.lat); let g=globe.getHeight(carto); if(g==null||isNaN(g)) g = S.hs!=null? S.hs : 0; it.pos=C.Cartesian3.fromDegrees(it.lon,it.lat,g+(it.hgt||0)+2.5); it.posT=performance.now(); } return it.pos; }
+  // 높이: globe.getHeight 는 타일 트리 탐색으로 매우 느림(측정 ~78 ms/회) → 차량 지면높이(S.hs)를 근사 사용 + 건물 높이 가산, 5 m 이상 변화 시만 재계산 (DOM 오버레이라 묻힘 없음)
+  function worldPos(it){ const g = S.hs!=null? S.hs : 0; if(!it.pos || Math.abs(g-it.posG)>5){ it.pos=C.Cartesian3.fromDegrees(it.lon,it.lat,g+(it.hgt||0)+2.5); it.posG=g; } return it.pos; }
   function select(){ if(!LBL.on || S.lon==null) return clearAll();
     const kmh=S.spd*3.6; const f=clamp(1-kmh/CL.speedFadeKmh, CL.minFactor, 1);
     const nR=Math.round(CL.maxRoads*f), nJ=Math.round(CL.maxJunctions*f), nB=Math.round(CL.maxBuildings*f);
