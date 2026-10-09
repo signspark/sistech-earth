@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SISTECH · 테슬라 브라우저 진단</title>
+<style>
+:root{--bg:#06162b;--card:#0c2340;--line:#1d3a5f;--text:#e8f0fb;--dim:#8fa7c4;--lime:#bfe33a;--red:#ff4d4d}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:"Noto Sans KR",system-ui,sans-serif}
+body{overflow:auto}
+header{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+header h1{font-size:20px;margin:0}
+header h1 b{color:var(--lime)}
+header .sp{flex:1}
+button{font:inherit;font-size:17px;font-weight:700;min-height:56px;padding:0 18px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
+button.pri{background:var(--lime);color:#06224a;border-color:var(--lime)}
+button.on{outline:3px solid var(--lime)}
+main{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px;padding:12px 16px 120px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.card h2{font-size:15px;margin:0 0 10px;color:var(--dim);font-weight:700}
+.big{font-size:34px;font-weight:800;letter-spacing:-.5px}
+.big small{font-size:16px;color:var(--dim);font-weight:600;margin-left:6px}
+table{width:100%;border-collapse:collapse;font-size:16px}
+td{padding:5px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{color:var(--dim);width:44%}
+td:last-child{font-weight:700;word-break:break-all}
+.ok{color:var(--lime)} .bad{color:var(--red)}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+#log{font-family:ui-monospace,Consolas,monospace;font-size:13px;white-space:pre-wrap;max-height:260px;overflow:auto;background:#041021;border-radius:8px;padding:8px;margin-top:8px}
+#guide{position:fixed;inset:0;pointer-events:none;display:none;z-index:20}
+#guide .v{position:absolute;left:50%;top:0;bottom:0;border-left:2px dashed rgba(191,227,58,.6)}
+#guide .h{position:absolute;left:0;right:0;top:66.667%;border-top:2px dashed rgba(191,227,58,.6)}
+#guide .car{position:absolute;left:50%;top:66.667%;width:46px;height:62px;transform:translate(-50%,-50%)}
+#guide .lbl{position:absolute;left:50%;top:calc(66.667% + 40px);transform:translateX(-50%);background:rgba(6,34,74,.85);padding:4px 10px;border-radius:8px;font-size:14px;white-space:nowrap}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#06224a;border:1px solid var(--lime);padding:10px 16px;border-radius:10px;font-weight:700;display:none;z-index:30}
+</style>
+</head>
+<body>
+<header>
+  <h1><b>SISTECH</b> 테슬라 브라우저 진단</h1>
+  <div class="sp"></div>
+  <button id="bGuide">차량 위치 미리보기</button>
+</header>
+<main>
+  <section class="card">
+    <h2>브라우저 창 크기 (CSS 픽셀 · 지금 이 창)</h2>
+    <div class="big" id="vWin">-</div>
+    <table>
+      <tr><td>배율 (devicePixelRatio)</td><td id="vDpr">-</td></tr>
+      <tr><td>실제 픽셀 환산</td><td id="vPhys">-</td></tr>
+      <tr><td>visualViewport</td><td id="vVV">-</td></tr>
+      <tr><td>screen (전체 화면)</td><td id="vScr">-</td></tr>
+      <tr><td>screen.avail</td><td id="vAvail">-</td></tr>
+      <tr><td>가로:세로 비율</td><td id="vRatio">-</td></tr>
+      <tr><td>차량 표시 위치 (가로 중앙 · 아래 1/3)</td><td id="vCarPos">-</td></tr>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>화면 갱신 속도 (이 페이지 · 1초 평균)</h2>
+    <div class="big" id="vFps">-<small>fps</small></div>
+    <table>
+      <tr><td>최근 10초 최저</td><td id="vFpsMin">-</td></tr>
+      <tr><td>그래픽 (WebGL)</td><td id="vGpu">-</td></tr>
+      <tr><td>WebGL2</td><td id="vGl2">-</td></tr>
+      <tr><td>최대 텍스처</td><td id="vTex">-</td></tr>
+      <tr><td>CPU 코어 / 메모리</td><td id="vHw">-</td></tr>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>위치 (GPS) · 약 1초마다 들어오는지 확인</h2>
+    <div class="big" id="vSpd">-<small>km/h</small></div>
+    <table>
+      <tr><td>상태</td><td id="gState">시작 전</td></tr>
+      <tr><td>위도 / 경도</td><td id="gLL">-</td></tr>
+      <tr><td>정확도</td><td id="gAcc">-</td></tr>
+      <tr><td>진행 방향 (heading)</td><td id="gHdg">-</td></tr>
+      <tr><td>수신 횟수</td><td id="gCnt">0</td></tr>
+      <tr><td>수신 간격 (평균 / 최대)</td><td id="gInt">-</td></tr>
+      <tr><td>위치 시각 지연</td><td id="gLag">-</td></tr>
+    </table>
+    <div class="row"><button class="pri" id="bGps">위치 받기 시작</button><button id="bGpsStop">중지</button></div>
+  </section>
+
+  <section class="card">
+    <h2>기능 지원</h2>
+    <table>
+      <tr><td>전체 화면 API</td><td id="fFs">-</td></tr>
+      <tr><td>화면 꺼짐 방지 (Wake Lock)</td><td id="fWl">-</td></tr>
+      <tr><td>위치 권한 상태</td><td id="fPerm">-</td></tr>
+      <tr><td>터치 지원</td><td id="fTouch">-</td></tr>
+      <tr><td>브라우저 (User-Agent)</td><td id="fUa">-</td></tr>
+    </table>
+    <div class="row"><button id="bFs">전체 화면 시도</button></div>
+  </section>
+
+  <section class="card" style="grid-column:1/-1">
+    <h2>기록 · 주차 중에 한 번, 주행 중(정차 신호 때)에 한 번 눌러주세요</h2>
+    <div class="row">
+      <button class="pri" id="bRecP">주차 중 기록</button>
+      <button class="pri" id="bRecPF">주차 + 전체 화면 기록</button>
+      <button class="pri" id="bRecD">주행 중 기록</button>
+      <button id="bCopy">기록 복사</button>
+      <button id="bClear">기록 지우기</button>
+    </div>
+    <div id="log">(기록 없음)</div>
+  </section>
+</main>
+
+<div id="guide">
+  <div class="v"></div><div class="h"></div>
+  <svg class="car" viewBox="0 0 46 62"><path d="M23 2 L44 58 L23 46 L2 58 Z" fill="#bfe33a" stroke="#06224a" stroke-width="3" stroke-linejoin="round"/></svg>
+  <div class="lbl">차량 위치 (가로 중앙 · 아래에서 1/3)</div>
+</div>
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const toast = (t, ms=1800) => { const e=$('#toast'); e.textContent=t; e.style.display='block'; clearTimeout(e._t); e._t=setTimeout(()=>e.style.display='none', ms); };
+const r1 = v => Math.round(v*10)/10;
+
+/* ---- 화면 ---- */
+function screenInfo(){
+  const w = innerWidth, h = innerHeight, d = devicePixelRatio || 1;
+  const vv = window.visualViewport;
+  return {
+    inner: [w, h], dpr: r1(d*100)/100, physical: [Math.round(w*d), Math.round(h*d)],
+    visualViewport: vv ? [Math.round(vv.width), Math.round(vv.height), r1(vv.scale)] : null,
+    screen: [screen.width, screen.height], avail: [screen.availWidth, screen.availHeight],
+    ratio: r1(w/h*100)/100, carPos: [Math.round(w*0.5), Math.round(h*2/3)]
+  };
+}
+function renderScreen(){
+  const s = screenInfo();
+  $('#vWin').innerHTML = `${s.inner[0]} × ${s.inner[1]}<small>CSS px</small>`;
+  $('#vDpr').textContent = s.dpr;
+  $('#vPhys').textContent = `${s.physical[0]} × ${s.physical[1]}`;
+  $('#vVV').textContent = s.visualViewport ? `${s.visualViewport[0]} × ${s.visualViewport[1]} (확대 ${s.visualViewport[2]})` : '지원 안 함';
+  $('#vScr').textContent = `${s.screen[0]} × ${s.screen[1]}`;
+  $('#vAvail').textContent = `${s.avail[0]} × ${s.avail[1]}`;
+  $('#vRatio').textContent = `${s.ratio} : 1`;
+  $('#vCarPos').textContent = `x ${s.carPos[0]}, y ${s.carPos[1]} (CSS px)`;
+}
+addEventListener('resize', renderScreen); if(window.visualViewport) visualViewport.addEventListener('resize', renderScreen);
+renderScreen();
+
+/* ---- 그래픽 ---- */
+const gfx = (()=>{ const o = { renderer:'-', vendor:'-', webgl2:false, maxTex:'-' };
+  try{ const c = document.createElement('canvas'); const g2 = c.getContext('webgl2'); o.webgl2 = !!g2; const g = g2 || c.getContext('webgl');
+    if(g){ const ext = g.getExtension('WEBGL_debug_renderer_info'); o.renderer = ext ? g.getParameter(ext.UNMASKED_RENDERER_WEBGL) : g.getParameter(g.RENDERER); o.vendor = ext ? g.getParameter(ext.UNMASKED_VENDOR_WEBGL) : g.getParameter(g.VENDOR); o.maxTex = g.getParameter(g.MAX_TEXTURE_SIZE); } else o.renderer = 'WebGL 없음';
+  }catch(e){ o.renderer = '오류: '+e.message; }
+  return o; })();
+$('#vGpu').textContent = gfx.renderer; $('#vGl2').innerHTML = gfx.webgl2 ? '<span class="ok">지원</span>' : '<span class="bad">미지원</span>'; $('#vTex').textContent = gfx.maxTex;
+$('#vHw').textContent = `${navigator.hardwareConcurrency||'-'} 코어 / ${navigator.deviceMemory? navigator.deviceMemory+' GB':'-'}`;
+
+/* ---- FPS ---- */
+const F = { n:0, t0:performance.now(), fps:0, hist:[] };
+(function loop(t){ F.n++; if(t - F.t0 >= 1000){ F.fps = F.n*1000/(t-F.t0); F.n=0; F.t0=t; F.hist.push(F.fps); if(F.hist.length>10) F.hist.shift();
+  $('#vFps').innerHTML = `${Math.round(F.fps)}<small>fps</small>`; $('#vFpsMin').textContent = Math.round(Math.min(...F.hist)) + ' fps'; }
+  requestAnimationFrame(loop); })(performance.now());
+
+/* ---- GPS ---- */
+const G = { id:null, cnt:0, last:null, ints:[], pos:null };
+function gpsStart(){
+  if(!('geolocation' in navigator)){ $('#gState').innerHTML = '<span class="bad">위치 기능 없음</span>'; return; }
+  if(G.id!==null) return;
+  $('#gState').textContent = '권한 요청 / 수신 대기…';
+  G.id = navigator.geolocation.watchPosition(p => {
+    const now = performance.now(); if(G.last!==null){ G.ints.push(now - G.last); if(G.ints.length>30) G.ints.shift(); } G.last = now; G.cnt++;
+    const c = p.coords; G.pos = { lat:c.latitude, lon:c.longitude, acc:c.accuracy, spd:c.speed, hdg:c.heading, t:p.timestamp };
+    $('#gState').innerHTML = '<span class="ok">수신 중</span>';
+    $('#gLL').textContent = `${c.latitude.toFixed(6)}, ${c.longitude.toFixed(6)}`;
+    $('#gAcc').textContent = c.accuracy!=null ? `± ${r1(c.accuracy)} m` : '-';
+    $('#vSpd').innerHTML = `${c.speed!=null && !isNaN(c.speed) ? r1(c.speed*3.6) : '-'}<small>km/h</small>`;
+    $('#gHdg').textContent = (c.heading!=null && !isNaN(c.heading)) ? `${Math.round(c.heading)}°` : '없음 (정차 중이면 정상)';
+    $('#gCnt').textContent = G.cnt;
+    if(G.ints.length){ const avg = G.ints.reduce((a,b)=>a+b,0)/G.ints.length; $('#gInt').textContent = `${(avg/1000).toFixed(2)} 초 / ${(Math.max(...G.ints)/1000).toFixed(2)} 초`; }
+    $('#gLag').textContent = `${((Date.now() - p.timestamp)/1000).toFixed(2)} 초`;
+  }, e => { $('#gState').innerHTML = `<span class="bad">오류 ${e.code}: ${e.message}</span>`; },
+  { enableHighAccuracy:true, maximumAge:0, timeout:20000 });
+}
+function gpsStop(){ if(G.id!==null){ navigator.geolocation.clearWatch(G.id); G.id=null; $('#gState').textContent='중지됨'; } }
+$('#bGps').onclick = gpsStart; $('#bGpsStop').onclick = gpsStop;
+
+/* ---- 기능 ---- */
+$('#fFs').innerHTML = (document.fullscreenEnabled || document.webkitFullscreenEnabled) ? '<span class="ok">사용 가능</span>' : '<span class="bad">사용 불가</span>';
+$('#fWl').innerHTML = ('wakeLock' in navigator) ? '<span class="ok">있음</span>' : '없음';
+$('#fTouch').textContent = navigator.maxTouchPoints ? `${navigator.maxTouchPoints} 점` : '없음';
+$('#fUa').textContent = navigator.userAgent;
+if(navigator.permissions && navigator.permissions.query){ navigator.permissions.query({name:'geolocation'}).then(r=>{ const f=()=>$('#fPerm').textContent = r.state; f(); r.onchange=f; }).catch(()=>$('#fPerm').textContent='확인 불가'); } else $('#fPerm').textContent='확인 불가';
+let fsResult = '시도 안 함';
+$('#bFs').onclick = async () => { try{ const el = document.documentElement; await (el.requestFullscreen ? el.requestFullscreen() : el.webkitRequestFullscreen()); fsResult = '성공'; toast('전체 화면 요청 성공'); }catch(e){ fsResult = '실패: '+e.message; toast('전체 화면 실패: '+e.message, 3000); } setTimeout(renderScreen, 400); };
+document.addEventListener('fullscreenchange', renderScreen);
+
+/* ---- 차량 위치 미리보기 ---- */
+$('#bGuide').onclick = e => { const g=$('#guide'); const on = g.style.display!=='block'; g.style.display = on?'block':'none'; e.currentTarget.classList.toggle('on', on); };
+
+/* ---- 기록 ---- */
+const KEY = 'tesla-check-log';
+const loadLog = () => { try{ return JSON.parse(localStorage.getItem(KEY)||'[]'); }catch(e){ return []; } };
+function renderLog(){ const L = loadLog(); $('#log').textContent = L.length ? L.map((r,i)=>`#${i+1} [${r.label}] ${r.time}\n  창 ${r.screen.inner.join('×')} · 배율 ${r.screen.dpr} · 실제 ${r.screen.physical.join('×')} · screen ${r.screen.screen.join('×')}\n  fps ${r.fps} (최저 ${r.fpsMin}) · GPU ${r.gpu}\n  GPS ${r.gps ? `${r.gps.cnt}회 · 간격 ${r.gps.avgInt}s · 정확도 ${r.gps.acc}m · 속도 ${r.gps.spdKmh}km/h · 방향 ${r.gps.hdg}` : '미사용'} · 전체화면 ${r.fullscreen}`).join('\n\n') : '(기록 없음)'; }
+function record(label){
+  const L = loadLog(); const s = screenInfo();
+  const avgInt = G.ints.length ? +(G.ints.reduce((a,b)=>a+b,0)/G.ints.length/1000).toFixed(2) : null;
+  L.push({ label, time: new Date().toLocaleString('ko-KR'), screen: s, fps: Math.round(F.fps), fpsMin: F.hist.length? Math.round(Math.min(...F.hist)) : null,
+    gpu: gfx.renderer, webgl2: gfx.webgl2, maxTex: gfx.maxTex, cores: navigator.hardwareConcurrency||null, mem: navigator.deviceMemory||null,
+    gps: G.pos ? { cnt:G.cnt, avgInt, acc: r1(G.pos.acc), spdKmh: G.pos.spd!=null? r1(G.pos.spd*3.6):null, hdg: G.pos.hdg!=null? Math.round(G.pos.hdg):null } : null,
+    fullscreen: document.fullscreenElement ? '켜짐' : '꺼짐', fsTry: fsResult, ua: navigator.userAgent });
+  localStorage.setItem(KEY, JSON.stringify(L)); renderLog(); toast(`${label} 기록 완료 (${s.inner.join('×')})`);
+}
+$('#bRecP').onclick = () => record('주차');
+$('#bRecPF').onclick = () => record('주차+전체화면');
+$('#bRecD').onclick = () => record('주행');
+$('#bClear').onclick = () => { if(confirm('기록을 모두 지울까요?')){ localStorage.removeItem(KEY); renderLog(); } };
+$('#bCopy').onclick = async () => { const txt = JSON.stringify(loadLog(), null, 1); try{ await navigator.clipboard.writeText(txt); toast('기록을 복사했습니다'); }catch(e){ const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('기록을 복사했습니다'); } };
+renderLog();
+</script>
+</body>
+</html>
