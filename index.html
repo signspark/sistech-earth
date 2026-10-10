@@ -8775,7 +8775,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
 </style>
 <script>
 /* ---------- 59. CCTV › 3D 앵글 표시 · CCTV 시점 보기 (2026-10-10 · 샘플: 승기사거리) ----------
-   - 영상 창의 [3D에 앵글 표시]: CCTV 시야 방향에 수직·앵글대로 기울인 영상 스크린(140%) + 라벨만 표시 (59.2: 폴·카메라 몸체·시야선·지면 범위 제거)
+   - 영상 창의 [3D에 앵글 표시]: 실시간 영상을 CCTV 앵글(위치·높이·방향·기울기·화각)대로 도로 바닥(+140 m 앞 수직 벽)에 투영 → 영상 속 중앙선이 실제 중앙선 위에 놓임 (59.3) · OSM 경원대로 중앙선 투영으로 자세 검증(오차 약 5 px)
    - [CCTV 시점으로 보기]: 3D 카메라를 CCTV와 같은 위치·방향·화각으로 옮기고 실시간 영상을 반투명으로 겹쳐 비교 (투명도 조절)
    - 자세(위치·높이·방향·기울기·화각)는 영상 프레임과 3D 모델 렌더를 50% 겹쳐 맞춘 추정값 (DERIVED · 오차 약 ±5 m, ±3°)
    - 승기사거리(인천교통정보센터 L213): 목록 좌표(교차로 남동쪽)에서 서쪽 20 m·남쪽 5 m 도로 위 신호 암, 지면 +12 m, 방향 352°, 아래로 14°, 수평 화각 52°
@@ -8784,7 +8784,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   if(window.__CV59 || !window.__CV57) return;
   const C = Cesium, CV = window.__CV57, S = CV.S;
   const POSE = {
-    'https://cctv.fitic.go.kr/cctv/L213.stream/playlist.m3u8': { name:'승기사거리', lon:126.689933, lat:37.450475, h:12, hd:352, pt:-14, fov:52, aspect:16/9, note:'영상-3D 모델 겹쳐보기 보정 · 신호 암(도로 위) 설치로 추정' },
+    'https://cctv.fitic.go.kr/cctv/L213.stream/playlist.m3u8': { name:'승기사거리', lon:126.689930, lat:37.450475, h:12, hd:352, pt:-15, fov:52, aspect:16/9, note:'영상-3D 모델 겹쳐보기 보정 · 신호 암(도로 위) 설치로 추정' },
   };
   const COL = C.Color.fromCssColorString('#FF9F1C');
   const D = 26;  // 영상 스크린까지 거리(m)
@@ -8823,24 +8823,39 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   const add = (a, b, s)=> C.Cartesian3.add(a, C.Cartesian3.multiplyByScalar(b, s, new C.Cartesian3()), new C.Cartesian3());
   async function ground(p){ try{ const r = await C.sampleTerrainMostDetailed(scene.globe.terrainProvider, [C.Cartographic.fromDegrees(p.lon, p.lat)]); if(isFinite(r[0].height)) return r[0].height; }catch(e){} const h = scene.globe.getHeight(C.Cartographic.fromDegrees(p.lon, p.lat)); return isFinite(h) ? h : 0; }
 
+  // 영상 투영: 카메라 화각의 각 픽셀 광선이 지면(또는 R m 앞 수직 벽)에 닿는 곳에 영상을 입힘 → 영상 속 중앙선·차선이 실제 도로 위에 놓임
+  function buildProj(p, A, video){
+    const NX = 40, NY = 36, R = 140, t = Math.PI/180;
+    const tH = Math.tan(p.fov/2*t), tV = tH / (p.aspect || 16/9);
+    const Rm = C.Matrix4.getMatrix3(C.Transforms.eastNorthUpToFixedFrame(A.pos), new C.Matrix3());
+    const U = C.Matrix3.multiplyByVector(Rm, new C.Cartesian3(0,0,1), new C.Cartesian3());
+    const HF = C.Matrix3.multiplyByVector(Rm, new C.Cartesian3(Math.sin(p.hd*t), Math.cos(p.hd*t), 0), new C.Cartesian3());
+    const pos = new Float64Array((NX+1)*(NY+1)*3), st = new Float32Array((NX+1)*(NY+1)*2); let k = 0, q = 0;
+    const d = new C.Cartesian3(), tmp = new C.Cartesian3();
+    for(let j=0;j<=NY;j++){ const v = j/NY; for(let i=0;i<=NX;i++){ const u = i/NX;
+      C.Cartesian3.clone(A.f, d); C.Cartesian3.add(d, C.Cartesian3.multiplyByScalar(A.r, (2*u-1)*tH, tmp), d); C.Cartesian3.add(d, C.Cartesian3.multiplyByScalar(A.u, (2*v-1)*tV, tmp), d);
+      const dz = C.Cartesian3.dot(d, U), tg = dz < -1e-6 ? (p.h - 0.35) / -dz : Infinity, tw = R / C.Cartesian3.dot(d, HF), tt = Math.min(tg, tw);
+      const P = C.Cartesian3.add(A.pos, C.Cartesian3.multiplyByScalar(d, tt, tmp), new C.Cartesian3());
+      pos[k++] = P.x; pos[k++] = P.y; pos[k++] = P.z; st[q++] = u; st[q++] = v; } }
+    const idx = []; for(let j=0;j<NY;j++) for(let i=0;i<NX;i++){ const a = j*(NX+1)+i, b = a+1, c = a+NX+1, e = c+1; idx.push(a,b,c, b,e,c); }
+    let geom = new C.Geometry({ attributes:{ position:new C.GeometryAttribute({ componentDatatype:C.ComponentDatatype.DOUBLE, componentsPerAttribute:3, values:pos }), st:new C.GeometryAttribute({ componentDatatype:C.ComponentDatatype.FLOAT, componentsPerAttribute:2, values:st }) }, indices:new Uint16Array(idx), primitiveType:C.PrimitiveType.TRIANGLES, boundingSphere:C.BoundingSphere.fromVertices(Array.from(pos)) });
+    geom = C.GeometryPipeline.computeNormal(geom);
+    return new C.Primitive({ geometryInstances:new C.GeometryInstance({ geometry:geom }), appearance:new C.MaterialAppearance({ material:C.Material.fromType('Image', { image:video, color:new C.Color(1,1,1,0.95) }), flat:true, faceForward:true, translucent:true, closed:false }), asynchronous:false });
+  }
   async function show3d(k){
     const p = POSE[k]; clear3d(); st.key = k; const g = await ground(p); p.g = g;
     const A = axes(p, g); const ds = st.ds = new C.CustomDataSource('cctv3d'); viewer.dataSources.add(ds);
-    const tH = Math.tan(C.Math.toRadians(p.fov/2)), tV = tH / (p.aspect || 16/9);
-    // 영상 스크린: 시야 방향으로 D m 앞, 시야에 수직·앵글대로 기울임, 화각 크기의 140%
-    const cen = add(A.pos, A.f, D);
     const v = document.getElementById('cvV');
-    const scr = ds.entities.add({ position: cen, orientation: A.q, plane:{ plane:new C.Plane(C.Cartesian3.UNIT_X, 0), dimensions:new C.Cartesian2(2*D*tH*SC, 2*D*tV*SC), material: C.Color.fromCssColorString('#03122A').withAlpha(.6) } });
-    const setTex = ()=>{ if(v && v.readyState >= 2 && v.videoWidth){ scr.plane.material = new C.ImageMaterialProperty({ image: v, repeat: new C.Cartesian2(-1, 1) }); return true; } return false; };
-    if(!setTex()){ const t = setInterval(()=>{ if(!st.ds || setTex()) clearInterval(t); }, 700); }
-    ds.entities.add({ position: add(cen, A.u, D*tV*SC + 2.5), label:{ text: p.name + ' CCTV\n방향 ' + p.hd + '° · 아래로 ' + (-p.pt) + '° · 화각 ' + p.fov + '° · 높이 ' + p.h + ' m', font:'700 13px ' + getComputedStyle(document.body).fontFamily, fillColor:C.Color.WHITE, outlineColor:C.Color.fromCssColorString('#03122A'), outlineWidth:4, style:C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin:C.VerticalOrigin.BOTTOM, disableDepthTestDistance:Number.POSITIVE_INFINITY, scaleByDistance:new C.NearFarScalar(80, 1, 1500, .5) } });
-    // 뒤쪽 위에서 내려다보는 시점으로 이동
-    const back = C.Math.toRadians(p.hd + 200), dist = 85; const lat = p.lat + dist*Math.cos(back)/111000, lon = p.lon + dist*Math.sin(back)/(111000*Math.cos(p.lat*Math.PI/180));
-    camera.flyTo({ destination: C.Cartesian3.fromDegrees(lon, lat, g + 62), orientation:{ heading: C.Math.toRadians(p.hd + 20), pitch: C.Math.toRadians(-28), roll:0 }, duration:1.8 });
-    try{ toast(p.name + ' CCTV 앵글을 3D에 표시했습니다 · 방향·화각은 영상-3D 겹쳐보기 추정값', 2600); }catch(e){}
+    const put = ()=>{ if(!st.ds || st.key !== k) return true; if(!(v && v.readyState >= 2 && v.videoWidth)) return false; try{ st.prim = scene.primitives.add(buildProj(p, A, v)); }catch(e){ console.warn('cctv proj', e); } return true; };
+    if(!put()){ const tm = setInterval(()=>{ if(put()) clearInterval(tm); }, 700); }
+    ds.entities.add({ position: add(A.pos, A.u, 4), label:{ text: p.name + ' CCTV\n방향 ' + p.hd + '° · 아래로 ' + (-p.pt) + '° · 화각 ' + p.fov + '° · 높이 ' + p.h + ' m', font:'700 13px ' + getComputedStyle(document.body).fontFamily, fillColor:C.Color.WHITE, outlineColor:C.Color.fromCssColorString('#03122A'), outlineWidth:4, style:C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin:C.VerticalOrigin.BOTTOM, disableDepthTestDistance:Number.POSITIVE_INFINITY, scaleByDistance:new C.NearFarScalar(80, 1, 1500, .5) } });
+    // 뒤쪽 위에서 도로 방향으로 내려다보는 시점
+    const back = C.Math.toRadians(p.hd + 180), dist = 70; const lat = p.lat + dist*Math.cos(back)/111000, lon = p.lon + dist*Math.sin(back)/(111000*Math.cos(p.lat*Math.PI/180));
+    camera.flyTo({ destination: C.Cartesian3.fromDegrees(lon, lat, g + 95), orientation:{ heading: C.Math.toRadians(p.hd), pitch: C.Math.toRadians(-42), roll:0 }, duration:1.8 });
+    try{ toast(p.name + ' CCTV 영상을 카메라 앵글대로 도로에 투영했습니다 · 영상 속 중앙선이 실제 중앙선 위에 놓입니다', 2800); }catch(e){}
     sync();
   }
-  function clear3d(){ if(st.ds){ try{ viewer.dataSources.remove(st.ds, true); }catch(e){} } st.ds = null; st.key = null; }
+  function clear3d(){ if(st.prim){ try{ scene.primitives.remove(st.prim); }catch(e){} } st.prim = null; if(st.ds){ try{ viewer.dataSources.remove(st.ds, true); }catch(e){} } st.ds = null; st.key = null; }
 
   // ---- CCTV 시점 보기 (영상 반투명 겹침) ----
   const bar = document.createElement('div'); bar.id = 'cvPov';
@@ -8854,7 +8869,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     const p = POSE[k]; const g = (p.g !== undefined) ? p.g : (p.g = await ground(p));
     st.pov = { key:k, minZ: scene.screenSpaceCameraController.minimumZoomDistance, fov: camera.frustum.fov, view:{ pos: camera.position.clone(), hd: camera.heading, pt: camera.pitch, rl: camera.roll } };
     scene.screenSpaceCameraController.minimumZoomDistance = 0.5;
-    if(st.ds) st.ds.show = false;  // 시점 안에서 폴·스크린이 가리지 않게
+    if(st.ds) st.ds.show = false; if(st.prim) st.prim.show = false;  // 시점 안에서 폴·스크린이 가리지 않게
     camera.frustum.fov = C.Math.toRadians(p.fov);   // 가로가 길면 수평 화각
     camera.setView({ destination: C.Cartesian3.fromDegrees(p.lon, p.lat, g + p.h), orientation:{ heading:C.Math.toRadians(p.hd), pitch:C.Math.toRadians(p.pt), roll:0 } });
     const v = document.getElementById('cvV'); ov.width = 960; ov.height = 540; const g2 = ov.getContext('2d');
@@ -8864,11 +8879,11 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     try{ toast('CCTV와 같은 위치·방향·화각 · 영상을 반투명으로 겹쳤습니다 (지도를 움직이면 어긋납니다)', 3000); }catch(e){}
   }
   function exitPov(){ const o = st.pov; if(!o) return; st.pov = null; cancelAnimationFrame(o.raf); ov.style.display = 'none'; bar.classList.remove('open'); bp.classList.remove('on'); bp.textContent = 'CCTV 시점으로 보기';
-    camera.frustum.fov = o.fov; scene.screenSpaceCameraController.minimumZoomDistance = o.minZ; if(st.ds) st.ds.show = true;
+    camera.frustum.fov = o.fov; scene.screenSpaceCameraController.minimumZoomDistance = o.minZ; if(st.ds) st.ds.show = true; if(st.prim) st.prim.show = true;
     camera.setView({ destination:o.view.pos, orientation:{ heading:o.view.hd, pitch:o.view.pt, roll:o.view.rl } }); }
   window.addEventListener('keydown', e=>{ if(e.key==='Escape' && st.pov) exitPov(); });
   sync();
-  window.__CV59 = { version:'59.2', POSE, show3d, clear3d, enterPov, exitPov, st };
+  window.__CV59 = { version:'59.3', POSE, show3d, clear3d, enterPov, exitPov, st };
 })();
 </script>
 </body>
