@@ -8886,5 +8886,170 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   window.__CV59 = { version:'59.4', POSE, show3d, clear3d, enterPov, exitPov, st };
 })();
 </script>
+<script>
+/* ---------- 61. SITE › 3D 모델 › 도로만 보기 (OSM 도로 덮기 · 화면 중심 1 km) (2026-10-10) ----------
+   - 켜는 순간 화면 중심 반경 1 km의 OSM 차도(고속도로~이면도로·연결로·단지 도로, 터널·주차통로·보도 제외)를 불러옴
+   - 도로 폭 = width 태그 또는 차로 수(lanes, 없으면 도로 등급 기본값) × 3.3 m + 1 m → 브이월드 위성(z17)으로 도로마다 실제 아스팔트 폭·중심을 20 m 간격 단면으로 재서 보정(중앙값) → 도로 모양 다각형
+   - 드론 3D 모델(3D Tiles)을 도로 다각형으로 잘라냄(ClippingPolygonCollection) → 도로 위 차량·가로수 가지·노점 등 입체가 사라짐
+   - 잘린 자리에 아스팔트 도로면 + 노란 중앙선 + 흰 차선 점선을 원래 노면 높이로 깔아 "도로만" 보이게 함
+     · 노면 높이: 도로 중심을 따라 약 35 m마다 3D 모델 표면 높이(차량 위를 피하려 좌·중·우 3점 중 최저)를 재서 지형과의 차이를 보간
+   - 끄면 잘라내기·도로면 모두 원래대로 · 수평 단면(건물만) 잘라내기와 동시에 쓸 수 없어 켤 때 수평 단면을 끔
+   - 한계: OSM 도로 위치·폭은 실제와 1~3 m 다를 수 있음 · 도로 위로 뻗은 가로수 가지·육교도 함께 잘림 · 교차로 모서리 곡선부는 일부 남음
+---------------------------------------------------------------------------------------------- */
+(function(){
+  if(window.__RD61) return;
+  const C = Cesium, D2R = Math.PI/180, R = 1000;
+  const OVP = ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter','https://overpass.private.coffee/api/interpreter'];
+  const TWO = { motorway:4, trunk:6, primary:6, secondary:4, tertiary:2, unclassified:2, residential:2, living_street:1, service:1 };
+  const ONE = { motorway:2, trunk:2, primary:2, secondary:2, tertiary:1, unclassified:1, residential:1, living_street:1, service:1, motorway_link:1, trunk_link:1, primary_link:1, secondary_link:1, tertiary_link:1 };
+  const RD = { on:false, busy:false, prims:[], clip:null, center:null, stat:null };
+  const tst = (m, t)=>{ try{ toast(m, t||2400); }catch(e){} };
+  const sleep0 = ()=>new Promise(r=>setTimeout(r, 0));
+
+  const item = { id:'osmroad', q:'차량 없이 도로만 보려면', name:'도로만 보기 (OSM 도로 덮기 · 1 km)', src:'화면 중심 1 km · OSM 도로 폭만큼 3D 모델을 잘라 차량·입체 제거 → 아스팔트·중앙선·차선 도로면 표시 · 다시 켜면 현재 화면 기준으로 새로 만듦', type:'layer' };
+  const mc = MENUS.site.find(c=>c.id==='model'); if(mc && !mc.items.some(i=>i.id==='osmroad')) mc.items.push(item);
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  function tilesets(){ return PROJECTS.map(p=>p.ts).filter(Boolean); }
+  function center(){ const cv = scene.canvas; let cart = null;
+    try{ const ray = camera.getPickRay(new C.Cartesian2(cv.clientWidth/2, cv.clientHeight/2)); const hit = scene.globe.pick(ray, scene); if(hit) cart = C.Cartographic.fromCartesian(hit); }catch(e){}
+    if(!cart) cart = camera.positionCartographic; return { lon: cart.longitude/D2R, lat: cart.latitude/D2R }; }
+  async function fetchRoads(lon, lat){
+    const ck = 'rd61:' + lon.toFixed(3) + ',' + lat.toFixed(3); try{ const c = JSON.parse(localStorage.getItem(ck) || 'null'); if(c && Date.now() - c.t < 7*864e5) return c.w; }catch(e){}
+    let lastE; for(let attempt=0; attempt<3; attempt++){ try{ const w = await fetchRoads1(lon, lat); try{ const keys = Object.keys(localStorage).filter(k=>k.startsWith('rd61:')); if(keys.length > 3) keys.slice(0, keys.length-3).forEach(k=>localStorage.removeItem(k)); localStorage.setItem(ck, JSON.stringify({ t:Date.now(), w })); }catch(e){} return w; }catch(e){ lastE = e; if(!RD.on) throw e; tst('OSM 서버가 바빠서 다시 시도합니다 (' + (attempt+2) + '/3)…', 2500); await new Promise(r=>setTimeout(r, 2500 + attempt*3000)); } }
+    throw lastE;
+  }
+  async function fetchRoads1(lon, lat){
+    const q = '[out:json][timeout:40];way(around:' + R + ',' + lat + ',' + lon + ')[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"]["tunnel"!~"yes|building_passage"]["service"!~"parking_aisle|drive-through"]["area"!="yes"];out geom;';
+    const ctl = OVP.map(()=>new AbortController()); const to = setTimeout(()=>ctl.forEach(a=>a.abort()), 45000);
+    try{ const w = await Promise.any(OVP.map(async (ep, i)=>{ const r = await fetch(ep + '?data=' + encodeURIComponent(q), { signal: ctl[i].signal }); if(!r.ok) throw new Error('HTTP ' + r.status); const j = await r.json(); return (j.elements||[]).filter(e=>e.geometry && e.geometry.length > 1).map(e=>({ tags:e.tags, geometry:e.geometry.map(p=>({ lat:+p.lat.toFixed(6), lon:+p.lon.toFixed(6) })) })); }));
+      ctl.forEach(a=>{ try{ a.abort(); }catch(e){} }); return w; }
+    catch(e){ throw new Error('OSM 도로 서버가 응답하지 않습니다 · 잠시 후 다시 켜 주세요'); } finally{ clearTimeout(to); }
+  }
+  // ENU(m) ↔ 경위도
+  function mkProj(lon0, lat0){ const kx = 111320*Math.cos(lat0*D2R), ky = 110950; return { f:(lon, lat)=>[(lon-lon0)*kx, (lat-lat0)*ky], i:(x, y)=>[lon0 + x/kx, lat0 + y/ky] }; }
+  function roadSpec(t){ const hw = t.highway; const one = t.oneway === 'yes' || t.oneway === '1' || t.junction === 'roundabout' || /motorway|_link/.test(hw) && t.oneway !== 'no';
+    let lanes = parseInt(t.lanes); if(!(lanes > 0)) lanes = one ? (ONE[hw] || 1) : (TWO[hw] || 2);
+    let w = parseFloat(t.width); if(!(w > 2 && w < 60)) w = lanes*3.3 + (hw==='service' || hw==='living_street' ? .5 : 1);
+    return { one, lanes, w: hw==='service' ? Math.min(w, 5.5) : w, major: !/service|living_street|residential|unclassified/.test(hw) }; }
+  // 폴리라인 → 폭 w 다각형(마이터, 끝은 w/2 연장) · 꼭짓점 많으면 조각으로 나눔
+  function offsetPoly(pts, w){
+    const h = w/2, n = pts.length; if(n < 2) return null; const L = [], Rr = [];
+    const p = pts.map(q=>q.slice());
+    const d0 = norm(sub(p[1], p[0])), d1 = norm(sub(p[n-1], p[n-2])); p[0] = [p[0][0] - d0[0]*h*.6, p[0][1] - d0[1]*h*.6]; p[n-1] = [p[n-1][0] + d1[0]*h*.6, p[n-1][1] + d1[1]*h*.6];
+    for(let i=0;i<n;i++){ const a = i>0 ? norm(sub(p[i], p[i-1])) : null, b = i<n-1 ? norm(sub(p[i+1], p[i])) : null;
+      if(!a || !b){ const d = a || b; const nx = -d[1], ny = d[0]; L.push([p[i][0]+nx*h, p[i][1]+ny*h]); Rr.push([p[i][0]-nx*h, p[i][1]-ny*h]); continue; }
+      const na = [-a[1], a[0]], nb = [-b[1], b[0]]; const m = norm([na[0]+nb[0], na[1]+nb[1]]); const cos = m[0]*na[0] + m[1]*na[1];
+      if(cos < .5){ L.push([p[i][0]+na[0]*h, p[i][1]+na[1]*h], [p[i][0]+nb[0]*h, p[i][1]+nb[1]*h]); Rr.push([p[i][0]-na[0]*h, p[i][1]-na[1]*h], [p[i][0]-nb[0]*h, p[i][1]-nb[1]*h]); }
+      else { const s = h/cos; L.push([p[i][0]+m[0]*s, p[i][1]+m[1]*s]); Rr.push([p[i][0]-m[0]*s, p[i][1]-m[1]*s]); } }
+    return L.concat(Rr.reverse());
+  }
+  const sub = (a, b)=>[a[0]-b[0], a[1]-b[1]], norm = v=>{ const l = Math.hypot(v[0], v[1]) || 1; return [v[0]/l, v[1]/l]; };
+  function chunks(pts, maxN){ const out = []; for(let s=0; s<pts.length-1; s+=maxN-1) out.push(pts.slice(s, Math.min(pts.length, s+maxN))); return out; }
+  function simplify(pts, tol){ if(pts.length < 3) return pts; const out = [pts[0]]; for(let i=1;i<pts.length-1;i++){ const a = out[out.length-1], b = pts[i], c = pts[i+1]; const ab = sub(b, a), ac = sub(c, a); const L = Math.hypot(ac[0], ac[1]) || 1; const d = Math.abs(ab[0]*ac[1] - ab[1]*ac[0])/L; if(d > tol || Math.hypot(ab[0], ab[1]) > 60) out.push(b); } out.push(pts[pts.length-1]); return out; }
+  function offsetLine(pts, o){ const out = []; const n = pts.length; for(let i=0;i<n;i++){ const a = i>0 ? norm(sub(pts[i], pts[i-1])) : null, b = i<n-1 ? norm(sub(pts[i+1], pts[i])) : null; const d = norm(a && b ? [a[0]+b[0], a[1]+b[1]] : (a || b)); out.push([pts[i][0] - d[1]*o, pts[i][1] + d[0]*o]); } return out; }
+
+
+  // 위성(브이월드 z17 ≈ 1 m/px)으로 도로마다 실제 아스팔트 폭·중심 보정: 20 m마다 도로에 수직으로 ±30 m 단면을 읽어 아스팔트(회색·저채도) 연속 구간을 찾음
+  async function fitWidths(roads, P, c0){
+    const z = 17, n = 2**z, KEY = '57C7018D-1A36-4873-99CD-A2272BD3040E';
+    const tx = lon=>(lon+180)/360*n, ty = lat=>(1-Math.log(Math.tan(lat*D2R)+1/Math.cos(lat*D2R))/Math.PI)/2*n;
+    const a = P.i(-R-40, R+40), b = P.i(R+40, -R-40); const X0 = Math.floor(tx(a[0])), X1 = Math.floor(tx(b[0])), Y0 = Math.floor(ty(a[1])), Y1 = Math.floor(ty(b[1]));
+    const W = (X1-X0+1)*256, H = (Y1-Y0+1)*256; if(W*H > 4096*4096) return 0;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d', { willReadFrequently:true });
+    const jobs = []; for(let j=Y0;j<=Y1;j++) for(let i=X0;i<=X1;i++) jobs.push([i, j]);
+    let ok = 0; await Promise.all(jobs.map(([i, j])=>new Promise(res=>{ const im = new Image(); im.crossOrigin = 'anonymous'; const done = ()=>res(); im.onload = ()=>{ try{ g.drawImage(im, (i-X0)*256, (j-Y0)*256); ok++; }catch(e){} done(); }; im.onerror = done; setTimeout(done, 15000); im.src = 'https://api.vworld.kr/req/wmts/1.0.0/'+KEY+'/Satellite/'+z+'/'+j+'/'+i+'.jpeg'; })));
+    if(ok < jobs.length*.6) return 0; let d; try{ d = g.getImageData(0, 0, W, H).data; }catch(e){ return 0; }
+    const px = (x, y)=>{ const ll = P.i(x, y); const gx = Math.floor((tx(ll[0]) - X0)*256), gy = Math.floor((ty(ll[1]) - Y0)*256); if(gx<0||gy<0||gx>=W||gy>=H) return -1; const k = (gy*W + gx)*4; const r = d[k], gg = d[k+1], bb = d[k+2]; const G = .299*r + .587*gg + .114*bb, S = Math.max(r,gg,bb) - Math.min(r,gg,bb);
+      if(S < 32 && G > 30 && G < 150) return 1;           // 아스팔트
+      if(S < 40 && G >= 150) return .5;                    // 흰 노면표시·밝은 차량(경계 불확실)
+      return 0; };
+    let fitted = 0;
+    for(let ri=0; ri<roads.length; ri++){ const r = roads[ri]; if(r.tags.highway === 'service' || (r.tags.width && r.sp.w)) continue; const ws = [], mids = []; let acc = 0;
+      for(let i=0;i<r.pts.length-1;i++){ const p0 = r.pts[i], p1 = r.pts[i+1]; const L = Math.hypot(p1[0]-p0[0], p1[1]-p0[1]); const dd = norm(sub(p1, p0)); const nx = -dd[1], ny = dd[0];
+        for(let s=10; s<L-5; s+=20){ const x = p0[0] + dd[0]*s, y = p0[1] + dd[1]*s; const prof = []; for(let o=-30; o<=30; o+=.5) prof.push(px(x + nx*o, y + ny*o));
+          // 중심(61번째)에서 좌우로 아스팔트 연속 구간(비도로 2.5 m 이하 끊김 허용)
+          const c = 60; if(prof[c] < .5 && prof[c-2] < .5 && prof[c+2] < .5) continue; const run = dir=>{ let k = c, gap = 0, last = c; while(k+dir >= 0 && k+dir < prof.length){ k += dir; if(prof[k] >= .5){ last = k; gap = 0; } else if(++gap > 5) break; } return last; };
+          const lft = run(-1), rgt = run(1); const wd = (rgt - lft)*.5 + .5; if(wd < 4 || wd > 45) continue; ws.push(wd); mids.push(((lft + rgt)/2 - c)*.5); } }
+      if(ws.length >= 2){ ws.sort((p,q)=>p-q); mids.sort((p,q)=>p-q); const wm = ws[Math.floor(ws.length/2)], mm = mids[Math.floor(mids.length/2)];
+        const w0 = r.sp.w; r.sp.w = Math.max(w0*.8, Math.min(w0*2.6, wm)); if(Math.abs(mm) <= 4 && Math.abs(mm) > .4) r.pts = offsetLine(r.pts, mm);
+        if(r.sp.one || !(parseInt(r.tags.lanes) > 0)){ const nl = Math.max(1, Math.round((r.sp.w - 1)/3.3)); r.sp.lanes = r.sp.one ? nl : Math.max(2, nl - nl%2); }
+        fitted++; }
+      if(ri % 20 === 0){ await sleep0(); if(!RD.on) return fitted; } }
+    return fitted;
+  }
+
+  async function build(){
+    const c0 = center(); RD.center = c0; const P = mkProj(c0.lon, c0.lat);
+    tst('도로만 보기 · 반경 1 km OSM 도로 불러오는 중…', 4000);
+    const ways = await fetchRoads(c0.lon, c0.lat); if(!RD.on) return;
+    const roads = []; for(const w of ways){ const sp = roadSpec(w.tags || {}); const pts = simplify(w.geometry.map(g=>P.f(g.lon, g.lat)), .4); if(pts.length < 2) continue; if(Math.min(...pts.map(q=>Math.hypot(q[0], q[1]))) > R) continue; roads.push({ pts, sp, tags:w.tags||{} }); }
+    if(!roads.length) throw new Error('반경 1 km 안에 OSM 도로가 없습니다');
+    tst('위성사진으로 도로 폭 맞추는 중…', 3000); let fitted = 0; try{ fitted = await fitWidths(roads, P, c0); }catch(e){ console.warn('road width fit', e); } if(!RD.on) return;
+    // 노면 높이 보정: 지형(globe) 대비 3D 모델 표면 높이 차이를 도로 중심선 표본으로 측정 (잘라내기 전에)
+    tst('노면 높이 재는 중… (도로 ' + roads.length + '개)', 3000);
+    const samples = []; let k = 0; const t0 = performance.now();
+    for(const r of roads){ let acc = 0; for(let i=0;i<r.pts.length-1;i++){ const a = r.pts[i], b = r.pts[i+1]; const L = Math.hypot(b[0]-a[0], b[1]-a[1]); for(let s=acc; s<L; s+=35){ const t = s/L; const x = a[0]+(b[0]-a[0])*t, y = a[1]+(b[1]-a[1])*t; const d = norm(sub(b, a)); const off = Math.min(2.5, r.sp.w/4);
+          let best = Infinity, terr = null; for(const o of [-off, 0, off]){ const ll = P.i(x - d[1]*o, y + d[0]*o); const cg = C.Cartographic.fromDegrees(ll[0], ll[1]); let hm; try{ hm = scene.sampleHeight(cg); }catch(e){} if(hm !== undefined && isFinite(hm)) best = Math.min(best, hm); if(o===0) terr = scene.globe.getHeight(cg); }
+          if(isFinite(best) && terr !== undefined && isFinite(terr)) samples.push([x, y, best - terr]);
+          if(++k % 25 === 0){ await sleep0(); if(!RD.on) return; if(performance.now() - t0 > 9000) break; } }
+        acc = Math.max(0, acc - L + 35 * Math.ceil((L - acc)/35)) ; if(performance.now() - t0 > 9000) break; } if(performance.now() - t0 > 9000) break; }
+    const dl = samples.map(s=>s[2]).sort((a,b)=>a-b); const med = dl.length ? dl[Math.floor(dl.length/2)] : 0;
+    const good = samples.filter(s=>Math.abs(s[2]-med) < 8);
+    const delta = (x, y)=>{ if(!good.length) return med; let sw = 0, sv = 0; for(const s of good){ const d2 = (s[0]-x)**2 + (s[1]-y)**2; if(d2 < 1) return s[2]; if(d2 > 250000) continue; const w = 1/d2; sw += w; sv += w*s[2]; } return sw ? sv/sw : med; };
+    const hAt = async (xy)=>{ const cg = xy.map(q=>{ const ll = P.i(q[0], q[1]); return C.Cartographic.fromDegrees(ll[0], ll[1]); }); let th; try{ th = await C.sampleTerrainMostDetailed(scene.globe.terrainProvider, cg); }catch(e){ th = cg.map(c=>({ height: scene.globe.getHeight(c) || 0 })); } return th.map((c, i)=>(isFinite(c.height) ? c.height : 0) + delta(xy[i][0], xy[i][1])); };
+    // 다각형 · 선 만들기
+    tst('도로면 만드는 중…', 2500);
+    const polys = [], clipPolys = [], yellow = [], white = [];
+    for(const r of roads){ for(const ch of chunks(r.pts, 14)){ const ring = offsetPoly(ch, r.sp.w); if(!ring || ring.length < 3) continue; polys.push(ring); }
+      if(r.sp.major || r.sp.lanes >= 2){ if(!r.sp.one && r.sp.lanes >= 2) yellow.push(r.pts);
+        const perDir = r.sp.one ? r.sp.lanes : Math.max(1, Math.round(r.sp.lanes/2));
+        for(let j=1;j<perDir;j++){ const o = j*3.3; if(r.sp.one){ white.push(offsetLine(r.pts, -r.sp.w/2 + .5 + o)); } else { white.push(offsetLine(r.pts, o)); white.push(offsetLine(r.pts, -o)); } } }
+      if(polys.length % 40 === 0) await sleep0(); }
+    // 높이 일괄 계산
+    const allV = []; polys.forEach(p=>p.forEach(q=>allV.push(q))); yellow.forEach(l=>l.forEach(q=>allV.push(q))); white.forEach(l=>l.forEach(q=>allV.push(q)));
+    const H = await hAt(allV); if(!RD.on) return; let hi = 0;
+    const toC = (q, dz)=>{ const ll = P.i(q[0], q[1]); return C.Cartesian3.fromDegrees(ll[0], ll[1], H[hi++] + dz); };
+    const asphalt = C.Color.fromCssColorString('#3B3F45'), polyInst = [];
+    for(const ring of polys){ const pos = ring.map(q=>toC(q, .06)); polyInst.push(new C.GeometryInstance({ geometry: new C.PolygonGeometry({ polygonHierarchy: new C.PolygonHierarchy(pos), perPositionHeight:true, vertexFormat: C.PerInstanceColorAppearance.VERTEX_FORMAT }), attributes:{ color: C.ColorGeometryInstanceAttribute.fromColor(asphalt) } }));
+      clipPolys.push(new C.ClippingPolygon({ positions: ring.map(q=>{ const ll = P.i(q[0], q[1]); return C.Cartesian3.fromDegrees(ll[0], ll[1]); }) })); }
+    const lineInst = (lines, dz)=>lines.map(l=>new C.GeometryInstance({ geometry: new C.PolylineGeometry({ positions: l.map(q=>toC(q, dz)), width: 2.2, vertexFormat: C.PolylineMaterialAppearance.VERTEX_FORMAT }) }));
+    const yI = lineInst(yellow, .14), wI = lineInst(white, .12);
+    if(!RD.on) return;
+    // 3D 모델 잘라내기 (기존 잘라내기 보관 후 교체)
+    RD.clip = clipPolys; for(const ts of tilesets()) applyClip(ts);
+    RD.prims.push(scene.primitives.add(new C.Primitive({ geometryInstances: polyInst, appearance: new C.PerInstanceColorAppearance({ flat:true, translucent:false }), asynchronous:true })));
+    if(yI.length) RD.prims.push(scene.primitives.add(new C.Primitive({ geometryInstances: yI, appearance: new C.PolylineMaterialAppearance({ material: C.Material.fromType('Color', { color: C.Color.fromCssColorString('#F2C230') }) }), asynchronous:true })));
+    if(wI.length) RD.prims.push(scene.primitives.add(new C.Primitive({ geometryInstances: wI, appearance: new C.PolylineMaterialAppearance({ material: C.Material.fromType('PolylineDash', { color: C.Color.WHITE.withAlpha(.9), dashLength: 18 }) }), asynchronous:true })));
+    RD.stat = { roads: roads.length, polys: polys.length, yellow: yellow.length, white: white.length, samples: good.length, med: +med.toFixed(2), fitted };
+    tst('도로만 보기 · 반경 1 km 도로 ' + roads.length + '개 · 3D 모델의 도로 위 차량·입체를 지우고 도로면 표시', 3200);
+  }
+  // 타일셋마다 잘라내기 컬렉션 1개를 계속 재사용 (교체·해제를 반복하면 Cesium 렌더 오류가 날 수 있어 비우기/채우기만 함)
+  const OWN = new WeakMap();
+  function applyClip(ts){ if(!RD.clip) return; let cp = OWN.get(ts);
+    try{ if(!cp || cp.isDestroyed() || ts.clippingPolygons !== cp){ cp = new C.ClippingPolygonCollection({ polygons: RD.clip, enabled:true }); OWN.set(ts, cp); ts.clippingPolygons = cp; }
+      else { cp.removeAll(); for(const p of RD.clip) cp.add(p); cp.enabled = true; } }catch(e){ console.warn('road clip', e); } }
+  function clearAll(){ for(const p of RD.prims){ try{ scene.primitives.remove(p); }catch(e){} } RD.prims = []; RD.clip = null;
+    for(const ts of tilesets()){ const cp = OWN.get(ts); if(cp && !cp.isDestroyed() && ts.clippingPolygons === cp){ try{ cp.enabled = false; cp.removeAll(); }catch(e){} } } }
+  async function on(){ RD.on = true; if(STATE.on.has('xsec')){ try{ await toggleLayer('xsec', false); }catch(e){} }
+    RD.busy = true; try{ await build(); }catch(e){ RD.lastErr = e.message; tst('도로만 보기 실패: ' + e.message, 3500); RD.on = false; STATE.on.delete('osmroad'); clearAll(); try{ renderCats(); renderSub(); }catch(_){} } finally{ RD.busy = false; } }
+  function off(){ RD.on = false; clearAll(); }
+  // 새로 로드되는 타일셋에도 잘라내기 적용
+  try{ const _ens = ensureTileset; ensureTileset = async function(p){ const ts = await _ens.apply(this, arguments); if(ts && RD.on && RD.clip) applyClip(ts); return ts; }; }catch(e){}
+  const _t61 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(id === 'osmroad'){ const want = force !== undefined ? force : !STATE.on.has('osmroad');
+      if(want && STATE.mode !== 'site'){ tst('도로만 보기는 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ if(RD.busy) return; STATE.on.add('osmroad'); try{ renderCats(); renderSub(); }catch(e){} off(); await on(); } else { STATE.on.delete('osmroad'); off(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
+    if(id === 'xsec' && force !== false && !STATE.on.has('xsec') && STATE.on.has('osmroad')){ STATE.on.delete('osmroad'); off(); tst('수평 단면을 켜서 도로만 보기를 껐습니다', 2000); }
+    return _t61.apply(this, arguments);
+  };
+  try{ const _sm61 = setMode; setMode = function(m){ if(m !== 'site' && STATE.on.has('osmroad')){ STATE.on.delete('osmroad'); off(); } return _sm61.apply(this, arguments); }; }catch(e){}
+  try{ const _us61 = updateSrc; updateSrc = function(){ const r = _us61.apply(this, arguments); try{ const el = document.getElementById('hudSrc'); if(el && STATE.on.has('osmroad') && !el.innerHTML.includes('OSM 도로')) el.innerHTML = el.innerHTML.replace('출처: ', '출처: <b>OSM 도로</b> © OpenStreetMap 기여자(폭은 차로 수 추정) · '); }catch(e){} return r; }; }catch(e){}
+  if(STATE.on.has('osmroad')){ STATE.on.delete('osmroad'); }
+  window.__RD61 = { version:'61.3', RD, build, clearAll };
+})();
+</script>
 </body>
 </html>
