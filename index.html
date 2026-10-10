@@ -8766,5 +8766,122 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
 })();
 
 </script>
+<style>
+#cvPanel .row.r3 button.on{border-color:var(--lime);color:var(--lime-bright);background:var(--lime-dim)}
+#cvPanel .row.r3 button:disabled{opacity:.4;cursor:not-allowed}
+#cvPov{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:27;display:none;align-items:center;gap:10px;padding:8px 12px;border-radius:12px;background:rgba(8,16,32,.9);border:1px solid rgba(255,255,255,.15);color:#fff;font-size:12.5px}
+#cvPov.open{display:flex}#cvPov input{width:140px}#cvPov button{padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.25);color:#fff;background:rgba(255,255,255,.06)}
+#cvPovV{position:fixed;z-index:6;pointer-events:none;display:none;object-fit:fill}
+</style>
+<script>
+/* ---------- 59. CCTV › 3D 앵글 표시 · CCTV 시점 보기 (2026-10-10 · 샘플: 승기사거리) ----------
+   - 영상 창의 [3D에 앵글 표시]: 실제 설치 위치에 폴 + 카메라 몸체 + 시야 사각뿔(화각) + 영상 스크린(시야 방향에 수직, 앵글대로 기울임) + 지면 촬영 범위
+   - [CCTV 시점으로 보기]: 3D 카메라를 CCTV와 같은 위치·방향·화각으로 옮기고 실시간 영상을 반투명으로 겹쳐 비교 (투명도 조절)
+   - 자세(위치·높이·방향·기울기·화각)는 영상 프레임과 3D 모델 렌더를 50% 겹쳐 맞춘 추정값 (DERIVED · 오차 약 ±5 m, ±3°)
+   - 승기사거리(인천교통정보센터 L213): 목록 좌표(교차로 남동쪽)에서 서쪽 20 m·남쪽 5 m 도로 위 신호 암, 지면 +12 m, 방향 352°, 아래로 14°, 수평 화각 52°
+---------------------------------------------------------------------------------------------- */
+(function(){
+  if(window.__CV59 || !window.__CV57) return;
+  const C = Cesium, CV = window.__CV57, S = CV.S;
+  const POSE = {
+    'https://cctv.fitic.go.kr/cctv/L213.stream/playlist.m3u8': { name:'승기사거리', lon:126.689933, lat:37.450475, h:12, hd:352, pt:-14, fov:52, aspect:16/9, note:'영상-3D 모델 겹쳐보기 보정 · 신호 암(도로 위) 설치로 추정' },
+  };
+  const COL = C.Color.fromCssColorString('#FF9F1C');
+  const D = 26;  // 영상 스크린까지 거리(m)
+  const st = { ds:null, key:null, pov:null };
+
+  // ---- 버튼 ----
+  const P = document.getElementById('cvPanel'); if(!P) return;
+  const row = document.createElement('div'); row.className = 'row r3';
+  row.innerHTML = '<button id="cv3d">3D에 앵글 표시</button><button id="cvPovB">CCTV 시점으로 보기</button>';
+  const r0 = P.querySelector('.row'); r0.parentNode.insertBefore(row, r0.nextSibling);
+  const b3 = row.querySelector('#cv3d'), bp = row.querySelector('#cvPovB');
+  function curKey(){ return S.cur ? CV.urlOf(S.cur.k, S.cur.i) : null; }
+  function sync(){ const k = curKey(), p = k && POSE[k];
+    b3.disabled = bp.disabled = !p; b3.title = bp.title = p ? (p.name + ' · ' + p.note) : '이 카메라는 아직 방향 보정 자료가 없습니다 (샘플: 승기사거리)';
+    b3.classList.toggle('on', !!(st.ds && st.key === k)); b3.textContent = (st.ds && st.key === k) ? '3D 앵글 끄기' : '3D에 앵글 표시';
+    if(st.key && st.key !== k) clear3d(); if(st.pov && st.pov.key !== k) exitPov(); }
+  new MutationObserver(sync).observe(document.getElementById('cvName'), { childList:true, characterData:true, subtree:true });
+  new MutationObserver(()=>{ if(!P.classList.contains('open')){ clear3d(); exitPov(); } sync(); }).observe(P, { attributes:true, attributeFilter:['class'] });
+  b3.onclick = ()=>{ const k = curKey(); if(!POSE[k]) return; if(st.ds && st.key === k){ clear3d(); sync(); return; } show3d(k); };
+  bp.onclick = ()=>{ const k = curKey(); if(!POSE[k]) return; if(st.pov) exitPov(); else enterPov(k); };
+
+  // ---- 기하: ENU 기준 카메라 축 ----
+  function axes(p, g){
+    const pos = C.Cartesian3.fromDegrees(p.lon, p.lat, g + p.h);
+    const M = C.Transforms.eastNorthUpToFixedFrame(pos); const R = C.Matrix4.getMatrix3(M, new C.Matrix3());
+    const B = C.Math.toRadians(p.hd), T = C.Math.toRadians(p.pt);
+    const enu = (e, n, u)=> C.Matrix3.multiplyByVector(R, new C.Cartesian3(e, n, u), new C.Cartesian3());
+    const f = enu(Math.sin(B)*Math.cos(T), Math.cos(B)*Math.cos(T), Math.sin(T));           // 앞
+    const u = enu(-Math.sin(B)*Math.sin(T), -Math.cos(B)*Math.sin(T), Math.cos(T));          // 위(카메라)
+    const r = C.Cartesian3.normalize(C.Cartesian3.cross(f, u, new C.Cartesian3()), new C.Cartesian3()); // 오른쪽
+    const l = C.Cartesian3.negate(r, new C.Cartesian3());
+    const q = C.Quaternion.fromRotationMatrix(new C.Matrix3(f.x, l.x, u.x,  f.y, l.y, u.y,  f.z, l.z, u.z));
+    return { pos, f, u, r, q };
+  }
+  const add = (a, b, s)=> C.Cartesian3.add(a, C.Cartesian3.multiplyByScalar(b, s, new C.Cartesian3()), new C.Cartesian3());
+  async function ground(p){ try{ const r = await C.sampleTerrainMostDetailed(scene.globe.terrainProvider, [C.Cartographic.fromDegrees(p.lon, p.lat)]); if(isFinite(r[0].height)) return r[0].height; }catch(e){} const h = scene.globe.getHeight(C.Cartographic.fromDegrees(p.lon, p.lat)); return isFinite(h) ? h : 0; }
+
+  async function show3d(k){
+    const p = POSE[k]; clear3d(); st.key = k; const g = await ground(p); p.g = g;
+    const A = axes(p, g); const ds = st.ds = new C.CustomDataSource('cctv3d'); viewer.dataSources.add(ds);
+    const tH = Math.tan(C.Math.toRadians(p.fov/2)), tV = tH / (p.aspect || 16/9);
+    // 폴(지면→카메라) + 카메라 몸체
+    const foot = C.Cartesian3.fromDegrees(p.lon, p.lat, g);
+    ds.entities.add({ polyline:{ positions:[foot, A.pos], width:6, material:C.Color.fromCssColorString('#C9D3E0') } });
+    ds.entities.add({ position: add(A.pos, A.f, 0.35), orientation: A.q, box:{ dimensions:new C.Cartesian3(1.1, 0.42, 0.42), material:C.Color.fromCssColorString('#F2F5F9'), outline:true, outlineColor:C.Color.fromCssColorString('#30394A') } });
+    ds.entities.add({ position: add(A.pos, A.f, 0.95), orientation: A.q, box:{ dimensions:new C.Cartesian3(0.12, 0.3, 0.3), material:C.Color.fromCssColorString('#10161F') } });
+    // 시야 사각뿔 + 스크린(영상)
+    const cen = add(A.pos, A.f, D); const corner = (sx, sy)=> add(add(cen, A.r, sx*D*tH), A.u, sy*D*tV);
+    const cs = [corner(-1,1), corner(1,1), corner(1,-1), corner(-1,-1)];
+    for(const c of cs) ds.entities.add({ polyline:{ positions:[A.pos, c], width:1.6, material:COL.withAlpha(.95) } });
+    ds.entities.add({ polyline:{ positions:[...cs, cs[0]], width:2.5, material:COL } });
+    const v = document.getElementById('cvV');
+    const scr = ds.entities.add({ position: cen, orientation: A.q, plane:{ plane:new C.Plane(C.Cartesian3.UNIT_X, 0), dimensions:new C.Cartesian2(2*D*tH, 2*D*tV), material: COL.withAlpha(.25) } });
+    const setTex = ()=>{ if(v && v.readyState >= 2 && v.videoWidth){ scr.plane.material = new C.ImageMaterialProperty({ image: v, repeat: new C.Cartesian2(-1, 1) }); return true; } return false; };
+    if(!setTex()){ const t = setInterval(()=>{ if(!st.ds || setTex()) clearInterval(t); }, 700); }
+    // 지면 촬영 범위: 시야 모서리 광선이 지면(g)에 닿는 점 · 수평선 위로 향하면 220 m에서 자름
+    const hit = (sx, sy)=>{ const d = C.Cartesian3.normalize(add(add(A.f, A.r, sx*tH), A.u, sy*tV), new C.Cartesian3()); const pc = C.Cartographic.fromCartesian(add(A.pos, d, 1)); const dz = pc.height - (g + p.h); const t = dz < -1e-4 ? Math.min(220, p.h / -dz) : 220; const q = C.Cartographic.fromCartesian(add(A.pos, d, t)); return C.Cartesian3.fromRadians(q.longitude, q.latitude, g + 0.3); };
+    const fp = [hit(-1,-1), hit(1,-1), hit(1,1), hit(-1,1)];
+    ds.entities.add({ polygon:{ hierarchy: fp, material: COL.withAlpha(.22), classificationType: C.ClassificationType.BOTH } });
+    ds.entities.add({ polyline:{ positions:[...fp, fp[0]], width:2, material: COL.withAlpha(.8), clampToGround:true } });
+    ds.entities.add({ position: add(cen, A.u, D*tV + 2.5), label:{ text: p.name + ' CCTV\n방향 ' + p.hd + '° · 아래로 ' + (-p.pt) + '° · 화각 ' + p.fov + '° · 높이 ' + p.h + ' m', font:'700 13px ' + getComputedStyle(document.body).fontFamily, fillColor:C.Color.WHITE, outlineColor:C.Color.fromCssColorString('#03122A'), outlineWidth:4, style:C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin:C.VerticalOrigin.BOTTOM, disableDepthTestDistance:Number.POSITIVE_INFINITY, scaleByDistance:new C.NearFarScalar(80, 1, 1500, .5) } });
+    // 뒤쪽 위에서 내려다보는 시점으로 이동
+    const back = C.Math.toRadians(p.hd + 200), dist = 85; const lat = p.lat + dist*Math.cos(back)/111000, lon = p.lon + dist*Math.sin(back)/(111000*Math.cos(p.lat*Math.PI/180));
+    camera.flyTo({ destination: C.Cartesian3.fromDegrees(lon, lat, g + 62), orientation:{ heading: C.Math.toRadians(p.hd + 20), pitch: C.Math.toRadians(-28), roll:0 }, duration:1.8 });
+    try{ toast(p.name + ' CCTV 앵글을 3D에 표시했습니다 · 방향·화각은 영상-3D 겹쳐보기 추정값', 2600); }catch(e){}
+    sync();
+  }
+  function clear3d(){ if(st.ds){ try{ viewer.dataSources.remove(st.ds, true); }catch(e){} } st.ds = null; st.key = null; }
+
+  // ---- CCTV 시점 보기 (영상 반투명 겹침) ----
+  const bar = document.createElement('div'); bar.id = 'cvPov';
+  bar.innerHTML = '<b id="cvPovN"></b><span>영상 겹침</span><input id="cvPovO" type="range" min="0" max="100" value="50"><span id="cvPovT">50%</span><button id="cvPovX">원래 시점으로</button>';
+  document.body.appendChild(bar);
+  const ov = document.createElement('canvas'); ov.id = 'cvPovV'; document.body.appendChild(ov);
+  bar.querySelector('#cvPovO').oninput = e=>{ ov.style.opacity = e.target.value/100; bar.querySelector('#cvPovT').textContent = e.target.value + '%'; };
+  bar.querySelector('#cvPovX').onclick = ()=>exitPov();
+  function placeOv(){ const r = scene.canvas.getBoundingClientRect(); const h = r.width * 9/16; ov.style.left = r.left + 'px'; ov.style.top = (r.top + (r.height - h)/2) + 'px'; ov.style.width = r.width + 'px'; ov.style.height = h + 'px'; }
+  async function enterPov(k){
+    const p = POSE[k]; const g = (p.g !== undefined) ? p.g : (p.g = await ground(p));
+    st.pov = { key:k, minZ: scene.screenSpaceCameraController.minimumZoomDistance, fov: camera.frustum.fov, view:{ pos: camera.position.clone(), hd: camera.heading, pt: camera.pitch, rl: camera.roll } };
+    scene.screenSpaceCameraController.minimumZoomDistance = 0.5;
+    if(st.ds) st.ds.show = false;  // 시점 안에서 폴·스크린이 가리지 않게
+    camera.frustum.fov = C.Math.toRadians(p.fov);   // 가로가 길면 수평 화각
+    camera.setView({ destination: C.Cartesian3.fromDegrees(p.lon, p.lat, g + p.h), orientation:{ heading:C.Math.toRadians(p.hd), pitch:C.Math.toRadians(p.pt), roll:0 } });
+    const v = document.getElementById('cvV'); ov.width = 960; ov.height = 540; const g2 = ov.getContext('2d');
+    const draw = ()=>{ if(!st.pov) return; placeOv(); try{ if(v.readyState >= 2) g2.drawImage(v, 0, 0, 960, 540); }catch(e){} st.pov.raf = requestAnimationFrame(draw); };
+    ov.style.opacity = bar.querySelector('#cvPovO').value/100; ov.style.display = 'block'; draw();
+    bar.querySelector('#cvPovN').textContent = p.name + ' CCTV 시점'; bar.classList.add('open'); bp.classList.add('on'); bp.textContent = 'CCTV 시점 끄기';
+    try{ toast('CCTV와 같은 위치·방향·화각 · 영상을 반투명으로 겹쳤습니다 (지도를 움직이면 어긋납니다)', 3000); }catch(e){}
+  }
+  function exitPov(){ const o = st.pov; if(!o) return; st.pov = null; cancelAnimationFrame(o.raf); ov.style.display = 'none'; bar.classList.remove('open'); bp.classList.remove('on'); bp.textContent = 'CCTV 시점으로 보기';
+    camera.frustum.fov = o.fov; scene.screenSpaceCameraController.minimumZoomDistance = o.minZ; if(st.ds) st.ds.show = true;
+    camera.setView({ destination:o.view.pos, orientation:{ heading:o.view.hd, pitch:o.view.pt, roll:o.view.rl } }); }
+  window.addEventListener('keydown', e=>{ if(e.key==='Escape' && st.pov) exitPov(); });
+  sync();
+  window.__CV59 = { version:'59.1', POSE, show3d, clear3d, enterPov, exitPov, st };
+})();
+</script>
 </body>
 </html>
