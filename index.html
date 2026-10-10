@@ -8973,7 +8973,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
           const lft = run(-1), rgt = run(1); const wd = (rgt - lft)*.5 + .5; if(wd < 4 || wd > 45) continue; ws.push(wd); mids.push(((lft + rgt)/2 - c)*.5); } }
       if(ws.length >= 2){ ws.sort((p,q)=>p-q); mids.sort((p,q)=>p-q); const wm = ws[Math.floor(ws.length/2)], mm = mids[Math.floor(mids.length/2)];
         const w0 = r.sp.w; r.sp.w = Math.max(w0*.8, Math.min(w0*2.6, wm)); if(Math.abs(mm) <= 4 && Math.abs(mm) > .4) r.pts = offsetLine(r.pts, mm);
-        if(r.sp.one || !(parseInt(r.tags.lanes) > 0)){ const nl = Math.max(1, Math.round((r.sp.w - 1)/3.3)); r.sp.lanes = r.sp.one ? nl : Math.max(2, nl - nl%2); }
+        if(!(parseInt(r.tags.lanes) > 0)){ const nl = Math.max(1, Math.round((r.sp.w - 1)/3.3)); r.sp.lanes = r.sp.one ? Math.min(nl, 4) : Math.min(6, Math.max(2, nl - nl%2)); }   // 차선 표시는 일방 4·양방향 6개까지
         fitted++; }
       if(ri % 20 === 0){ await sleep0(); if(!RD.on) return fitted; } }
     return fitted;
@@ -9048,7 +9048,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   try{ const _sm61 = setMode; setMode = function(m){ if(m !== 'site' && STATE.on.has('osmroad')){ STATE.on.delete('osmroad'); off(); } return _sm61.apply(this, arguments); }; }catch(e){}
   try{ const _us61 = updateSrc; updateSrc = function(){ const r = _us61.apply(this, arguments); try{ const el = document.getElementById('hudSrc'); if(el && STATE.on.has('osmroad') && !el.innerHTML.includes('OSM 도로')) el.innerHTML = el.innerHTML.replace('출처: ', '출처: <b>OSM 도로</b> © OpenStreetMap 기여자(폭은 차로 수 추정) · '); }catch(e){} return r; }; }catch(e){}
   if(STATE.on.has('osmroad')){ STATE.on.delete('osmroad'); }
-  window.__RD61 = { version:'61.4', RD, build, clearAll };
+  window.__RD61 = { version:'61.5', RD, build, clearAll };
 })();
 </script>
 </body>
