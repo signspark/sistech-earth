@@ -8549,12 +8549,12 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
    - 하천·홍수·바다·재난침수 (파랑): 한강·낙동강·금강·영산강 홍수통제소 + 부산 재난안전(도시침수·해안) (cctv/water.json)
    - 국립공원 등 (초록): 국립공원공단 실시간 영상 17곳 (위치는 근사 · 공단 점검 중이면 영상 없음)
    - 기존 분석 › 공개 CCTV(방향 추정) · 실시간 CCTV 영상(UTIC 9곳)은 이 메뉴로 대체되어 분석 메뉴에서 뺌
-   - 마커: 화면 근처(약 40 km) 마커는 지형 높이에 맞춰 올림 · 3D 모델 위에서도 가리지 않게 표시
+   - 마커: 화면 근처(카메라 높이×4.5, 3~60 km)만 최대 600개(저사양 350개) 생성·나머지 제거 · 지형 높이에 맞춰 올림 (57.2 저사양 대응) · 3D 모델 위에서도 가리지 않게 표시
 ---------------------------------------------------------------------------------------------- */
 (function(){
   if(window.__CV57) return;
   const C = Cesium;
-  const VER = '57.1', DATA_V = '20261010a';
+  const VER = '57.2', DATA_V = '20261010a';
   const CATS = {
     cctvT: { key:'cctvT', name:'교통', color:'#FF9F1C', file:'cctv/traffic.json' },
     cctvW: { key:'cctvW', name:'하천·홍수·바다·재난침수', color:'#2F9BFF', file:'cctv/water.json' },
@@ -8562,7 +8562,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   };
   const ICON = '<svg viewBox="0 0 24 24"><path d="M2.5 8.6 15.4 5.2l1.7 6L4.2 14.6z"/><path d="M17.2 8.3l3.8-.9v4.4l-3.2.2"/><path d="M7.4 13.6l1 3.6H4.2V21"/><circle cx="6.3" cy="10.4" r=".6"/></svg>';
   const cat = { id:'cctv_cat', name:'CCTV', icon:ICON, items:[
-    { id:'cctvT', q:'지금 도로·교차로는 어떤가', name:'교통 CCTV · 경찰청 UTIC + 국가교통정보센터 ITS', src:'주황 마커 · 국도·고속도로(ITS) + 지자체 교통정보센터 29곳 · 약 1만 3천 대 · 마커를 누르면 실시간 영상', type:'layer' },
+    { id:'cctvT', q:'지금 도로·교차로는 어떤가', name:'교통 CCTV · 경찰청 UTIC + 국가교통정보센터 ITS', src:'주황 마커 · 국도·고속도로(ITS) + 지자체 교통정보센터 29곳 · 약 1만 3천 대 중 화면 근처만 표시 · 마커를 누르면 실시간 영상', type:'layer' },
     { id:'cctvW', q:'강물·바다·침수 현장은 지금', name:'하천·홍수·바다·재난침수 CCTV', src:'파랑 마커 · 한강·낙동강·금강·영산강 홍수통제소 + 부산 재난안전(도시침수·해안) · 약 500대', type:'layer' },
     { id:'cctvP', q:'산 정상·해상공원 날씨는 지금', name:'국립공원 등 CCTV', src:'초록 마커 · 국립공원공단 실시간 영상 17곳(정상·해안) · 공단 점검 중이면 영상 없음', type:'layer' } ]};
   // 분석 메뉴의 기존 CCTV 2개 제거(대체)
@@ -8583,23 +8583,51 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     if(S.loading[k]) return S.loading[k];
     S.loading[k] = fetch(def.file + '?v=' + DATA_V).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }).then(d=>{ S.data[k]=d; return d; }).finally(()=>{ S.loading[k]=null; });
     return S.loading[k]; }
-  const NFS = new C.NearFarScalar(800, 0.9, 250000, 0.28);
-  const TBD = new C.NearFarScalar(150000, 1.0, 900000, 0.35);
+  const NFS = new C.NearFarScalar(800, 0.9, 120000, 0.4);
+  const MAX_BB = (navigator.hardwareConcurrency||8) <= 4 ? 350 : 600;   // 동시에 그리는 마커 상한 (저사양은 더 적게)
+  S.act = {}; S.grid = {}; S.img = {};
+  function buildGrid(k){ const g = new Map(); S.data[k].cams.forEach((c, i)=>{ const key = Math.floor(c[0]*10) + ':' + Math.floor(c[1]*10); let a = g.get(key); if(!a){ a = []; g.set(key, a); } a.push(i); }); S.grid[k] = g; }
   async function show(k){
     const def = CATS[k]; let d;
     if(k!=='cctvP' && !S.data[k]) try{ toast(def.name + ' CCTV 목록 불러오는 중…', 1500); }catch(e){}
     try{ d = await loadData(k); }catch(e){ toast(def.name + ' CCTV 목록을 불러오지 못했습니다 (' + e.message + ')', 3000); STATE.on.delete(k); try{ renderCats(); renderSub(); }catch(_){} return; }
     if(!STATE.on.has(k)) return;
-    hide(k); const bc = ensureBC(); const img = iconCanvas(def.color); const arr = [];
-    d.cams.forEach((c, i)=>{ const b = bc.add({ position: C.Cartesian3.fromDegrees(c[0], c[1], 30), image: img, width: 28, height: 28, scaleByDistance: NFS, translucencyByDistance: TBD, disableDepthTestDistance: Number.POSITIVE_INFINITY, verticalOrigin: C.VerticalOrigin.CENTER, id: { cv57:true, k, i } }); b._lon=c[0]; b._lat=c[1]; b._h=false; arr.push(b); });
-    S.bbs[k] = arr; fixHeights(true);
-    try{ toast(def.name + ' CCTV ' + d.cams.length.toLocaleString() + '대 표시 · 마커를 누르면 실시간 영상', 2200); }catch(e){}
+    hide(k); ensureBC(); if(!S.grid[k]) buildGrid(k); if(!S.img[k]) S.img[k] = iconCanvas(def.color);
+    S.act[k] = true; S.bbs[k] = new Map(); S.lastKey = ''; cull(true);
+    try{ toast(def.name + ' CCTV 전체 ' + d.cams.length.toLocaleString() + '대 · 화면 근처만 표시 · 마커를 누르면 실시간 영상', 2400); }catch(e){}
   }
-  function hide(k){ const arr = S.bbs[k]; if(arr && S.bc){ for(const b of arr) S.bc.remove(b); } S.bbs[k] = null; if(S.cur && S.cur.k===k) closePlayer(); }
-  // 화면 근처 마커는 지형 높이로 올림
-  function fixHeights(){ if(!S.bc || STATE.mode!=='site') return; const cc = camera.positionCartographic; if(!cc) return; const lat0 = cc.latitude*180/Math.PI, lon0 = cc.longitude*180/Math.PI; const rng = Math.min(0.45, Math.max(0.08, cc.height/111000*3));
-    let n = 0; for(const k in S.bbs){ const arr = S.bbs[k]; if(!arr) continue; for(const b of arr){ if(b._h) continue; if(Math.abs(b._lat-lat0)>rng || Math.abs(b._lon-lon0)>rng*1.25) continue; const h = scene.globe.getHeight(C.Cartographic.fromDegrees(b._lon, b._lat)); if(h!==undefined && isFinite(h)){ b.position = C.Cartesian3.fromDegrees(b._lon, b._lat, h + 6); b._h = true; if(++n > 3000) return; } } } }
-  setInterval(fixHeights, 1500);
+  function hide(k){ const m = S.bbs[k]; if(m && S.bc){ for(const b of m.values()) S.bc.remove(b); } S.bbs[k] = null; S.act[k] = false; if(S.cur && S.cur.k===k) closePlayer(); }
+  // 화면 근처(카메라 높이에 비례, 3~60 km)만 마커를 만들고 나머지는 지움 · 가까운 순으로 최대 MAX_BB개
+  function cull(force){
+    if(!S.bc || STATE.mode!=='site') return; const ks = Object.keys(S.act).filter(k=>S.act[k]); if(!ks.length) return;
+    const cc = camera.positionCartographic; if(!cc) return;
+    // 기준점: 화면 중앙이 닿는 지면(없으면 카메라 바로 아래)
+    let lon0 = cc.longitude*180/Math.PI, lat0 = cc.latitude*180/Math.PI;
+    try{ const cv = scene.canvas; const ray = camera.getPickRay(new C.Cartesian2(cv.clientWidth/2, cv.clientHeight*0.55)); const hit = ray && scene.globe.pick(ray, scene); if(hit){ const hc = C.Cartographic.fromCartesian(hit); const dl = Math.hypot((hc.latitude*180/Math.PI-lat0)*111000, (hc.longitude*180/Math.PI-lon0)*88000); if(dl < 80000){ lon0 = hc.longitude*180/Math.PI; lat0 = hc.latitude*180/Math.PI; } } }catch(e){}
+    const R = Math.max(3000, Math.min(60000, cc.height * 4.5));
+    const key = ks.join(',') + '|' + lon0.toFixed(3) + ',' + lat0.toFixed(3) + '|' + Math.round(R/500);
+    if(!force && key === S.lastKey) return; S.lastKey = key;
+    const dLat = R/111000, dLon = R/(111000*Math.cos(lat0*Math.PI/180)); const cand = [];
+    for(const k of ks){ const g = S.grid[k], cams = S.data[k].cams; if(!g) continue;
+      for(let x = Math.floor((lon0-dLon)*10); x <= Math.floor((lon0+dLon)*10); x++) for(let y = Math.floor((lat0-dLat)*10); y <= Math.floor((lat0+dLat)*10); y++){ const a = g.get(x + ':' + y); if(!a) continue;
+        for(const i of a){ const c = cams[i]; const dy = (c[1]-lat0)*111000, dx = (c[0]-lon0)*111000*Math.cos(lat0*Math.PI/180); const dd = dx*dx + dy*dy; if(dd <= R*R) cand.push([dd, k, i]); } } }
+    cand.sort((p, q)=>p[0]-q[0]); const keep = cand.slice(0, MAX_BB); const want = {}; for(const k of ks) want[k] = new Set();
+    for(const [, k, i] of keep) want[k].add(i);
+    // 현재 열린 영상의 마커는 유지
+    if(S.cur && S.act[S.cur.k]) want[S.cur.k].add(S.cur.i);
+    let added = 0, removed = 0;
+    for(const k of ks){ const m = S.bbs[k]; if(!m) continue;
+      for(const [i, b] of m){ if(!want[k].has(i)){ S.bc.remove(b); m.delete(i); removed++; } }
+      for(const i of want[k]){ if(m.has(i)) continue; const c = S.data[k].cams[i]; const h = scene.globe.getHeight(C.Cartographic.fromDegrees(c[0], c[1]));
+        const b = S.bc.add({ position: C.Cartesian3.fromDegrees(c[0], c[1], (h!==undefined && isFinite(h)) ? h + 6 : 30), image: S.img[k], width: 28, height: 28, scaleByDistance: NFS, disableDepthTestDistance: Number.POSITIVE_INFINITY, verticalOrigin: C.VerticalOrigin.CENTER, id: { cv57:true, k, i } });
+        b._lon = c[0]; b._lat = c[1]; b._h = (h!==undefined && isFinite(h)); m.set(i, b); added++; } }
+    S.stat = { shown: S.bc.length, cand: cand.length, R: Math.round(R), added, removed };
+  }
+  // 아직 지형 높이를 못 받은 마커만 다시 맞춤 (현재 그려진 수백 개만 대상)
+  function fixHeights(){ if(!S.bc || STATE.mode!=='site') return; for(const k in S.bbs){ const m = S.bbs[k]; if(!m) continue; for(const b of m.values()){ if(b._h) continue; const h = scene.globe.getHeight(C.Cartographic.fromDegrees(b._lon, b._lat)); if(h!==undefined && isFinite(h)){ b.position = C.Cartesian3.fromDegrees(b._lon, b._lat, h + 6); b._h = true; } } } }
+  setInterval(fixHeights, 2000);
+  camera.moveEnd.addEventListener(()=>cull());
+  setInterval(()=>cull(), 1200);
 
   // ---- 플레이어 패널 ----
   const P = document.createElement('div'); P.id='cvPanel'; P.className='panel';
@@ -8643,7 +8671,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   }
   function closePlayer(){ stopVideo(); S.cur = null; P.classList.remove('open'); }
   function renderNear(k, i){ const box = $c('#cvNear'); const c0 = (S.data[k]||{}).cams[i]; if(!c0){ box.innerHTML=''; return; }
-    const list = []; for(const kk in S.bbs){ if(!S.bbs[kk]) continue; const cams = S.data[kk].cams; for(let j=0;j<cams.length;j++){ if(kk===k && j===i) continue; const c = cams[j]; const dy = (c[1]-c0[1])*111000, dx = (c[0]-c0[0])*111000*Math.cos(c0[1]*Math.PI/180); const dd = dx*dx+dy*dy; if(dd < 25e6) list.push([dd, kk, j]); } }
+    const list = []; for(const kk in S.act){ if(!S.act[kk] || !S.data[kk]) continue; const cams = S.data[kk].cams; for(let j=0;j<cams.length;j++){ if(kk===k && j===i) continue; const c = cams[j]; const dy = (c[1]-c0[1])*111000, dx = (c[0]-c0[0])*111000*Math.cos(c0[1]*Math.PI/180); const dd = dx*dx+dy*dy; if(dd < 25e6) list.push([dd, kk, j]); } }
     list.sort((a,b)=>a[0]-b[0]); const top = list.slice(0, 6);
     box.innerHTML = top.length ? top.map(([dd, kk, j])=>'<button data-k="'+kk+'" data-i="'+j+'"><i style="background:'+CATS[kk].color+'"></i><span>'+S.data[kk].cams[j][2]+'</span><em>'+(Math.sqrt(dd)>=1000 ? (Math.sqrt(dd)/1000).toFixed(1)+' km' : Math.round(Math.sqrt(dd))+' m')+'</em></button>').join('') : '<div class="hint" style="margin:0">5 km 안에 켜진 CCTV가 없습니다</div>';
     box.querySelectorAll('button').forEach(b=>b.onclick = ()=>openCam(b.dataset.k, +b.dataset.i)); }
@@ -8664,7 +8692,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     if(CATS[id]){ const want = force !== undefined ? force : !STATE.on.has(id);
       if(want && STATE.mode !== 'site'){ toast('CCTV는 SITE 모드에서 사용합니다', 2000); return; }
       if(want){ STATE.on.add(id); try{ renderCats(); renderSub(); }catch(e){} await show(id); }
-      else { STATE.on.delete(id); hide(id); if(!Object.values(S.bbs).some(Boolean)){ TIP.style.display='none'; } }
+      else { STATE.on.delete(id); hide(id); if(!Object.values(S.act).some(Boolean)){ TIP.style.display='none'; } }
       try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
     return _t57.apply(this, arguments);
   };
