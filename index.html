@@ -8778,13 +8778,13 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
    - 영상 창의 [3D에 앵글 표시]: 실시간 영상을 CCTV 앵글(위치·높이·방향·기울기·화각)대로 도로 바닥(+140 m 앞 수직 벽)에 투영 → 영상 속 중앙선이 실제 중앙선 위에 놓임 (59.3) · OSM 경원대로 중앙선 투영으로 자세 검증(오차 약 5 px)
    - [CCTV 시점으로 보기]: 3D 카메라를 CCTV와 같은 위치·방향·화각으로 옮기고 실시간 영상을 반투명으로 겹쳐 비교 (투명도 조절)
    - 자세(위치·높이·방향·기울기·화각)는 영상 프레임과 3D 모델 렌더를 50% 겹쳐 맞춘 추정값 (DERIVED · 오차 약 ±5 m, ±3°)
-   - 승기사거리(인천교통정보센터 L213): 목록 좌표(교차로 남동쪽)에서 서쪽 20 m·남쪽 5 m 도로 위 신호 암, 지면 +12 m, 방향 352°, 아래로 14°, 수평 화각 52°
+   - 승기사거리(인천교통정보센터 L213): 교차로 북쪽 신호 암(37.450786, 126.689935), 지면 +12 m, 방향 352°, 아래로 15°, 수평 화각 52° · 59.4: 투영 영상의 횡단보도·정지선을 3D 모델 횡단보도에 맞춰 북쪽으로 약 35 m 이동 보정
 ---------------------------------------------------------------------------------------------- */
 (function(){
   if(window.__CV59 || !window.__CV57) return;
   const C = Cesium, CV = window.__CV57, S = CV.S;
   const POSE = {
-    'https://cctv.fitic.go.kr/cctv/L213.stream/playlist.m3u8': { name:'승기사거리', lon:126.689930, lat:37.450475, h:12, hd:352, pt:-15, fov:52, aspect:16/9, note:'영상-3D 모델 겹쳐보기 보정 · 신호 암(도로 위) 설치로 추정' },
+    'https://cctv.fitic.go.kr/cctv/L213.stream/playlist.m3u8': { name:'승기사거리', lon:126.689935, lat:37.450786, h:12, hd:352, pt:-15, fov:52, aspect:16/9, note:'영상-3D 모델 겹쳐보기 + 투영 횡단보도·정지선 일치 보정 · 교차로 북쪽 신호 암 설치로 추정' },
   };
   const COL = C.Color.fromCssColorString('#FF9F1C');
   const D = 26;  // 영상 스크린까지 거리(m)
@@ -8883,7 +8883,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     camera.setView({ destination:o.view.pos, orientation:{ heading:o.view.hd, pitch:o.view.pt, roll:o.view.rl } }); }
   window.addEventListener('keydown', e=>{ if(e.key==='Escape' && st.pov) exitPov(); });
   sync();
-  window.__CV59 = { version:'59.3', POSE, show3d, clear3d, enterPov, exitPov, st };
+  window.__CV59 = { version:'59.4', POSE, show3d, clear3d, enterPov, exitPov, st };
 })();
 </script>
 </body>
