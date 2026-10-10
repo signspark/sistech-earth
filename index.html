@@ -8775,7 +8775,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
 </style>
 <script>
 /* ---------- 59. CCTV › 3D 앵글 표시 · CCTV 시점 보기 (2026-10-10 · 샘플: 승기사거리) ----------
-   - 영상 창의 [3D에 앵글 표시]: 실제 설치 위치에 폴 + 카메라 몸체 + 시야 사각뿔(화각) + 영상 스크린(시야 방향에 수직, 앵글대로 기울임) + 지면 촬영 범위
+   - 영상 창의 [3D에 앵글 표시]: CCTV 시야 방향에 수직·앵글대로 기울인 영상 스크린(140%) + 라벨만 표시 (59.2: 폴·카메라 몸체·시야선·지면 범위 제거)
    - [CCTV 시점으로 보기]: 3D 카메라를 CCTV와 같은 위치·방향·화각으로 옮기고 실시간 영상을 반투명으로 겹쳐 비교 (투명도 조절)
    - 자세(위치·높이·방향·기울기·화각)는 영상 프레임과 3D 모델 렌더를 50% 겹쳐 맞춘 추정값 (DERIVED · 오차 약 ±5 m, ±3°)
    - 승기사거리(인천교통정보센터 L213): 목록 좌표(교차로 남동쪽)에서 서쪽 20 m·남쪽 5 m 도로 위 신호 암, 지면 +12 m, 방향 352°, 아래로 14°, 수평 화각 52°
@@ -8788,6 +8788,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   };
   const COL = C.Color.fromCssColorString('#FF9F1C');
   const D = 26;  // 영상 스크린까지 거리(m)
+  const SC = 1.4; // 스크린 크기 배율 (59.2: 140%)
   const st = { ds:null, key:null, pov:null };
 
   // ---- 버튼 ----
@@ -8826,26 +8827,13 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     const p = POSE[k]; clear3d(); st.key = k; const g = await ground(p); p.g = g;
     const A = axes(p, g); const ds = st.ds = new C.CustomDataSource('cctv3d'); viewer.dataSources.add(ds);
     const tH = Math.tan(C.Math.toRadians(p.fov/2)), tV = tH / (p.aspect || 16/9);
-    // 폴(지면→카메라) + 카메라 몸체
-    const foot = C.Cartesian3.fromDegrees(p.lon, p.lat, g);
-    ds.entities.add({ polyline:{ positions:[foot, A.pos], width:6, material:C.Color.fromCssColorString('#C9D3E0') } });
-    ds.entities.add({ position: add(A.pos, A.f, 0.35), orientation: A.q, box:{ dimensions:new C.Cartesian3(1.1, 0.42, 0.42), material:C.Color.fromCssColorString('#F2F5F9'), outline:true, outlineColor:C.Color.fromCssColorString('#30394A') } });
-    ds.entities.add({ position: add(A.pos, A.f, 0.95), orientation: A.q, box:{ dimensions:new C.Cartesian3(0.12, 0.3, 0.3), material:C.Color.fromCssColorString('#10161F') } });
-    // 시야 사각뿔 + 스크린(영상)
-    const cen = add(A.pos, A.f, D); const corner = (sx, sy)=> add(add(cen, A.r, sx*D*tH), A.u, sy*D*tV);
-    const cs = [corner(-1,1), corner(1,1), corner(1,-1), corner(-1,-1)];
-    for(const c of cs) ds.entities.add({ polyline:{ positions:[A.pos, c], width:1.6, material:COL.withAlpha(.95) } });
-    ds.entities.add({ polyline:{ positions:[...cs, cs[0]], width:2.5, material:COL } });
+    // 영상 스크린: 시야 방향으로 D m 앞, 시야에 수직·앵글대로 기울임, 화각 크기의 140%
+    const cen = add(A.pos, A.f, D);
     const v = document.getElementById('cvV');
-    const scr = ds.entities.add({ position: cen, orientation: A.q, plane:{ plane:new C.Plane(C.Cartesian3.UNIT_X, 0), dimensions:new C.Cartesian2(2*D*tH, 2*D*tV), material: COL.withAlpha(.25) } });
+    const scr = ds.entities.add({ position: cen, orientation: A.q, plane:{ plane:new C.Plane(C.Cartesian3.UNIT_X, 0), dimensions:new C.Cartesian2(2*D*tH*SC, 2*D*tV*SC), material: C.Color.fromCssColorString('#03122A').withAlpha(.6) } });
     const setTex = ()=>{ if(v && v.readyState >= 2 && v.videoWidth){ scr.plane.material = new C.ImageMaterialProperty({ image: v, repeat: new C.Cartesian2(-1, 1) }); return true; } return false; };
     if(!setTex()){ const t = setInterval(()=>{ if(!st.ds || setTex()) clearInterval(t); }, 700); }
-    // 지면 촬영 범위: 시야 모서리 광선이 지면(g)에 닿는 점 · 수평선 위로 향하면 220 m에서 자름
-    const hit = (sx, sy)=>{ const d = C.Cartesian3.normalize(add(add(A.f, A.r, sx*tH), A.u, sy*tV), new C.Cartesian3()); const pc = C.Cartographic.fromCartesian(add(A.pos, d, 1)); const dz = pc.height - (g + p.h); const t = dz < -1e-4 ? Math.min(220, p.h / -dz) : 220; const q = C.Cartographic.fromCartesian(add(A.pos, d, t)); return C.Cartesian3.fromRadians(q.longitude, q.latitude, g + 0.3); };
-    const fp = [hit(-1,-1), hit(1,-1), hit(1,1), hit(-1,1)];
-    ds.entities.add({ polygon:{ hierarchy: fp, material: COL.withAlpha(.22), classificationType: C.ClassificationType.BOTH } });
-    ds.entities.add({ polyline:{ positions:[...fp, fp[0]], width:2, material: COL.withAlpha(.8), clampToGround:true } });
-    ds.entities.add({ position: add(cen, A.u, D*tV + 2.5), label:{ text: p.name + ' CCTV\n방향 ' + p.hd + '° · 아래로 ' + (-p.pt) + '° · 화각 ' + p.fov + '° · 높이 ' + p.h + ' m', font:'700 13px ' + getComputedStyle(document.body).fontFamily, fillColor:C.Color.WHITE, outlineColor:C.Color.fromCssColorString('#03122A'), outlineWidth:4, style:C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin:C.VerticalOrigin.BOTTOM, disableDepthTestDistance:Number.POSITIVE_INFINITY, scaleByDistance:new C.NearFarScalar(80, 1, 1500, .5) } });
+    ds.entities.add({ position: add(cen, A.u, D*tV*SC + 2.5), label:{ text: p.name + ' CCTV\n방향 ' + p.hd + '° · 아래로 ' + (-p.pt) + '° · 화각 ' + p.fov + '° · 높이 ' + p.h + ' m', font:'700 13px ' + getComputedStyle(document.body).fontFamily, fillColor:C.Color.WHITE, outlineColor:C.Color.fromCssColorString('#03122A'), outlineWidth:4, style:C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin:C.VerticalOrigin.BOTTOM, disableDepthTestDistance:Number.POSITIVE_INFINITY, scaleByDistance:new C.NearFarScalar(80, 1, 1500, .5) } });
     // 뒤쪽 위에서 내려다보는 시점으로 이동
     const back = C.Math.toRadians(p.hd + 200), dist = 85; const lat = p.lat + dist*Math.cos(back)/111000, lon = p.lon + dist*Math.sin(back)/(111000*Math.cos(p.lat*Math.PI/180));
     camera.flyTo({ destination: C.Cartesian3.fromDegrees(lon, lat, g + 62), orientation:{ heading: C.Math.toRadians(p.hd + 20), pitch: C.Math.toRadians(-28), roll:0 }, duration:1.8 });
@@ -8880,7 +8868,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     camera.setView({ destination:o.view.pos, orientation:{ heading:o.view.hd, pitch:o.view.pt, roll:o.view.rl } }); }
   window.addEventListener('keydown', e=>{ if(e.key==='Escape' && st.pov) exitPov(); });
   sync();
-  window.__CV59 = { version:'59.1', POSE, show3d, clear3d, enterPov, exitPov, st };
+  window.__CV59 = { version:'59.2', POSE, show3d, clear3d, enterPov, exitPov, st };
 })();
 </script>
 </body>
