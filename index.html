@@ -8516,5 +8516,162 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   window.__AC56 = { version:'56.1', closeOthers };
 })();
 </script>
+<style>
+#cvPanel{position:fixed;right:14px;top:72px;width:390px;max-height:calc(100vh - 150px);z-index:26;display:none;flex-direction:column;overflow:hidden;font-size:13px}
+#cvPanel.open{display:flex}
+#cvPanel .hd{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
+#cvPanel .hd .dot{width:11px;height:11px;border-radius:50%;flex:none;box-shadow:0 0 0 2px rgba(255,255,255,.25)}
+#cvPanel .hd h2{margin:0;font-size:14.5px;flex:1;line-height:1.3}#cvPanel .hd h2 small{display:block;font-weight:400;color:var(--text-dim);font-size:11.5px;margin-top:2px}
+#cvPanel .hd button{color:var(--text-dim);font-size:18px}
+#cvPanel .bd{overflow:auto;padding:10px 12px 12px}
+#cvPanel .vw{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden}
+#cvPanel video{width:100%;height:100%;object-fit:contain;background:#000}
+#cvPanel .st{position:absolute;left:0;right:0;bottom:0;padding:6px 9px;font-size:11.5px;background:linear-gradient(transparent,rgba(0,0,0,.75));color:#fff}
+#cvPanel .msg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:16px;color:#ddd;font-size:12.5px;line-height:1.5}
+#cvPanel .row{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+#cvPanel .row button{flex:1;padding:7px 6px;border-radius:8px;border:1px solid var(--line);color:var(--text);background:rgba(255,255,255,.03);font-size:12px}
+#cvPanel .row button:hover{border-color:var(--lime)}
+#cvPanel h3{margin:12px 0 6px;font-size:12px;color:var(--lime-bright);font-weight:700}
+#cvPanel .near button{display:flex;width:100%;text-align:left;gap:8px;align-items:center;padding:6px 8px;border-radius:7px;color:var(--text);font-size:12px;border:1px solid transparent}
+#cvPanel .near button:hover{border-color:var(--line);background:rgba(255,255,255,.04)}
+#cvPanel .near i{width:8px;height:8px;border-radius:50%;flex:none}
+#cvPanel .near span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#cvPanel .near em{font-style:normal;color:var(--text-dim);font-size:11px}
+#cvPanel .hint{margin-top:8px;color:var(--text-dim);font-size:11px;line-height:1.45}
+#cvTip{position:fixed;z-index:40;pointer-events:none;display:none;padding:5px 8px;border-radius:7px;background:rgba(12,20,36,.92);color:#fff;font-size:12px;line-height:1.35;border:1px solid rgba(255,255,255,.15);white-space:nowrap}
+#cvTip small{color:#aab;display:block;font-size:11px}
+@media (max-width:700px){#cvPanel{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:60vh}}
+</style>
+<script>
+/* ---------- 57. SITE › CCTV (대분류 신설) · 교통(UTIC·ITS) / 하천·홍수·바다·재난침수 / 국립공원 등 · 색상별 마커 · 누르면 실시간 영상 (2026-10-10) ----------
+   - 교통 (주황): 경찰청 UTIC 공개 목록 기준 · 국가교통정보센터 ITS 국도·고속도로 + 지자체 교통정보센터 29곳 · 공개 HLS 스트림 (cctv/traffic.json)
+   - 하천·홍수·바다·재난침수 (파랑): 한강·낙동강·금강·영산강 홍수통제소 + 부산 재난안전(도시침수·해안) (cctv/water.json)
+   - 국립공원 등 (초록): 국립공원공단 실시간 영상 17곳 (위치는 근사 · 공단 점검 중이면 영상 없음)
+   - 기존 분석 › 공개 CCTV(방향 추정) · 실시간 CCTV 영상(UTIC 9곳)은 이 메뉴로 대체되어 분석 메뉴에서 뺌
+   - 마커: 화면 근처(약 40 km) 마커는 지형 높이에 맞춰 올림 · 3D 모델 위에서도 가리지 않게 표시
+---------------------------------------------------------------------------------------------- */
+(function(){
+  if(window.__CV57) return;
+  const C = Cesium;
+  const VER = '57.1', DATA_V = '20261010a';
+  const CATS = {
+    cctvT: { key:'cctvT', name:'교통', color:'#FF9F1C', file:'cctv/traffic.json' },
+    cctvW: { key:'cctvW', name:'하천·홍수·바다·재난침수', color:'#2F9BFF', file:'cctv/water.json' },
+    cctvP: { key:'cctvP', name:'국립공원 등', color:'#2ECC71', data: {"srcs":[{"k":"knps","c":"국립공원공단","p":"https://live.knps.or.kr/cctv/hls/","s":".m3u8"}],"cams":[[126.9779,37.6588,"북한산국립공원 백운대",0,"gangbuk"],[128.4639,36.9456,"소백산국립공원 연화봉",0,"sobak"],[127.7413,35.8635,"덕유산국립공원 설천봉",0,"zsulchun"],[126.1993,36.8946,"태안해안국립공원 학암포",0,"hakampo"],[126.4597,35.6955,"변산반도국립공원 죽막탐방로",0,"jukmak"],[127.7179,35.333,"지리산국립공원 장터목",0,"zjangteo"],[127.7306,35.3369,"지리산국립공원 천왕봉",0,"jirisan"],[128.4878,38.1903,"설악산국립공원 울산바위",0,"solak"],[128.583,37.811,"오대산국립공원 두로령",0,"zduro"],[128.9153,37.095,"태백산국립공원 천제단",0,"zchunje"],[129.159,36.3936,"주왕산국립공원 기암",0,"zjulje"],[128.056,34.932,"한려해상국립공원 각산",0,"gaksan"],[126.004,34.295,"다도해해상국립공원 지리청송해변(조도)",0,"jodo"],[127.0062,37.7175,"북한산국립공원 사패산",0,"sapesan"],[126.9863,35.1268,"무등산국립공원 장불재",0,"jangbuljai"],[127.2069,36.3407,"계룡산국립공원 천황봉",0,"sinsungbong"],[128.0661,37.3044,"치악산국립공원 상원사",0,"sangwonsa"]]} },
+  };
+  const ICON = '<svg viewBox="0 0 24 24"><path d="M2.5 8.6 15.4 5.2l1.7 6L4.2 14.6z"/><path d="M17.2 8.3l3.8-.9v4.4l-3.2.2"/><path d="M7.4 13.6l1 3.6H4.2V21"/><circle cx="6.3" cy="10.4" r=".6"/></svg>';
+  const cat = { id:'cctv_cat', name:'CCTV', icon:ICON, items:[
+    { id:'cctvT', q:'지금 도로·교차로는 어떤가', name:'교통 CCTV · 경찰청 UTIC + 국가교통정보센터 ITS', src:'주황 마커 · 국도·고속도로(ITS) + 지자체 교통정보센터 29곳 · 약 1만 3천 대 · 마커를 누르면 실시간 영상', type:'layer' },
+    { id:'cctvW', q:'강물·바다·침수 현장은 지금', name:'하천·홍수·바다·재난침수 CCTV', src:'파랑 마커 · 한강·낙동강·금강·영산강 홍수통제소 + 부산 재난안전(도시침수·해안) · 약 500대', type:'layer' },
+    { id:'cctvP', q:'산 정상·해상공원 날씨는 지금', name:'국립공원 등 CCTV', src:'초록 마커 · 국립공원공단 실시간 영상 17곳(정상·해안) · 공단 점검 중이면 영상 없음', type:'layer' } ]};
+  // 분석 메뉴의 기존 CCTV 2개 제거(대체)
+  try{ const an = MENUS.site.find(c=>c.id==='analysis'); if(an){ for(const id of ['cctv','lcctv']){ if(STATE.on.has(id)) try{ toggleLayer(id, false); }catch(e){} } an.items = an.items.filter(i=>i.id!=='cctv' && i.id!=='lcctv'); } }catch(e){}
+  if(!MENUS.site.some(c=>c.id==='cctv_cat')){ const ai = MENUS.site.findIndex(c=>c.id==='analysis'); MENUS.site.splice(ai<0 ? MENUS.site.length : ai+1, 0, cat); }
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  // ---- 아이콘(색상별) ----
+  function iconCanvas(color){ const s=44, c=document.createElement('canvas'); c.width=c.height=s; const g=c.getContext('2d');
+    g.beginPath(); g.arc(s/2,s/2,s/2-3,0,Math.PI*2); g.fillStyle=color; g.fill(); g.lineWidth=3; g.strokeStyle='#fff'; g.stroke();
+    g.save(); g.translate(s/2,s/2); g.fillStyle='#fff'; g.rotate(-0.26); g.fillRect(-11,-6,17,9); g.beginPath(); g.moveTo(6,-4); g.lineTo(12,-7); g.lineTo(12,4); g.lineTo(6,2); g.closePath(); g.fill(); g.restore();
+    g.fillStyle='#fff'; g.fillRect(s/2-5,s/2+3,3,8); g.fillRect(s/2-9,s/2+9,9,3); return c; }
+
+  // ---- 상태 ----
+  const S = { bc:null, data:{}, bbs:{}, loading:{}, cur:null, hls:null };
+  function ensureBC(){ if(!S.bc){ S.bc = new C.BillboardCollection(); scene.primitives.add(S.bc); } return S.bc; }
+  async function loadData(k){ const def = CATS[k]; if(S.data[k]) return S.data[k]; if(def.data) return (S.data[k] = def.data);
+    if(S.loading[k]) return S.loading[k];
+    S.loading[k] = fetch(def.file + '?v=' + DATA_V).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }).then(d=>{ S.data[k]=d; return d; }).finally(()=>{ S.loading[k]=null; });
+    return S.loading[k]; }
+  const NFS = new C.NearFarScalar(800, 0.9, 250000, 0.28);
+  const TBD = new C.NearFarScalar(150000, 1.0, 900000, 0.35);
+  async function show(k){
+    const def = CATS[k]; let d;
+    if(k!=='cctvP' && !S.data[k]) try{ toast(def.name + ' CCTV 목록 불러오는 중…', 1500); }catch(e){}
+    try{ d = await loadData(k); }catch(e){ toast(def.name + ' CCTV 목록을 불러오지 못했습니다 (' + e.message + ')', 3000); STATE.on.delete(k); try{ renderCats(); renderSub(); }catch(_){} return; }
+    if(!STATE.on.has(k)) return;
+    hide(k); const bc = ensureBC(); const img = iconCanvas(def.color); const arr = [];
+    d.cams.forEach((c, i)=>{ const b = bc.add({ position: C.Cartesian3.fromDegrees(c[0], c[1], 30), image: img, width: 28, height: 28, scaleByDistance: NFS, translucencyByDistance: TBD, disableDepthTestDistance: Number.POSITIVE_INFINITY, verticalOrigin: C.VerticalOrigin.CENTER, id: { cv57:true, k, i } }); b._lon=c[0]; b._lat=c[1]; b._h=false; arr.push(b); });
+    S.bbs[k] = arr; fixHeights(true);
+    try{ toast(def.name + ' CCTV ' + d.cams.length.toLocaleString() + '대 표시 · 마커를 누르면 실시간 영상', 2200); }catch(e){}
+  }
+  function hide(k){ const arr = S.bbs[k]; if(arr && S.bc){ for(const b of arr) S.bc.remove(b); } S.bbs[k] = null; if(S.cur && S.cur.k===k) closePlayer(); }
+  // 화면 근처 마커는 지형 높이로 올림
+  function fixHeights(){ if(!S.bc || STATE.mode!=='site') return; const cc = camera.positionCartographic; if(!cc) return; const lat0 = cc.latitude*180/Math.PI, lon0 = cc.longitude*180/Math.PI; const rng = Math.min(0.45, Math.max(0.08, cc.height/111000*3));
+    let n = 0; for(const k in S.bbs){ const arr = S.bbs[k]; if(!arr) continue; for(const b of arr){ if(b._h) continue; if(Math.abs(b._lat-lat0)>rng || Math.abs(b._lon-lon0)>rng*1.25) continue; const h = scene.globe.getHeight(C.Cartographic.fromDegrees(b._lon, b._lat)); if(h!==undefined && isFinite(h)){ b.position = C.Cartesian3.fromDegrees(b._lon, b._lat, h + 6); b._h = true; if(++n > 3000) return; } } } }
+  setInterval(fixHeights, 1500);
+
+  // ---- 플레이어 패널 ----
+  const P = document.createElement('div'); P.id='cvPanel'; P.className='panel';
+  P.innerHTML = '<div class="hd"><span class="dot" id="cvDot"></span><h2><span id="cvName"></span><small id="cvSrc"></small></h2><button id="cvX" title="닫기">✕</button></div>'
+   + '<div class="bd"><div class="vw"><video id="cvV" muted playsinline autoplay controls></video><div class="msg" id="cvMsg"></div><div class="st" id="cvSt">불러오는 중…</div></div>'
+   + '<div class="row"><button id="cvFly">이 위치로 이동</button><button id="cvRe">다시 연결</button><button id="cvOpen">새 창으로</button></div>'
+   + '<h3>가까운 CCTV</h3><div class="near" id="cvNear"></div>'
+   + '<div class="hint" id="cvHint"></div></div>';
+  document.body.appendChild(P);
+  const TIP = document.createElement('div'); TIP.id='cvTip'; document.body.appendChild(TIP);
+  const $c = s => P.querySelector(s);
+  $c('#cvX').onclick = closePlayer;
+  $c('#cvRe').onclick = ()=>{ if(S.cur) openCam(S.cur.k, S.cur.i, true); };
+  $c('#cvFly').onclick = ()=>{ if(!S.cur) return; const c = S.data[S.cur.k].cams[S.cur.i]; const h = Math.max(450, Math.min(1500, camera.positionCartographic.height)); camera.flyTo({ destination: C.Cartesian3.fromDegrees(c[0], c[1] - h/111000*0.9, h), orientation:{ heading:0, pitch:C.Math.toRadians(-42), roll:0 }, duration:1.6 }); };
+  $c('#cvOpen').onclick = ()=>{ if(!S.cur) return; window.open(urlOf(S.cur.k, S.cur.i), '_blank'); };
+  function urlOf(k, i){ const d = S.data[k], c = d.cams[i], s = d.srcs[c[3]]; return s.p + c[4] + s.s; }
+  function srcLabel(k, i){ const d = S.data[k], s = d.srcs[d.cams[i][3]]; return s.c; }
+  function loadHls(){ if(window.Hls) return Promise.resolve(); if(S.hlsP) return S.hlsP; S.hlsP = new Promise((res, rej)=>{ const sc = document.createElement('script'); sc.src='https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js'; sc.onload=res; sc.onerror=()=>{ S.hlsP=null; rej(new Error('hls.js')); }; document.head.appendChild(sc); }); return S.hlsP; }
+  function stopVideo(){ try{ if(S.hls){ S.hls.destroy(); } }catch(e){} S.hls = null; const v = $c('#cvV'); try{ v.pause(); v.removeAttribute('src'); v.load(); }catch(e){} clearTimeout(S.to); }
+  function setMsg(t){ const m = $c('#cvMsg'); if(t){ m.innerHTML = t; m.style.display='flex'; } else m.style.display='none'; }
+  async function openCam(k, i, retry){
+    const d = S.data[k]; if(!d) return; const c = d.cams[i]; const def = CATS[k];
+    S.cur = { k, i }; P.classList.add('open');
+    $c('#cvDot').style.background = def.color; $c('#cvName').textContent = c[2]; $c('#cvSrc').textContent = def.name + ' · ' + srcLabel(k, i);
+    $c('#cvSt').textContent = '연결 중…'; setMsg(''); stopVideo(); renderNear(k, i);
+    $c('#cvHint').innerHTML = (k==='cctvP' ? '국립공원공단 실시간 영상 · 위치는 근사값 · 공단 점검 중에는 영상이 나오지 않습니다' : k==='cctvW' ? '홍수통제소·지자체 재난안전 공개 스트림 · 일부 카메라는 점검·야간 등으로 꺼져 있을 수 있습니다' : '경찰청 UTIC 공개 목록 · ITS(국도·고속도로) 및 지자체 교통정보센터 공개 스트림 · 실제보다 수십 초 지연') + ' · 영상 출처: ' + srcLabel(k, i);
+    const url = urlOf(k, i); const v = $c('#cvV'); const myTok = S.tok = (S.tok||0) + 1;
+    const fail = (why)=>{ if(S.tok!==myTok) return; stopVideo(); $c('#cvSt').textContent = '영상 없음'; setMsg('지금은 이 카메라 영상을 받을 수 없습니다<br><small>' + why + ' · 기관 점검 중이거나 카메라가 꺼져 있을 수 있어요</small>'); };
+    S.to = setTimeout(()=>fail('응답 시간 초과(15초)'), 15000);
+    const ok = ()=>{ if(S.tok!==myTok) return; clearTimeout(S.to); setMsg(''); $c('#cvSt').textContent = '● 실시간 · ' + (v.videoWidth ? v.videoWidth + '×' + v.videoHeight : ''); };
+    v.onplaying = ok; v.onloadeddata = ok;
+    try{
+      if(v.canPlayType('application/vnd.apple.mpegurl') && !window.MediaSource){ v.src = url; v.play().catch(()=>{}); v.onerror = ()=>fail('재생 오류'); return; }
+      await loadHls(); if(S.tok!==myTok) return;
+      if(!Hls.isSupported()){ v.src = url; v.play().catch(()=>{}); return; }
+      const h = new Hls({ lowLatencyMode:false, manifestLoadingTimeOut:12000, manifestLoadingMaxRetry:1, levelLoadingMaxRetry:2 }); S.hls = h;
+      h.on(Hls.Events.ERROR, (e, data)=>{ if(data && data.fatal){ const code = data.response && data.response.code; fail(code ? 'HTTP ' + code : (data.details || '네트워크 오류')); } });
+      h.on(Hls.Events.MANIFEST_PARSED, ()=>{ v.play().catch(()=>{}); });
+      h.loadSource(url); h.attachMedia(v);
+    }catch(e){ fail(e.message || '재생기 로드 실패'); }
+  }
+  function closePlayer(){ stopVideo(); S.cur = null; P.classList.remove('open'); }
+  function renderNear(k, i){ const box = $c('#cvNear'); const c0 = (S.data[k]||{}).cams[i]; if(!c0){ box.innerHTML=''; return; }
+    const list = []; for(const kk in S.bbs){ if(!S.bbs[kk]) continue; const cams = S.data[kk].cams; for(let j=0;j<cams.length;j++){ if(kk===k && j===i) continue; const c = cams[j]; const dy = (c[1]-c0[1])*111000, dx = (c[0]-c0[0])*111000*Math.cos(c0[1]*Math.PI/180); const dd = dx*dx+dy*dy; if(dd < 25e6) list.push([dd, kk, j]); } }
+    list.sort((a,b)=>a[0]-b[0]); const top = list.slice(0, 6);
+    box.innerHTML = top.length ? top.map(([dd, kk, j])=>'<button data-k="'+kk+'" data-i="'+j+'"><i style="background:'+CATS[kk].color+'"></i><span>'+S.data[kk].cams[j][2]+'</span><em>'+(Math.sqrt(dd)>=1000 ? (Math.sqrt(dd)/1000).toFixed(1)+' km' : Math.round(Math.sqrt(dd))+' m')+'</em></button>').join('') : '<div class="hint" style="margin:0">5 km 안에 켜진 CCTV가 없습니다</div>';
+    box.querySelectorAll('button').forEach(b=>b.onclick = ()=>openCam(b.dataset.k, +b.dataset.i)); }
+
+  // ---- 클릭 · 마우스 오버 ----
+  const SH = new C.ScreenSpaceEventHandler(scene.canvas);
+  function pickCv(pos){ try{ const arr = scene.drillPick(pos, 3); for(const p of arr){ if(p && p.id && p.id.cv57) return p.id; } }catch(e){} return null; }
+  SH.setInputAction(ev=>{ if(!S.bc || !S.bc.length) return; const id = pickCv(ev.position); if(id){ openCam(id.k, id.i); } }, C.ScreenSpaceEventType.LEFT_CLICK);
+  let lastMv = 0;
+  SH.setInputAction(ev=>{ const now = performance.now(); if(now - lastMv < 90) return; lastMv = now; if(!S.bc || !S.bc.length){ TIP.style.display='none'; return; }
+    let id = null; try{ const p = scene.pick(ev.endPosition); if(p && p.id && p.id.cv57) id = p.id; }catch(e){}
+    if(id){ const c = S.data[id.k].cams[id.i]; TIP.innerHTML = c[2] + '<small>' + CATS[id.k].name + ' · ' + srcLabel(id.k, id.i) + ' · 눌러서 영상 보기</small>'; const r = scene.canvas.getBoundingClientRect(); TIP.style.left = (r.left + ev.endPosition.x + 14) + 'px'; TIP.style.top = (r.top + ev.endPosition.y + 12) + 'px'; TIP.style.display = 'block'; scene.canvas.style.cursor = 'pointer'; S.tipOn = true; }
+    else if(S.tipOn){ TIP.style.display = 'none'; scene.canvas.style.cursor = ''; S.tipOn = false; } }, C.ScreenSpaceEventType.MOUSE_MOVE);
+
+  // ---- 레이어 토글 ----
+  const _t57 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(CATS[id]){ const want = force !== undefined ? force : !STATE.on.has(id);
+      if(want && STATE.mode !== 'site'){ toast('CCTV는 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ STATE.on.add(id); try{ renderCats(); renderSub(); }catch(e){} await show(id); }
+      else { STATE.on.delete(id); hide(id); if(!Object.values(S.bbs).some(Boolean)){ TIP.style.display='none'; } }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
+    return _t57.apply(this, arguments);
+  };
+  // 출처 표기
+  try{ const _us57 = updateSrc; updateSrc = function(){ const r = _us57.apply(this, arguments); try{ const el = document.getElementById('hudSrc'); const on = Object.keys(CATS).filter(k=>STATE.on.has(k)); if(el && on.length && !el.innerHTML.includes('CCTV 영상')) el.innerHTML = '<b>CCTV 영상</b> ' + [on.includes('cctvT')?'경찰청 UTIC · 국가교통정보센터 ITS · 지자체 교통정보센터':'', on.includes('cctvW')?'홍수통제소 · 부산 재난안전':'', on.includes('cctvP')?'국립공원공단':''].filter(Boolean).join(' · ') + ' · ' + el.innerHTML; }catch(e){} return r; }; }catch(e){}
+  // 주소(#on=)로 켜진 상태 복원
+  for(const k of Object.keys(CATS)){ if(STATE.on.has(k)){ if(STATE.mode==='site') show(k); else STATE.on.delete(k); } }
+  window.__CV57 = { version:VER, S, CATS, show, hide, openCam, closePlayer, urlOf };
+})();
+</script>
 </body>
 </html>
