@@ -9051,5 +9051,123 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   window.__RD61 = { version:'61.5', RD, build, clearAll };
 })();
 </script>
+<script>
+/* ---------- 60. CCTV › 인천 CCTV 앵글 자동 맞춤 (2026-10-10 · 인천교통정보센터 213대) ----------
+   승기사거리에서 사람이 한 방식(3D 모델 렌더와 실제 영상 겹쳐 맞추기)을 자동화
+   1) OSM으로 카메라 근처 교차로 중심을 찾고(없으면 목록 좌표) 그 위치 지면 +12 m에서 드론 3D 모델을 4방향(가로 90°, 아래로 22°) 렌더
+   2) 4장을 이어 붙여 방향 0~360°·기울기·화각 후보마다 가상 CCTV 화면을 합성 → 실제 영상과 비교
+      · 선 방향 점수: 차선·연석·건물 모서리의 방향 장(이중각, 흐림 2단계) 코사인 유사도
+      · 색 배치 점수: 식생·회색면·붉은/갈색·밝은면·기타 영역의 배치(48×27) 상관 — 교차로의 어느 갈래인지 구분
+   3) 방향별 상위 후보를 합산 점수로 고르고 방향·기울기·화각을 세밀 조정 · 신뢰도 = 점수 × 2위와의 차이
+   검증: 승기사거리 낮 장면에서 수동값(352°/−15°/52°)을 모르는 상태로 350°/−15°/58° 찾음(신뢰도 91%, 37초)
+   결과 파일 cctv/pose_incheon.json(낮 시간 일괄 실행 결과)을 읽어 신뢰도 30% 이상인 카메라에 [3D에 앵글 표시]·[CCTV 시점으로 보기]를 켬 · 수동 보정값이 있으면 그대로 우선
+   한계: 야간·우천 장면은 색 배치가 달라 낮에 실행 · 위치는 교차로 중심 근사(±10 m) · 회전 카메라는 실행 시점 방향
+---------------------------------------------------------------------------------------------- */
+
+if(!window.__CVB) window.__CVB = (function(){
+  const C = Cesium, D2R = Math.PI/180, FW = 128, FH = 72;
+  const sleep = ms=>new Promise(r=>setTimeout(r, ms));
+  // ---- 특징: 선 방향(이중각) 장 · 흐림 r ----
+  function blurN(A, W, H, r){ let a = A; for(let k=0;k<r;k++){ const B = new Float32Array(W*H); for(let y=1;y<H-1;y++) for(let x=1;x<W-1;x++){ const i=y*W+x; B[i]=(a[i-W-1]+a[i-W]+a[i-W+1]+a[i-1]+a[i]+a[i+1]+a[i+W-1]+a[i+W]+a[i+W+1])/9; } a = B; } return a; }
+  function oriFeat(G, W, H, rs){ const vx = new Float32Array(W*H), vy = new Float32Array(W*H);
+    for(let y=1;y<H-1;y++) for(let x=1;x<W-1;x++){ const i=y*W+x; const gx=(G[i-W+1]+2*G[i+1]+G[i+W+1])-(G[i-W-1]+2*G[i-1]+G[i+W-1]); const gy=(G[i+W-1]+2*G[i+W]+G[i+W+1])-(G[i-W-1]+2*G[i-W]+G[i-W+1]); const m=Math.hypot(gx,gy); if(m<12) continue; vx[i]=(gx*gx-gy*gy)/(m*m); vy[i]=2*gx*gy/(m*m); }
+    return rs.map(r=>({ vx: blurN(vx, W, H, r), vy: blurN(vy, W, H, r) })); }
+  function grayOf(src, W, H, crop){ const c = document.createElement('canvas'); c.width=W; c.height=H; const g = c.getContext('2d', { willReadFrequently:true }); if(crop) g.drawImage(src, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, W, H); else g.drawImage(src, 0, 0, W, H); const d = g.getImageData(0,0,W,H).data; const G = new Float32Array(W*H); for(let i=0;i<W*H;i++) G[i]=.299*d[i*4]+.587*d[i*4+1]+.114*d[i*4+2]; return G; }
+  function cosm(a, b, W, H){ const y0 = Math.round(H*.09); let num=0, na=0, nb=0; for(let i=y0*W;i<W*H;i++){ num+=a.vx[i]*b.vx[i]+a.vy[i]*b.vy[i]; na+=a.vx[i]**2+a.vy[i]**2; nb+=b.vx[i]**2+b.vy[i]**2; } return num/Math.sqrt(na*nb+1e-9); }
+  // ---- 렌더 ----
+  async function waitTiles(maxMs){ const ts = PROJECTS.map(p=>p.ts).filter(Boolean); const t0 = performance.now(); let st = 0; while(performance.now()-t0 < maxMs){ await sleep(200); const ok = scene.globe.tilesLoaded && ts.every(t=>t.tilesLoaded); st = ok ? st+1 : 0; if(st >= 3) break; } }
+  async function renderView(lon, lat, alt, hd, pt, fovH, maxMs){ camera.frustum.fov = C.Math.toRadians(fovH); camera.setView({ destination: C.Cartesian3.fromDegrees(lon, lat, alt), orientation:{ heading: hd*D2R, pitch: pt*D2R, roll:0 } }); await waitTiles(maxMs||5000); scene.render(); return scene.canvas; }
+  // ---- 4방향 큐브(가로 90°, 피치 -22°) → 임의 자세 가상 영상 합성 ----
+  const FP = -22, FFOV = 90;
+  async function cube(lon, lat, alt){ const cv = scene.canvas; const W = 360, H = Math.round(360*cv.height/cv.width); const faces = [];
+    for(const hd of [0, 90, 180, 270]){ const c = await renderView(lon, lat, alt, hd, FP, FFOV, 6000); faces.push({ hd, G: grayOf(c, W, H) }); } return { W, H, faces, tH: Math.tan(FFOV/2*D2R), tV: Math.tan(FFOV/2*D2R)*H/W }; }
+  function axes(hd, pt){ const B=hd*D2R, T=pt*D2R; return { f:[Math.sin(B)*Math.cos(T), Math.cos(B)*Math.cos(T), Math.sin(T)], r:[Math.cos(B), -Math.sin(B), 0], u:[-Math.sin(B)*Math.sin(T), -Math.cos(B)*Math.sin(T), Math.cos(T)] }; }
+  const FAX = [0,90,180,270].map(h=>axes(h, FP));
+  function synth(cb, hd, pt, fov, aspect){ const W = FW, H = FH; const A = axes(hd, pt); const tH = Math.tan(fov/2*D2R), tV = tH/aspect; const out = new Float32Array(W*H);
+    for(let y=0;y<H;y++){ const v = (1 - 2*(y+.5)/H)*tV; for(let x=0;x<W;x++){ const u = (2*(x+.5)/W - 1)*tH; const d0 = A.f[0]+A.r[0]*u+A.u[0]*v, d1 = A.f[1]+A.r[1]*u+A.u[1]*v, d2 = A.f[2]+A.r[2]*u+A.u[2]*v;
+      const az = (Math.atan2(d0, d1)/D2R + 360) % 360; const fi = Math.round(az/90) % 4; const F = FAX[fi], face = cb.faces[fi];
+      const z = d0*F.f[0]+d1*F.f[1]+d2*F.f[2]; if(z <= 0){ continue; } const fx = (d0*F.r[0]+d1*F.r[1])/z/cb.tH, fy = (d0*F.u[0]+d1*F.u[1]+d2*F.u[2])/z/cb.tV;
+      const px = Math.round((fx+1)/2*(cb.W-1)), py = Math.round((1-fy)/2*(cb.H-1)); if(px<0||py<0||px>=cb.W||py>=cb.H) continue; out[y*W+x] = face.G[py*cb.W+px]; } }
+    return out; }
+  // ---- 영상 프레임 ----
+  async function grabFrame(url, timeout){ const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.crossOrigin = 'anonymous'; let h = null;
+    try{ if(!window.Hls){ await new Promise((res, rej)=>{ const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
+      h = new Hls({ manifestLoadingMaxRetry:1 }); h.loadSource(url); h.attachMedia(v); h.on(Hls.Events.MANIFEST_PARSED, ()=>v.play().catch(()=>{}));
+      const t0 = performance.now(); while(performance.now()-t0 < (timeout||15000)){ await sleep(300); if(v.readyState >= 2 && v.videoWidth && v.currentTime > .3) break; }
+      if(!(v.readyState >= 2 && v.videoWidth)) throw new Error('영상 없음');
+      await sleep(400); const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0); return c;
+    } finally { try{ h && h.destroy(); }catch(e){} try{ v.pause(); v.removeAttribute('src'); v.load(); }catch(e){} } }
+  // (교차로 중심은 estimate3에서)
+  return { grabFrame, synth, cube, oriFeat, grayOf, cosm, renderView, waitTiles };
+})();
+
+(function(){ const B = window.__CVB, C = Cesium, D2R = Math.PI/180;
+  function ax(h,p){ const b=h*D2R,t=p*D2R; return { f:[Math.sin(b)*Math.cos(t), Math.cos(b)*Math.cos(t), Math.sin(t)], r:[Math.cos(b), -Math.sin(b), 0], u:[-Math.sin(b)*Math.sin(t), -Math.cos(b)*Math.sin(t), Math.cos(t)] }; }
+  const FP = -22, FAX = [0,90,180,270].map(h=>ax(h,FP));
+  async function cubeRGB(lon, lat, alt){ const cv = scene.canvas; const W = 360, H = Math.round(360*cv.height/cv.width); const faces = [];
+    for(const hd of [0,90,180,270]){ const c = await B.renderView(lon, lat, alt, hd, FP, 90, 6000); const t = document.createElement('canvas'); t.width=W; t.height=H; const g = t.getContext('2d', { willReadFrequently:true }); g.drawImage(c, 0, 0, W, H); const d = g.getImageData(0,0,W,H).data; const G = new Float32Array(W*H); for(let i=0;i<W*H;i++) G[i]=.299*d[i*4]+.587*d[i*4+1]+.114*d[i*4+2]; faces.push({ hd, G, D:d }); }
+    return { W, H, faces, tH: Math.tan(45*D2R), tV: Math.tan(45*D2R)*H/W }; }
+  function sample(cb, hd, pt, fov, aspect, W, H, rgb){ const A = ax(hd, pt); const tH=Math.tan(fov/2*D2R), tV=tH/aspect; const out = rgb ? new Uint8ClampedArray(W*H*4) : new Float32Array(W*H);
+    for(let y=0;y<H;y++){ const v=(1-2*(y+.5)/H)*tV; for(let x=0;x<W;x++){ const u=(2*(x+.5)/W-1)*tH; const d0=A.f[0]+A.r[0]*u+A.u[0]*v, d1=A.f[1]+A.r[1]*u+A.u[1]*v, d2=A.f[2]+A.r[2]*u+A.u[2]*v; const az=(Math.atan2(d0,d1)/D2R+360)%360; const fi=Math.round(az/90)%4; const F=FAX[fi], face=cb.faces[fi]; const z=d0*F.f[0]+d1*F.f[1]+d2*F.f[2]; if(z<=0) continue; const fx=(d0*F.r[0]+d1*F.r[1])/z/cb.tH, fy=(d0*F.u[0]+d1*F.u[1]+d2*F.u[2])/z/cb.tV; const px=Math.round((fx+1)/2*(cb.W-1)), py=Math.round((1-fy)/2*(cb.H-1)); if(px<0||py<0||px>=cb.W||py>=cb.H) continue; const k=py*cb.W+px;
+      if(rgb){ const o=(y*W+x)*4; out[o]=face.D[k*4]; out[o+1]=face.D[k*4+1]; out[o+2]=face.D[k*4+2]; out[o+3]=255; } else out[y*W+x]=face.G[k]; } } return out; }
+  // 색 영역(식생·회색면·붉은/갈색·밝은면·기타) 배치 맵 48x27
+  function clsMap(d, W, H){ const K=5, w=48, h=27, M=Array.from({length:K},()=>new Float32Array(w*h)); const sx=W/w, sy=H/h;
+    for(let y=0;y<H;y++) for(let x=0;x<W;x++){ const i=(y*W+x)*4; const r=d[i]/255, g=d[i+1]/255, b=d[i+2]/255; const mx=Math.max(r,g,b), mn=Math.min(r,g,b), v=mx, s=mx?(mx-mn)/mx:0; let k;
+      if(g>=r && g>=b && s>.12) k=0; else if(s<.14 && v>.25 && v<.72) k=1; else if(r>g && g>=b && s>.18) k=2; else if(v>=.72 && s<.2) k=3; else k=4;
+      M[k][Math.min(h-1,Math.floor(y/sy))*w + Math.min(w-1,Math.floor(x/sx))] += 1; } return M; }
+  function clsSim(a, b){ const H0 = 3*48; let tot=0, ws=0; for(let k=0;k<a.length;k++){ let sa=0,sb=0,n=0; for(let i=H0;i<a[k].length;i++){ sa+=a[k][i]; sb+=b[k][i]; n++; } sa/=n; sb/=n; let q=0,qa=0,qb=0; for(let i=H0;i<a[k].length;i++){ const x=a[k][i]-sa, y=b[k][i]-sb; q+=x*y; qa+=x*x; qb+=y*y; } if(qa<1e-6||qb<1e-6) continue; const w=Math.sqrt(qa); tot+=w*q/Math.sqrt(qa*qb); ws+=w; } return ws ? tot/ws : 0; }
+  async function junction(lon, lat){ const q = '[out:json][timeout:20];way(around:80,'+lat+','+lon+')[highway~"^(trunk|primary|secondary|tertiary|unclassified|residential|motorway|trunk_link|primary_link|secondary_link|tertiary_link)$"];out geom;';
+    const eps = ['https://overpass-api.de/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
+    for(let attempt=0; attempt<2; attempt++){ try{ const j = await Promise.any(eps.map(async ep=>{ const r = await fetch(ep+'?data='+encodeURIComponent(q)); if(!r.ok) throw 0; return r.json(); })); const cnt = new Map();
+      for(const w of j.elements||[]){ const seen = new Set(); for(const g of w.geometry||[]){ const k = g.lat.toFixed(6)+','+g.lon.toFixed(6); if(seen.has(k)) continue; seen.add(k); cnt.set(k, (cnt.get(k)||0)+1); } }
+      let best=null, bd=1e9; const kx = 111320*Math.cos(lat*D2R); for(const [k,n] of cnt){ if(n<2) continue; const [la,lo]=k.split(',').map(Number); const d=Math.hypot((lo-lon)*kx,(la-lat)*110950); if(d<bd){ bd=d; best=[lo,la]; } }
+      return best && bd < 80 ? { pos:best, d:Math.round(bd) } : null; }catch(e){ await new Promise(r=>setTimeout(r,2000)); } } return null; }
+  B.estimate3 = async function(cam, frameCanvas, log){ log = log || (()=>{}); const [lon0, lat0] = cam; const aspect = frameCanvas.width/frameCanvas.height;
+    const W = 192, H = Math.round(192/aspect); const vf = B.oriFeat(B.grayOf(frameCanvas, W, H), W, H, [3, 6]);
+    const tc = document.createElement('canvas'); tc.width = 96; tc.height = Math.round(96/aspect); const tg = tc.getContext('2d', { willReadFrequently:true }); tg.drawImage(frameCanvas, 0, 0, tc.width, tc.height); const vcls = clsMap(tg.getImageData(0,0,tc.width,tc.height).data, tc.width, tc.height);
+    const jc = await junction(lon0, lat0); const [lon, lat] = jc ? jc.pos : [lon0, lat0]; log(jc ? ('교차로 중심 (목록 좌표에서 ' + jc.d + ' m)') : '교차로 없음 · 목록 좌표 사용');
+    const rr = await C.sampleTerrainMostDetailed(scene.globe.terrainProvider, [C.Cartographic.fromDegrees(lon, lat)]); const g = rr[0].height; const h = 12;
+    const cb = await cubeRGB(lon, lat, g + h);
+    const ori = (hd, pt, fov)=>{ const sf = B.oriFeat(sample(cb, hd, pt, fov, aspect, W, H, false), W, H, [3, 6]); return (B.cosm(vf[0], sf[0], W, H) + B.cosm(vf[1], sf[1], W, H))/2; };
+    const col = (hd, pt, fov)=>clsSim(vcls, clsMap(sample(cb, hd, pt, fov, aspect, tc.width, tc.height, true), tc.width, tc.height));
+    const coarse = []; for(let hd=0; hd<360; hd+=4){ for(const pt of [-9,-13,-17,-21,-26]) for(const fov of [44,54,64]) coarse.push({ hd, pt, fov, o: ori(hd, pt, fov) }); if(hd % 40 === 36) await new Promise(r=>setTimeout(r,0)); }
+    // 방향별 최고(20° 간격 구간) 상위 8개 → 색 배치 점수 추가
+    coarse.sort((a,b)=>b.o-a.o); const seeds = []; for(const c of coarse){ if(seeds.every(s=>Math.abs(((c.hd-s.hd+540)%360)-180) > 20)) seeds.push(c); if(seeds.length >= 8) break; }
+    for(const s of seeds){ s.c = col(s.hd, s.pt, s.fov); s.s = s.o + s.c; }
+    seeds.sort((a,b)=>b.s-a.s); const top = seeds.slice(0, 3); const fine = [];
+    const tot = (hd, pt, fov)=>ori(hd, pt, fov) + col(hd, pt, fov);
+    for(const s0 of top){ let b = { ...s0 }; for(const st of [[2,2,4],[1,1,2]]){ let imp=true, it=0; while(imp && it++<5){ imp=false; for(const [k,d] of [['hd',st[0]],['pt',st[1]],['fov',st[2]]]) for(const sg of [1,-1]){ const c={...b}; c[k]+=sg*d; c.pt=Math.max(-38,Math.min(-4,c.pt)); c.fov=Math.max(32,Math.min(80,c.fov)); const s=tot(c.hd,c.pt,c.fov); if(s>b.s){ b={...c,s}; imp=true; } } } } fine.push(b); await new Promise(r=>setTimeout(r,0)); }
+    fine.sort((a,b)=>b.s-a.s); const best = fine[0], alt = fine[1]; const margin = alt ? best.s - alt.s : .1;
+    const conf = Math.round(100 * Math.max(0, Math.min(1, (best.s - .15)/.25)) * Math.max(.25, Math.min(1, margin/.06)));
+    log('결과 ' + Math.round(best.hd) + '° / ' + best.pt + '° / 화각 ' + best.fov + ' · 점수 ' + best.s.toFixed(3) + ' · 2위와 차이 ' + margin.toFixed(3) + ' · 후보 ' + seeds.map(s=>s.hd+':'+s.o.toFixed(2)+'+'+s.c.toFixed(2)).join(' '));
+    const mk = f=>({ lon:+lon.toFixed(6), lat:+lat.toFixed(6), h, hd:Math.round(((f.hd%360)+360)%360), pt:Math.round(f.pt), fov:Math.round(f.fov), aspect:+aspect.toFixed(4), s:+f.s.toFixed(3) });
+    return { ...mk(best), margin:+margin.toFixed(3), conf, junction:!!jc, alts: fine.slice(1).map(mk) };
+  };
+})();
+(function(){
+  if(window.__CV60I) return; const B = window.__CVB;
+  // ---- 일괄 실행 (인천교통정보센터) ----
+  const J = B.J = { running:false, i:0, n:0, done:{}, log:[] };
+  B.incheonList = async function(){ const d = await (await fetch('cctv/traffic.json?v=20261010a')).json(); const out = []; d.cams.forEach(c=>{ const s = d.srcs[c[3]]; if(s.c === '인천교통정보센터') out.push({ lon:c[0], lat:c[1], name:c[2], url: s.p + c[4] + s.s }); }); return out; };
+  B.run = async function(list, opt){ opt = opt || {}; if(J.running) return; J.running = true; J.n = list.length; const sv = { z: scene.screenSpaceCameraController.minimumZoomDistance, f: camera.frustum.fov };
+    try{ scene.screenSpaceCameraController.minimumZoomDistance = .5;
+      for(J.i = 0; J.i < list.length && J.running; J.i++){ const it = list[J.i]; if(J.done[it.url] && !opt.redo) continue; const t0 = performance.now();
+        try{ const fr = await B.grabFrame(it.url, 15000);
+          const g = B.grayOf(fr, 64, 36); let m = 0; for(const v of g) m += v; m /= g.length; if(m < 55 && !opt.night) throw new Error('야간(어두움) ' + Math.round(m));
+          const p = await B.estimate3([it.lon, it.lat], fr, x=>J.log.push(it.name + ' · ' + x)); J.done[it.url] = { ...p, name: it.name, t: Date.now(), sec: Math.round((performance.now()-t0)/1000) }; }
+        catch(e){ J.done[it.url] = { name: it.name, err: String(e.message || e), t: Date.now() }; }
+        try{ localStorage.setItem('cv60i:results', JSON.stringify(J.done)); }catch(e){} }
+    } finally { J.running = false; scene.screenSpaceCameraController.minimumZoomDistance = sv.z; camera.frustum.fov = sv.f; } };
+  B.resultsJSON = ()=>JSON.stringify({ version:'60.1', created:new Date().toISOString(), method:'3D 모델 렌더-영상 정합(선 방향+색 배치) · 교차로 중심 +12 m', cams: J.done });
+  try{ const s = JSON.parse(localStorage.getItem('cv60i:results') || 'null'); if(s) Object.assign(J.done, s); }catch(e){}
+  // ---- 결과 반영 ----
+  const X = window.__CV59; const MAN = {}; if(X) for(const k in X.POSE) MAN[k] = true;
+  B.applyPoses = function(cams, minConf){ if(!X) return 0; let n = 0; for(const [url, p] of Object.entries(cams || {})){ if(!p || p.err || MAN[url] || !(p.conf >= (minConf || 30))) continue;
+      X.POSE[url] = { name: p.name + ' (자동 ' + p.conf + '%)', lon:p.lon, lat:p.lat, h:p.h, hd:p.hd, pt:p.pt, fov:p.fov, aspect:p.aspect || 16/9, auto:true, conf:p.conf, note:'자동 추정 · 3D 모델 렌더-영상 정합 · 신뢰도 ' + p.conf + '% · 위치는 교차로 중심 근사' }; n++; }
+    return n; };
+  fetch('cctv/pose_incheon.json?v=' + Math.floor(Date.now()/36e5)).then(r=>r.ok ? r.json() : null).then(j=>{ if(j && j.cams){ B.loaded = B.applyPoses(j.cams, 30); } }).catch(()=>{});
+  window.__CV60I = { version:'60.1' };
+})();
+</script>
 </body>
 </html>
