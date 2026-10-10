@@ -8482,5 +8482,39 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
 })();
 
 </script>
+<script>
+/* ---------- 56. SITE › 분석 메뉴로 이동하면 다른 카테고리 창(시설물·부동산·내비·측정) 자동 닫기 (2026-10-10) ----------
+   - 분석이 아닌 카테고리에서 분석으로 넘어오는 순간 1회 동작 (분석 안에서의 재렌더에는 반응 안 함)
+   - 시설물 배치 · 실거래가/전세/가시권 · 차량/도보/UAM 내비 창을 끄고(✕와 동일) 측정 도구를 해제
+---------------------------------------------------------------------------------------------- */
+(function(){
+  if(window.__AC56) return;
+  const OTHER_CATS = ['facility','realestate','nav'];
+  let lastCat = STATE.cat, busy = false;
+  function closeOthers(){
+    if(busy) return; busy = true;
+    const ids = [];
+    try{ for(const c of MENUS.site){ if(OTHER_CATS.includes(c.id)) for(const it of c.items){ if(STATE.on.has(it.id)) ids.push(it.id); } } }catch(e){}
+    let n = 0;
+    (async()=>{
+      for(const id of ids){ try{ await toggleLayer(id, false); n++; }catch(e){} }
+      try{ if(STATE.measure){ clearMeasure(); STATE.measure = null; const m=document.getElementById('measure'); if(m) m.classList.remove('open'); scene.canvas.style.cursor=''; n++; } }catch(e){}
+      STATE.cat = 'analysis';
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){}
+      if(n) try{ toast('분석 메뉴 · 열려 있던 다른 창을 닫았습니다', 1800); }catch(e){}
+      busy = false;
+    })();
+  }
+  const _rs56 = renderSub;
+  renderSub = function(){
+    const r = _rs56.apply(this, arguments);
+    const cur = STATE.cat;
+    if(cur === 'analysis' && lastCat !== 'analysis' && STATE.mode === 'site'){ lastCat = cur; setTimeout(closeOthers, 0); }
+    else lastCat = cur;
+    return r;
+  };
+  window.__AC56 = { version:'56.1', closeOthers };
+})();
+</script>
 </body>
 </html>
