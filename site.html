@@ -164,7 +164,7 @@ input,select{font-family:inherit}
 
 #toast{position:fixed;left:50%;top:58px;transform:translateX(-50%);z-index:60;padding:8px 14px;font-size:12.5px;display:none;max-width:min(92vw,560px);text-align:center}
 #toast.open{display:block}
-#cadLegend{bottom:34px!important;z-index:21}
+#cadLegend{left:auto!important;right:56px!important;transform:none!important;bottom:34px!important;max-width:min(60vw,360px)!important;z-index:21}
 #vsHud{top:56px!important}
 .cesium-widget-credits{display:none!important}
 
@@ -174,7 +174,9 @@ input,select{font-family:inherit}
   #top .logo{margin-right:2px}#top .logo img{height:24px}
   #top .tools button{padding:0 8px}
   #top .tools button .lb{display:none}
+  #crumb{position:fixed;top:54px;left:8px;margin:0;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:11.5px;max-width:62vw;z-index:30}
   #crumb .l1{display:none}
+  #crumb .l1 + i{display:none}
   #top .rt button .lb{display:none}
   #btnLayersM{display:flex}
   #lpanel{left:0;right:0;top:auto;bottom:26px;width:auto;max-height:62vh;border-radius:12px 12px 0 0;transform:translateY(105%);transition:transform .25s}
@@ -186,6 +188,7 @@ input,select{font-family:inherit}
   #settings{right:6px;left:6px;width:auto}
   #bar{gap:10px;font-size:10.5px}
   #bar .hide-s{display:none}
+  #cadLegend{left:8px!important;right:56px!important;max-width:none!important;bottom:30px!important;font-size:10px!important}
 }
 </style>
 </head>
@@ -395,7 +398,8 @@ let cycleQuality = function(){};
   const TIER = { '상': { hi: 800, mid: 4000, max:'고', msaa:4, budget:1000 }, '중': { hi: 400, mid: 2500, max:'고', msaa:2, budget:600 }, '하': { hi: 0, mid: 1000, max:'중', msaa:1, budget:350 } };
   const T = () => TIER[tier];
   const pxFactor = () => Math.max(0.85, Math.min(1.6, Math.sqrt(scene.context.drawingBufferHeight / 1080)));
-  const S = { mode: localStorage.getItem('q.mode') || '자동', level:'중', perfDown:0, fpsLow:0, fpsHigh:0, fps:null };
+  const LS = { get:k=>{ try{ return localStorage.getItem(k); }catch(e){ return null; } }, set:(k,v)=>{ try{ localStorage.setItem(k,v); }catch(e){} } };
+  const S = { mode: LS.get('q.mode') || '자동', level:'중', perfDown:0, fpsLow:0, fpsHigh:0, fps:null };
   function groundAlt(){ const c = camera.positionCartographic; let g = 0; try{ g = globe.getHeight(c) || 0; }catch(e){} return Math.max(0, c.height - g); }
   function levelForAlt(h){ const t = T(); const cur = S.level; const k = 0.15; const hiB = t.hi*(cur==='고'?1+k:1-k), midB = t.mid*(cur==='저'?1-k:1+k); let L = h <= hiB ? '고' : h <= midB ? '중' : '저'; if(t.max==='중' && L==='고') L = '중'; return L; }
   function apply(){
@@ -412,8 +416,8 @@ let cycleQuality = function(){};
     else if(f > 40){ S.fpsHigh++; S.fpsLow = 0; if(S.fpsHigh >= 3 && S.perfDown > 0){ S.perfDown--; S.fpsHigh = 0; apply(); } } else { S.fpsLow = 0; S.fpsHigh = 0; } }, 4000);
   try{ scene.msaaSamples = T().msaa; if(T().msaa <= 1) scene.postProcessStages.fxaa.enabled = true; }catch(e){}
   function label(){ const el = $('#qInfo'); if(el) el.textContent = (S.mode==='자동' ? '자동 · 지금 '+S.level : S.mode+' 고정')+' · SSE '+S.sse; $('#segQ').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v===S.mode)); }
-  $('#segQ').querySelectorAll('button').forEach(b => b.onclick = () => { S.mode = b.dataset.v; localStorage.setItem('q.mode', S.mode); S.perfDown = 0; apply(); toast(S.mode==='자동' ? '3D 화질 자동' : '3D 화질 '+S.mode+' 고정', 1600); });
-  cycleQuality = function(){ const seq = ['자동','저','중','고']; S.mode = seq[(seq.indexOf(S.mode)+1)%seq.length]; localStorage.setItem('q.mode', S.mode); S.perfDown = 0; apply(); };
+  $('#segQ').querySelectorAll('button').forEach(b => b.onclick = () => { S.mode = b.dataset.v; LS.set('q.mode', S.mode); S.perfDown = 0; apply(); toast(S.mode==='자동' ? '3D 화질 자동' : '3D 화질 '+S.mode+' 고정', 1600); });
+  cycleQuality = function(){ const seq = ['자동','저','중','고']; S.mode = seq[(seq.indexOf(S.mode)+1)%seq.length]; LS.set('q.mode', S.mode); S.perfDown = 0; apply(); };
   let lastPos = null; setInterval(()=>{ const p = camera.position; if(!lastPos || Cesium.Cartesian3.distance(p, lastPos) > 5){ lastPos = p.clone(); apply(); } }, 700);
   camera.moveEnd.addEventListener(apply);
   const _ens2 = ensureTileset; ensureTileset = async function(p){ const ts = await _ens2(p); if(ts) ts.maximumScreenSpaceError = STATE.sse; return ts; };
@@ -426,7 +430,8 @@ let cycleQuality = function(){};
   let renderer = ''; try{ renderer = window.sistechQuality.renderer || ''; }catch(e){}
   const mobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
   const integrated = mobile || /Intel|Iris|UHD|HD Graphics|Mali|Adreno|PowerVR|Apple GPU|SwiftShader|llvmpipe|Basic Render|Radeon\(TM\) Graphics|Vega \d+ Graphics/i.test(renderer);
-  const P = { on: (localStorage.getItem('perf58') || (integrated ? 'on' : 'off')) === 'on', integrated, idle:false, last: performance.now(), moving:false };
+  let saved58 = null; try{ saved58 = localStorage.getItem('perf58'); }catch(e){}
+  const P = { on: (saved58 || (integrated ? 'on' : 'off')) === 'on', integrated, idle:false, last: performance.now(), moving:false };
   function applyGlobe(){ globe.maximumScreenSpaceError = P.on ? 4 : 2; }
   const IDLE_MS = 8000, IDLE_FPS = 6;
   function busy(){ if(P.moving) return true; for(const p of PROJECTS) if(p.ts && p.ts.show && !p.ts.tilesLoaded) return true; return false; }
@@ -1202,7 +1207,7 @@ document.addEventListener('click', e => { const s = $('#settings'); if(s.classLi
 #rePanel .chip.on{color:#fff}
 #rePanel input[type=text],#rePanel input[type=number]{background:rgba(255,255,255,.05)}
 #rePanel .q ul{background:var(--panel-solid)}
-@media (max-width:600px){ #rePanel{top:56px;left:8px;right:8px;width:auto} }
+@media (max-width:600px){ #rePanel{top:84px;left:8px;right:8px;width:auto} }
 </style>
 <script>
 /* ---------- 50. SITE › 분석 › 실거래가 (2026-10-10) ----------
