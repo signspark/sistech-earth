@@ -8778,6 +8778,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
    - 영상 창의 [3D에 앵글 표시]: 실시간 영상을 CCTV 앵글(위치·높이·방향·기울기·화각)대로 도로 바닥(+140 m 앞 수직 벽)에 투영 → 영상 속 중앙선이 실제 중앙선 위에 놓임 (59.3) · OSM 경원대로 중앙선 투영으로 자세 검증(오차 약 5 px)
    - [CCTV 시점으로 보기]: 3D 카메라를 CCTV와 같은 위치·방향·화각으로 옮기고 실시간 영상을 반투명으로 겹쳐 비교 (투명도 조절)
    - 자세(위치·높이·방향·기울기·화각)는 영상 프레임과 3D 모델 렌더를 50% 겹쳐 맞춘 추정값 (DERIVED · 오차 약 ±5 m, ±3°)
+   - 59.5 (addon 62 연동): 자동 추정 자세(__CV62)도 사용 · POSE 없으면 버튼이 자동 추정을 호출 · show3d(k,{noFly}) · 라벨에 자동 추정·신뢰도 표시 · 영상 비율(aspect) 반영
    - 승기사거리(인천교통정보센터 L213): 교차로 북쪽 신호 암(37.450786, 126.689935), 지면 +12 m, 방향 352°, 아래로 15°, 수평 화각 52° · 59.4: 투영 영상의 횡단보도·정지선을 3D 모델 횡단보도에 맞춰 북쪽으로 약 35 m 이동 보정
 ---------------------------------------------------------------------------------------------- */
 (function(){
@@ -8799,13 +8800,13 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   const b3 = row.querySelector('#cv3d'), bp = row.querySelector('#cvPovB');
   function curKey(){ return S.cur ? CV.urlOf(S.cur.k, S.cur.i) : null; }
   function sync(){ const k = curKey(), p = k && POSE[k];
-    b3.disabled = bp.disabled = !p; b3.title = bp.title = p ? (p.name + ' · ' + p.note) : '이 카메라는 아직 방향 보정 자료가 없습니다 (샘플: 승기사거리)';
+    b3.disabled = bp.disabled = !p && !window.__CV62; b3.title = bp.title = p ? (p.name + ' · ' + p.note) : (window.__CV62 ? '누르면 영상의 차선·횡단보도와 위성 노면 표시를 맞춰 카메라 앵글을 자동 추정합니다 (약 3~6초)' : '이 카메라는 아직 방향 보정 자료가 없습니다 (샘플: 승기사거리)');
     b3.classList.toggle('on', !!(st.ds && st.key === k)); b3.textContent = (st.ds && st.key === k) ? '3D 앵글 끄기' : '3D에 앵글 표시';
     if(st.key && st.key !== k) clear3d(); if(st.pov && st.pov.key !== k) exitPov(); }
   new MutationObserver(sync).observe(document.getElementById('cvName'), { childList:true, characterData:true, subtree:true });
   new MutationObserver(()=>{ if(!P.classList.contains('open')){ clear3d(); exitPov(); } sync(); }).observe(P, { attributes:true, attributeFilter:['class'] });
-  b3.onclick = ()=>{ const k = curKey(); if(!POSE[k]) return; if(st.ds && st.key === k){ clear3d(); sync(); return; } show3d(k); };
-  bp.onclick = ()=>{ const k = curKey(); if(!POSE[k]) return; if(st.pov) exitPov(); else enterPov(k); };
+  b3.onclick = async ()=>{ const k = curKey(); if(!k) return; if(st.ds && st.key === k){ clear3d(); sync(); return; } if(!POSE[k] && window.__CV62){ if(!(await window.__CV62.prepare(k))) return; } if(!POSE[k]) return; show3d(k); };
+  bp.onclick = async ()=>{ const k = curKey(); if(!k) return; if(st.pov){ exitPov(); return; } if(!POSE[k] && window.__CV62){ if(!(await window.__CV62.prepare(k))) return; } if(!POSE[k]) return; enterPov(k); };
 
   // ---- 기하: ENU 기준 카메라 축 ----
   function axes(p, g){
@@ -8842,17 +8843,17 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     geom = C.GeometryPipeline.computeNormal(geom);
     return new C.Primitive({ geometryInstances:new C.GeometryInstance({ geometry:geom }), appearance:new C.MaterialAppearance({ material:C.Material.fromType('Image', { image:video, color:new C.Color(1,1,1,0.95) }), flat:true, faceForward:true, translucent:true, closed:false }), asynchronous:false });
   }
-  async function show3d(k){
-    const p = POSE[k]; clear3d(); st.key = k; const g = await ground(p); p.g = g;
+  async function show3d(k, opt){
+    const p = POSE[k]; if(!p) return; opt = opt || {}; clear3d(); st.key = k; const g = await ground(p); p.g = g;
     const A = axes(p, g); const ds = st.ds = new C.CustomDataSource('cctv3d'); viewer.dataSources.add(ds);
     const v = document.getElementById('cvV');
     const put = ()=>{ if(!st.ds || st.key !== k) return true; if(!(v && v.readyState >= 2 && v.videoWidth)) return false; try{ st.prim = scene.primitives.add(buildProj(p, A, v)); }catch(e){ console.warn('cctv proj', e); } return true; };
     if(!put()){ const tm = setInterval(()=>{ if(put()) clearInterval(tm); }, 700); }
-    ds.entities.add({ position: add(A.pos, A.u, 4), label:{ text: p.name + ' CCTV\n방향 ' + p.hd + '° · 아래로 ' + (-p.pt) + '° · 화각 ' + p.fov + '° · 높이 ' + p.h + ' m', font:'700 13px ' + getComputedStyle(document.body).fontFamily, fillColor:C.Color.WHITE, outlineColor:C.Color.fromCssColorString('#03122A'), outlineWidth:4, style:C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin:C.VerticalOrigin.BOTTOM, disableDepthTestDistance:Number.POSITIVE_INFINITY, scaleByDistance:new C.NearFarScalar(80, 1, 1500, .5) } });
+    ds.entities.add({ position: add(A.pos, A.u, 4), label:{ text: p.name + ' CCTV' + (p.auto ? ' · 자동 추정 · 신뢰도 ' + p.conf + '%' : '') + '\n방향 ' + p.hd + '° · 아래로 ' + (-p.pt) + '° · 화각 ' + p.fov + '° · 높이 ' + p.h + ' m', font:'700 13px ' + getComputedStyle(document.body).fontFamily, fillColor:C.Color.WHITE, outlineColor:C.Color.fromCssColorString('#03122A'), outlineWidth:4, style:C.LabelStyle.FILL_AND_OUTLINE, verticalOrigin:C.VerticalOrigin.BOTTOM, disableDepthTestDistance:Number.POSITIVE_INFINITY, scaleByDistance:new C.NearFarScalar(80, 1, 1500, .5) } });
     // 뒤쪽 위에서 도로 방향으로 내려다보는 시점
     const back = C.Math.toRadians(p.hd + 180), dist = 70; const lat = p.lat + dist*Math.cos(back)/111000, lon = p.lon + dist*Math.sin(back)/(111000*Math.cos(p.lat*Math.PI/180));
-    camera.flyTo({ destination: C.Cartesian3.fromDegrees(lon, lat, g + 95), orientation:{ heading: C.Math.toRadians(p.hd), pitch: C.Math.toRadians(-42), roll:0 }, duration:1.8 });
-    try{ toast(p.name + ' CCTV 영상을 카메라 앵글대로 도로에 투영했습니다 · 영상 속 중앙선이 실제 중앙선 위에 놓입니다', 2800); }catch(e){}
+    if(!opt.noFly) camera.flyTo({ destination: C.Cartesian3.fromDegrees(lon, lat, g + 95), orientation:{ heading: C.Math.toRadians(p.hd), pitch: C.Math.toRadians(-42), roll:0 }, duration:1.8 });
+    if(!opt.noFly) try{ toast(p.name + ' CCTV 영상을 카메라 앵글대로 도로에 투영했습니다' + (p.auto ? ' · 자동 추정 신뢰도 ' + p.conf + '%' : ' · 영상 속 중앙선이 실제 중앙선 위에 놓입니다'), 2800); }catch(e){}
     sync();
   }
   function clear3d(){ if(st.prim){ try{ scene.primitives.remove(st.prim); }catch(e){} } st.prim = null; if(st.ds){ try{ viewer.dataSources.remove(st.ds, true); }catch(e){} } st.ds = null; st.key = null; }
@@ -8864,7 +8865,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
   const ov = document.createElement('canvas'); ov.id = 'cvPovV'; document.body.appendChild(ov);
   bar.querySelector('#cvPovO').oninput = e=>{ ov.style.opacity = e.target.value/100; bar.querySelector('#cvPovT').textContent = e.target.value + '%'; };
   bar.querySelector('#cvPovX').onclick = ()=>exitPov();
-  function placeOv(){ const r = scene.canvas.getBoundingClientRect(); const h = r.width * 9/16; ov.style.left = r.left + 'px'; ov.style.top = (r.top + (r.height - h)/2) + 'px'; ov.style.width = r.width + 'px'; ov.style.height = h + 'px'; }
+  function placeOv(){ const r = scene.canvas.getBoundingClientRect(); const p = st.pov && POSE[st.pov.key]; const h = r.width / ((p && p.aspect) || 16/9); ov.style.left = r.left + 'px'; ov.style.top = (r.top + (r.height - h)/2) + 'px'; ov.style.width = r.width + 'px'; ov.style.height = h + 'px'; }
   async function enterPov(k){
     const p = POSE[k]; const g = (p.g !== undefined) ? p.g : (p.g = await ground(p));
     st.pov = { key:k, minZ: scene.screenSpaceCameraController.minimumZoomDistance, fov: camera.frustum.fov, view:{ pos: camera.position.clone(), hd: camera.heading, pt: camera.pitch, rl: camera.roll } };
@@ -8872,8 +8873,8 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     if(st.ds) st.ds.show = false; if(st.prim) st.prim.show = false;  // 시점 안에서 폴·스크린이 가리지 않게
     camera.frustum.fov = C.Math.toRadians(p.fov);   // 가로가 길면 수평 화각
     camera.setView({ destination: C.Cartesian3.fromDegrees(p.lon, p.lat, g + p.h), orientation:{ heading:C.Math.toRadians(p.hd), pitch:C.Math.toRadians(p.pt), roll:0 } });
-    const v = document.getElementById('cvV'); ov.width = 960; ov.height = 540; const g2 = ov.getContext('2d');
-    const draw = ()=>{ if(!st.pov) return; placeOv(); try{ if(v.readyState >= 2) g2.drawImage(v, 0, 0, 960, 540); }catch(e){} st.pov.raf = requestAnimationFrame(draw); };
+    const v = document.getElementById('cvV'); ov.width = 960; ov.height = Math.round(960 / (p.aspect || 16/9)); const g2 = ov.getContext('2d');
+    const draw = ()=>{ if(!st.pov) return; placeOv(); try{ if(v.readyState >= 2) g2.drawImage(v, 0, 0, ov.width, ov.height); }catch(e){} st.pov.raf = requestAnimationFrame(draw); };
     ov.style.opacity = bar.querySelector('#cvPovO').value/100; ov.style.display = 'block'; draw();
     bar.querySelector('#cvPovN').textContent = p.name + ' CCTV 시점'; bar.classList.add('open'); bp.classList.add('on'); bp.textContent = 'CCTV 시점 끄기';
     try{ toast('CCTV와 같은 위치·방향·화각 · 영상을 반투명으로 겹쳤습니다 (지도를 움직이면 어긋납니다)', 3000); }catch(e){}
@@ -8883,7 +8884,7 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     camera.setView({ destination:o.view.pos, orientation:{ heading:o.view.hd, pitch:o.view.pt, roll:o.view.rl } }); }
   window.addEventListener('keydown', e=>{ if(e.key==='Escape' && st.pov) exitPov(); });
   sync();
-  window.__CV59 = { version:'59.4', POSE, show3d, clear3d, enterPov, exitPov, st };
+  window.__CV59 = { version:'59.5', POSE, show3d, clear3d, enterPov, exitPov, st, sync };
 })();
 </script>
 <script>
@@ -9167,6 +9168,312 @@ if(!window.__CVB) window.__CVB = (function(){
     return n; };
   fetch('cctv/pose_incheon.json?v=' + Math.floor(Date.now()/36e5)).then(r=>r.ok ? r.json() : null).then(j=>{ if(j && j.cams){ B.loaded = B.applyPoses(j.cams, 30); } }).catch(()=>{});
   window.__CV60I = { version:'60.1' };
+})();
+</script>
+<script>
+/* ---------- 62. CCTV 앵글 전국 자동 추정(소실점 + 위성 노면표시) · 회전(PTZ) 카메라 자동 재보정 · 다른 방향 후보 (2026-10-10) ----------
+   (60 블록 = 인천 213대 3D 렌더 정합 일괄 결과(pose_incheon.json) · 62 블록 = 그 밖의 전국 카메라를 누를 때 즉시 추정 · 60의 일괄 결과가 있으면 그것을 1순위 후보로 두고 62 추정값을 다른 후보로 추가)
+   승기사거리에서 사람이 한 보정(영상 속 차선·중앙선·횡단보도·정지선이 실제 도로 위에 놓이게 위치·방향·기울기·화각을 찾음)을 자동화
+   1) 영상 한 장면에서 가는 밝은 선(차선·중앙선·횡단보도·정지선) 추출 → 허프 직선 → 소실점(VP) → 기울기(pitch)·도로 기준 상대 방위(yaw) 확정
+   2) OSM(Overpass) 주변 도로 → 교차로 갈래 방위(양방향) = 방향 후보 · 도로 회랑(차로 수 × 3.3 m)
+   3) 브이월드 위성(z19, 0.24 m/px)에서 도로 회랑 안 노면 표시(흰·노란 선) 추출 → 갈래별로 위치(±45 m)·높이·화각만 탐색해 영상 표시와 정합(정밀도 × 재현율 × 아스팔트 회랑 일치)
+   4) 후보를 점수순으로 정렬 → 1위 자동 적용 · [다른 방향 후보] 버튼으로 순환 선택(선택 저장) · 신뢰도(%) = 정합 점수 × 다른 갈래와의 차이
+   5) 결과는 카메라·장면(영상 지문)별로 이 브라우저(localStorage)에 저장 · 회전(PTZ) 카메라는 2.5초마다 장면 지문을 비교해 방향이 바뀌고 멈추면 저장된 장면을 쓰거나 다시 추정해 3D 투영을 카메라 이동 없이 갱신
+   수동 보정값(승기사거리)은 첫 장면에 그대로 사용 · 자동 추정값은 DERIVED(오차 ±10 m, ±10°) · 야간·우천·차선이 안 보이는 장면은 신뢰도 낮음
+   실패한 방식(기록): OSM 중앙선+lanes 투영 정합, 위성 노면표시 6차원 전탐색 → 다른 갈래를 1위로 뽑음 → 소실점으로 pitch·yaw를 먼저 고정하고 갈래별 비교로 바꿈
+---------------------------------------------------------------------------------------------- */
+(function(){
+  if(window.__CV62 || !window.__CV59 || !window.__CV57) return;
+  const C = Cesium, CV = window.__CV57, X = window.__CV59, POSE = X.POSE, S = CV.S, D2R = Math.PI/180;
+  const VER = '62.1';
+  const MANUAL = {}; for(const k in POSE){ if(!POSE[k].auto) MANUAL[k] = { ...POSE[k], manual:true }; }
+  const OVP = ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.openstreetmap.fr/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter','https://overpass.private.coffee/api/interpreter'];
+  const VKEY = '57C7018D-1A36-4873-99CD-A2272BD3040E';
+  const LN = { motorway:8, trunk:8, primary:8, secondary:6, tertiary:4, unclassified:2, residential:2, motorway_link:2, trunk_link:2, primary_link:2, secondary_link:2, tertiary_link:1, service:1, living_street:1 };
+  const PRI = { motorway:9, trunk:8, primary:7, secondary:6, tertiary:5, unclassified:3, residential:3, motorway_link:4, trunk_link:4, primary_link:4, secondary_link:3, tertiary_link:2, service:1, living_street:1 };
+  const RCACHE = new Map(), OCACHE = new Map(), VIEWS = {}, LS = 'cv62:';
+  const tst = (m, t)=>{ try{ toast(m, t||2200); }catch(e){} };
+  let _y = performance.now(); const yieldUI = async (force)=>{ if(force || performance.now() - _y > 40){ await new Promise(r=>setTimeout(r, 0)); _y = performance.now(); } };
+  const kxOf = lat=>111320*Math.cos(lat*D2R), KY = 110950;
+
+  // ---- 도로(OSM Overpass · 4개 서버 병렬 · 캐시) ----
+  async function roads(lon, lat){
+    const key = lon.toFixed(4)+','+lat.toFixed(4); if(RCACHE.has(key)) return RCACHE.get(key);
+    try{ const c = JSON.parse(localStorage.getItem('cv62r:' + key) || 'null'); if(c){ RCACHE.set(key, c); return c; } }catch(e){}
+    const q = '[out:json][timeout:25];way(around:170,'+lat+','+lon+')[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|service|living_street)$"];out geom;';
+    const ctl = OVP.map(()=>new AbortController()); const to = setTimeout(()=>ctl.forEach(a=>a.abort()), 30000);
+    try{
+      const w = await Promise.any(OVP.map(async (ep, i)=>{ const r = await fetch(ep + '?data=' + encodeURIComponent(q), { signal: ctl[i].signal }); if(!r.ok) throw new Error('HTTP ' + r.status); const j = await r.json(); return (j.elements||[]).filter(e=>e.geometry && e.geometry.length>1).map(e=>({ tags:{ highway:e.tags.highway, lanes:e.tags.lanes, oneway:e.tags.oneway, name:e.tags.name }, geometry:e.geometry.map(p=>({ lat:+p.lat.toFixed(6), lon:+p.lon.toFixed(6) })) })); }));
+      ctl.forEach(a=>{ try{ a.abort(); }catch(e){} }); RCACHE.set(key, w); try{ localStorage.setItem('cv62r:' + key, JSON.stringify(w)); }catch(e){} return w;
+    }catch(e){ throw new Error('도로 정보(OSM Overpass) 서버가 응답하지 않습니다 · 잠시 후 다시 시도'); }
+    finally{ clearTimeout(to); }
+  }
+  // 도로 회랑 · 아스팔트 표본점 · 갈래 방위
+  function corridor(ways, lon0, lat0){
+    const kx = kxOf(lat0), cell = 2, grid = new Set(); const AE=[], AN=[], CE=[], CN=[], arms=[];
+    const lanesOf = w=>{ const hw = w.tags.highway; const t = parseInt(w.tags.lanes); const one = w.tags.oneway === 'yes' || /motorway/.test(hw); let n = t || Math.max(1, Math.round((LN[hw] || 2) / (one ? 2 : 1))); if(t && !one && hw !== 'service') n = Math.max(n, 2); return n; };
+    for(const w of ways){ const hw = w.tags.highway; const lanes = lanesOf(w); const half = lanes*3.3/2 + 2.2, halfA = lanes*3.3/2 - 0.5;
+      const g = w.geometry.map(p=>[(p.lon-lon0)*kx, (p.lat-lat0)*KY]);
+      for(let s=0;s<g.length-1;s++){ const [x1,y1]=g[s],[x2,y2]=g[s+1]; const L=Math.hypot(x2-x1,y2-y1); if(L < .5) continue; const ux=(x2-x1)/L, uy=(y2-y1)/L, nx=-uy, ny=ux;
+        const nn = Math.ceil(L/1.5);
+        for(let t=0;t<=nn;t++){ const px=x1+(x2-x1)*t/nn, py=y1+(y2-y1)*t/nn; const d = Math.hypot(px,py); if(d > 140) continue;
+          if(hw !== 'service'){ CE.push(px); CN.push(py); }
+          const r=Math.ceil(half/cell); const cx=Math.round(px/cell), cy=Math.round(py/cell); for(let a=-r;a<=r;a++) for(let b=-r;b<=r;b++){ if((a*a+b*b)*cell*cell > half*half) continue; grid.add((cx+a)*4096+(cy+b)); }
+          if(t % 3 === 0 && hw !== 'service' && hw !== 'living_street'){ for(let o=-halfA; o<=halfA+.01; o+=2.5){ AE.push(px+nx*o); AN.push(py+ny*o); } } } } }
+    // 갈래 방위: 원점에 가장 가까운 도로 지점에서 양쪽으로 40 m 따라간 방향(직선 도로도 남·북 갈래를 따로 다룸)
+    for(const w of ways){ const hw = w.tags.highway; if(hw === 'service' || hw === 'living_street') continue; const g = w.geometry.map(p=>[(p.lon-lon0)*kx, (p.lat-lat0)*KY]);
+      let bd = 1e9, bs = -1, bt = 0; for(let s=0;s<g.length-1;s++){ const [x1,y1]=g[s],[x2,y2]=g[s+1]; const L=Math.hypot(x2-x1,y2-y1); if(L<.1) continue; const t = Math.max(0, Math.min(1, -((x1)*(x2-x1)+(y1)*(y2-y1))/(L*L))); const d = Math.hypot(x1+(x2-x1)*t, y1+(y2-y1)*t); if(d < bd){ bd = d; bs = s; bt = t; } }
+      if(bs < 0 || bd > 35) continue; const p0 = [g[bs][0]+(g[bs+1][0]-g[bs][0])*bt, g[bs][1]+(g[bs+1][1]-g[bs][1])*bt];
+      for(const dir of [1, -1]){ let walked = 0, cur = p0, idx = dir > 0 ? bs+1 : bs, end = null; while(idx >= 0 && idx < g.length && walked < 40){ const q = g[idx]; const L = Math.hypot(q[0]-cur[0], q[1]-cur[1]); if(walked + L >= 40){ const f = (40-walked)/L; end = [cur[0]+(q[0]-cur[0])*f, cur[1]+(q[1]-cur[1])*f]; walked = 40; break; } walked += L; cur = q; end = q; idx += dir; }
+        if(!end || walked < 12) continue; const bn = ((Math.atan2(end[0]-p0[0], end[1]-p0[1])/D2R % 360) + 360) % 360; const pri = PRI[hw] || 1;
+        const near = arms.find(a=>Math.abs(((a.b-bn+540)%360)-180) < 10); if(near){ if(pri > near.pri || (pri === near.pri && walked > near.len)){ near.b = bn; near.pri = pri; near.name = w.tags.name || hw; near.hw = hw; near.len = walked; } } else arms.push({ b:bn, pri, name:w.tags.name || hw, hw, len:walked, d:bd }); } }
+    arms.sort((a,b)=>b.pri-a.pri || a.d-b.d); if(arms.length > 8) arms.length = 8;
+    return { grid, cell, A:{ E:Float32Array.from(AE), N:Float32Array.from(AN) }, CE, CN, arms };
+  }
+
+  // ---- 위성 노면 표시 (브이월드 z19) ----
+  function boxMean(A, W, H, r){ const I = new Float64Array((W+1)*(H+1)); for(let y=0;y<H;y++){ let s=0; for(let x=0;x<W;x++){ s += A[y*W+x]; I[(y+1)*(W+1)+x+1] = I[y*(W+1)+x+1] + s; } }
+    const O = new Float32Array(W*H); for(let y=0;y<H;y++){ const y0 = Math.max(0,y-r), y1 = Math.min(H,y+r+1); for(let x=0;x<W;x++){ const x0 = Math.max(0,x-r), x1 = Math.min(W,x+r+1); O[y*W+x] = (I[y1*(W+1)+x1]-I[y0*(W+1)+x1]-I[y1*(W+1)+x0]+I[y0*(W+1)+x0])/((y1-y0)*(x1-x0)); } } return O; }
+  async function orthoPts(lon0, lat0, R){
+    const key = lon0.toFixed(4)+','+lat0.toFixed(4); if(OCACHE.has(key)) return OCACHE.get(key);
+    R = R || 110; const z = 19, n = 2**z; const tx = lon=>(lon+180)/360*n, ty = lat=>(1-Math.log(Math.tan(lat*D2R)+1/Math.cos(lat*D2R))/Math.PI)/2*n;
+    const kx = kxOf(lat0); const x0 = tx(lon0 - R/kx), x1 = tx(lon0 + R/kx), y0 = ty(lat0 + R/KY), y1 = ty(lat0 - R/KY);
+    const X0 = Math.floor(x0), X1 = Math.floor(x1), Y0 = Math.floor(y0), Y1 = Math.floor(y1);
+    const W = (X1-X0+1)*256, H = (Y1-Y0+1)*256; const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d', { willReadFrequently:true }); let okN = 0;
+    await Promise.all([].concat(...Array.from({length:Y1-Y0+1}, (_, j)=>Array.from({length:X1-X0+1}, (_, i)=>new Promise(res=>{ const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = ()=>{ try{ g.drawImage(im, i*256, j*256); okN++; }catch(e){} res(); }; im.onerror = ()=>res(); im.src = 'https://api.vworld.kr/req/wmts/1.0.0/'+VKEY+'/Satellite/'+z+'/'+(Y0+j)+'/'+(X0+i)+'.jpeg'; setTimeout(res, 9000); })))));
+    if(!okN) throw new Error('위성 영상(브이월드)을 받지 못했습니다');
+    const d = g.getImageData(0, 0, W, H).data; const NP = W*H; const G = new Float32Array(NP), M = new Uint8Array(NP);
+    for(let i=0;i<NP;i++){ G[i] = .299*d[i*4]+.587*d[i*4+1]+.114*d[i*4+2]; } await yieldUI(true);
+    const mean = boxMean(G, W, H, 6); await yieldUI(true);
+    // 가는 밝은 선(차선·정지선·횡단보도 줄무늬 ≤ 0.7 m)만: 어느 한 방향으로 ±3 px 양쪽이 모두 어두울 것 → 차량·지붕 같은 덩어리 제외
+    for(let y=3;y<H-3;y++) for(let x=3;x<W-3;x++){ const i=y*W+x; const r=d[i*4], gg=d[i*4+1], b=d[i*4+2]; const sat = Math.max(r,gg,b)-Math.min(r,gg,b); const yel = r>120 && gg>90 && b<120 && r-b>45 && gg-b>20; const wht = G[i]-mean[i] > 22 && sat < 45 && G[i] > 105; if(!(yel||wht)) continue; const v = G[i];
+      const t = Math.max(Math.min(v-G[i-3], v-G[i+3]), Math.min(v-G[i-3*W], v-G[i+3*W]), Math.min(v-G[i-3*W-3], v-G[i+3*W+3]), Math.min(v-G[i-3*W+3], v-G[i+3*W-3])); if(t > (yel ? 12 : 22)) M[i] = yel ? 2 : 1; }
+    await yieldUI(true); const Mm = boxMean(M, W, H, 4); await yieldUI(true);
+    const E=[], N=[], T=[]; const seen = new Set();
+    for(let y=2;y<H-2;y++) for(let x=2;x<W-2;x++){ const i=y*W+x; if(!M[i] || Mm[i] > .7) continue; const gx = (X0*256 + x)/256, gy = (Y0*256 + y)/256; const lon = gx/n*360-180, lat = Math.atan(Math.sinh(Math.PI*(1-2*gy/n)))/D2R; const e = (lon-lon0)*kx, nn = (lat-lat0)*KY; if(Math.hypot(e, nn) > R) continue; const k = Math.round(e*2)*8192+Math.round(nn*2); if(seen.has(k)) continue; seen.add(k);
+      E.push(e); N.push(nn); T.push(M[i]); }
+    const out = { E:Float32Array.from(E), N:Float32Array.from(N), T:Uint8Array.from(T) }; OCACHE.set(key, out); return out;
+  }
+
+  // ---- 영상 분석: 노면 표시 · 아스팔트 · 소실점 ----
+  function sigOf(src){ const w=24, h=14, c=document.createElement('canvas'); c.width=w; c.height=h; const g=c.getContext('2d',{willReadFrequently:true}); g.drawImage(src,0,0,w,h); const d=g.getImageData(0,0,w,h).data; const v=new Float32Array(w*h); let m=0; for(let i=0;i<w*h;i++){ v[i]=.299*d[i*4]+.587*d[i*4+1]+.114*d[i*4+2]; m+=v[i]; } m/=w*h; let sd=0; for(let i=0;i<w*h;i++){ v[i]-=m; sd+=v[i]*v[i]; } sd=Math.sqrt(sd/(w*h))||1; for(let i=0;i<w*h;i++) v[i]/=sd; return Array.from(v, x=>Math.round(x*100)/100); }
+  function corr(a, b){ if(!a || !b || a.length!==b.length) return 0; let s=0; for(let i=0;i<a.length;i++) s += a[i]*b[i]; return s/a.length; }
+  // 한 프레임의 가는 밝은 선(차선·중앙선·횡단보도·정지선) 마스크
+  function frameMask(src, W, H){
+    const c = document.createElement('canvas'); c.width=W; c.height=H; const g = c.getContext('2d',{willReadFrequently:true}); g.drawImage(src,0,0,W,H); const d = g.getImageData(0,0,W,H).data; const NP = W*H;
+    const G = new Float32Array(NP), Sat = new Float32Array(NP), Asp = new Float32Array(NP), M0 = new Float32Array(NP);
+    for(let i=0;i<NP;i++){ const r=d[i*4], gg=d[i*4+1], b=d[i*4+2]; G[i]=.299*r+.587*gg+.114*b; Sat[i]=Math.max(r,gg,b)-Math.min(r,gg,b); Asp[i]=(Sat[i]<30 && G[i]>40 && G[i]<170)?1:0; }
+    const asp = boxMean(Asp, W, H, 6); const yTop = Math.max(3, Math.round(H*.09)), yBot = Math.min(H-3, Math.round(H*.91));
+    const isA = i=> Sat[i] < 28 && G[i] > 35 && G[i] < 150;   // 아스팔트색(회색) 픽셀
+    for(let y=yTop;y<yBot;y++) for(let x=4;x<W-4;x++){ const i=y*W+x; const yel = d[i*4]>120 && d[i*4+1]>90 && d[i*4+2]<120 && d[i*4]-d[i*4+2]>45; if(asp[i]<.5 || (Sat[i]>50 && !yel)) continue; const v=G[i];
+      // 가는 밝은 선: 어느 한 방향의 ±3 px 이웃보다 밝고, 그 이웃(±4 px)이 둘 다 아스팔트색일 것(전선·글자 외곽선·건물 모서리 제외)
+      let t = 0; for(const o of [1, W, W+1, W-1]){ const a = Math.min(v-G[i-3*o], v-G[i+3*o]); if(a > t && isA(i-4*o) && isA(i+4*o)) t = a; }
+      if(t > 40 || (yel && t > 15)){ M0[i] = 1; } }
+    return { M0, asp, G, yTop, yBot };
+  }
+  // 여러 프레임(약 2초)을 모아 과반수 프레임에 나타나는 선만 남김 → 움직이는 차량 제거 (정차 차량은 남음)
+  async function analyze(srcs, sw, sh){
+    if(!Array.isArray(srcs)) srcs = [srcs]; const W = 320, H = Math.max(120, Math.round(W*sh/sw)); const NP = W*H;
+    const fr = []; for(const s of srcs){ fr.push(frameMask(s, W, H)); await yieldUI(true); } const n = fr.length, need = Math.max(1, Math.ceil(n*.6)); const { G, yTop, yBot } = fr[0];
+    const asp = new Float32Array(NP), Mc = new Float32Array(NP), M = new Float32Array(NP); let cnt = 0;
+    for(const f of fr) for(let i=0;i<NP;i++){ asp[i] += f.asp[i]/n; Mc[i] += f.M0[i]; }
+    for(let i=0;i<NP;i++) Mc[i] = Mc[i] >= need ? 1 : 0;
+    // 빽빽한 덩어리(글자·차량·흰 벽)는 제외
+    const dens = boxMean(Mc, W, H, 3);
+    for(let i=0;i<NP;i++){ if(Mc[i] && dens[i] < .5){ M[i] = 1; cnt++; } }
+    const L2 = boxMean(M, W, H, 4), L1 = boxMean(M, W, H, 2); let m1=0, m2=0, nb=0;
+    for(let i=0;i<NP;i++){ L1[i]=Math.min(1,L1[i]*4); L2[i]=Math.min(1,L2[i]*5); if(i >= yTop*W && i < yBot*W){ m1+=L1[i]; m2+=L2[i]; nb++; } }
+
+    // 허프 직선 → 소실점
+    await yieldUI(true); const segs = segments(M, W, H); let vp = vanishSeg(segs, W, H); const lines = segs.slice(0, 40).map(s=>({ th:s.th, rho:s.rho, v:s.len, c:s.c, s:s.s })); if(!vp.ok){ const hl = hough(M, W, H, yTop, yBot); vp = vanish(hl, W, H); }
+    return { W, H, M, asp, L1, L2, mu1:m1/nb, mu2:m2/nb, cnt, frac:cnt/NP, yTop, yBot, lines, vp, nfr:n, sig: sigOf(srcs[srcs.length-1]) };
+  }
+  function hough(M, W, H, yTop, yBot){
+    const NT = 90, DT = 2, RB = 2, RR = Math.ceil(Math.hypot(W, H)/RB), NR = RR*2+1; const acc = new Int32Array(NT*NR); const cs = [], sn = [];
+    for(let t=0;t<NT;t++){ const a = t*DT*D2R; cs.push(Math.cos(a)); sn.push(Math.sin(a)); }
+    for(let y=yTop;y<yBot;y++){ const wy = Math.round(2 + 6*y/H); for(let x=0;x<W;x++){ if(!M[y*W+x]) continue; for(let t=0;t<NT;t++){ const th = t*DT; if(th > 68 && th < 112) continue; const r = Math.round((x*cs[t] + y*sn[t])/RB) + RR; acc[t*NR + r] += wy; } } }
+    const peaks = []; for(let t=0;t<NT;t++){ const th = t*DT; if(th > 68 && th < 112) continue; for(let r=1;r<NR-1;r++){ const v = acc[t*NR+r]; if(v < 50) continue; let mx = true; for(let a=-2;a<=2&&mx;a++) for(let b=-3;b<=3;b++){ const tt = (t+a+NT)%NT, rr = r+b; if(rr<0||rr>=NR||(a===0&&b===0)) continue; if(acc[tt*NR+rr] > v){ mx = false; break; } } if(mx) peaks.push({ t, r, v }); } }
+    peaks.sort((a,b)=>b.v-a.v); const out = [];
+    for(const p of peaks){ if(out.some(q=>Math.abs(((q.t-p.t+NT/2)%NT)-NT/2) <= 2 && Math.abs(q.r-p.r) <= 5)) continue; out.push({ th:p.t*DT, rho:(p.r-RR)*RB, v:p.v, c:cs[p.t], s:sn[p.t] }); if(out.length >= 18) break; }
+    return out;
+  }
+  // 표시 픽셀 연결 성분 → 길고 가는 성분(차선 토막·중앙선·연석 가장자리·횡단보도 줄무늬 방향)을 직선 조각으로
+  function segments(M, W, H){
+    const lab = new Int32Array(W*H); const out = []; const qx = new Int32Array(W*H), qy = new Int32Array(W*H); let id = 0;
+    for(let y0=0;y0<H;y0++) for(let x0=0;x0<W;x0++){ const i0 = y0*W+x0; if(!M[i0] || lab[i0]) continue; id++; let qh = 0, qt = 0; qx[qt] = x0; qy[qt] = y0; qt++; lab[i0] = id; let n=0, sx=0, sy=0, sxx=0, syy=0, sxy=0;
+      while(qh < qt){ const x = qx[qh], y = qy[qh]; qh++; n++; sx+=x; sy+=y; sxx+=x*x; syy+=y*y; sxy+=x*y;
+        for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ const xx=x+dx, yy=y+dy; if(xx<0||yy<0||xx>=W||yy>=H) continue; const j=yy*W+xx; if(M[j] && !lab[j]){ lab[j] = id; qx[qt]=xx; qy[qt]=yy; qt++; } } }
+      if(n < 5) continue; const mx = sx/n, my = sy/n; const cxx = sxx/n - mx*mx, cyy = syy/n - my*my, cxy = sxy/n - mx*my; const tr = cxx+cyy, dt = cxx*cyy - cxy*cxy; const disc = Math.sqrt(Math.max(0, tr*tr/4 - dt)); const l1 = tr/2 + disc, l2 = Math.max(1e-3, tr/2 - disc);
+      if(l1/l2 < 5) continue; let dx = cxy, dy = l1 - cxx; if(Math.abs(cxy) < 1e-6){ dx = cxx >= cyy ? 1 : 0; dy = cxx >= cyy ? 0 : 1; } const dm = Math.hypot(dx, dy); dx/=dm; dy/=dm; if(Math.abs(dy) < .2) continue;
+      const len = Math.sqrt(l1)*3.5; if(len < 5) continue; // 직선: n·p = rho, n = (-dy, dx)
+      let c = -dy, s = dx; let rho = c*mx + s*my; if(rho < 0){ c=-c; s=-s; rho=-rho; } out.push({ mx, my, dx, dy, len, n, c, s, rho, th:Math.atan2(s, c)/D2R }); }
+    out.sort((a,b)=>b.len-a.len); return out;
+  }
+  function vanishSeg(segs, W, H){
+    const L = segs.slice(0, 70); if(L.length < 4) return { ok:false }; let best = null; let totL = 0; for(const s of L) totL += s.len;
+    for(let i=0;i<L.length;i++) for(let j=i+1;j<L.length;j++){ const a = L[i], b = L[j]; const det = a.c*b.s - a.s*b.c; if(Math.abs(det) < Math.sin(3*D2R)) continue;
+      const x = (a.rho*b.s - b.rho*a.s)/det, y = (a.c*b.rho - b.c*a.rho)/det; if(y < -1.4*H || y > .45*H || x < -1.5*W || x > 2.5*W) continue;
+      let vote = 0, n = 0; for(const l of L){ const tol = 3 + .025*Math.hypot(x-l.mx, y-l.my); const dd = Math.abs(x*l.c + y*l.s - l.rho); if(dd < tol && (y < l.my)){ vote += l.len; n++; } }
+      if(!best || vote > best.vote) best = { x, y, vote, n }; }
+    if(!best || best.n < 3 || best.vote < .15*totL) return { ok:false, x:best&&best.x, y:best&&best.y, n:best&&best.n, frac:best&&+(best.vote/totL).toFixed(2) };
+    let sxx=0,sxy=0,syy=0,sxr=0,syr=0; for(const l of L){ const tol = 3 + .025*Math.hypot(best.x-l.mx, best.y-l.my); const dd = Math.abs(best.x*l.c + best.y*l.s - l.rho); if(dd >= tol || best.y >= l.my) continue; const w = l.len; sxx+=w*l.c*l.c; sxy+=w*l.c*l.s; syy+=w*l.s*l.s; sxr+=w*l.c*l.rho; syr+=w*l.s*l.rho; }
+    const det = sxx*syy - sxy*sxy; let x = best.x, y = best.y; if(Math.abs(det) > 1e-6){ const xx = (syy*sxr - sxy*syr)/det, yy = (sxx*syr - sxy*sxr)/det; if(Math.hypot(xx-x, yy-y) < 12){ x = xx; y = yy; } }
+    return { ok:true, x, y, n:best.n, frac:+(best.vote/totL).toFixed(2), seg:true };
+  }
+  // 표시 픽셀마다 국소 선 방향(기울기 수직)으로 위쪽 광선을 리고 투표 → 차선 다수가 모이는 점(소실점)
+  function vanishTex(G, M, W, H, yTop, yBot){
+    const CS = 4, X0 = -1.5*W, X1 = 2.5*W, Y0 = -1.4*H, Y1 = .45*H; const AW = Math.ceil((X1-X0)/CS), AH = Math.ceil((Y1-Y0)/CS); const acc = new Float32Array(AW*AH); let tot = 0;
+    for(let y=yTop+1;y<yBot-1;y++) for(let x=1;x<W-1;x++){ const i=y*W+x; if(!M[i]) continue;
+      const gx = (G[i+1]-G[i-1]) + .5*(G[i-W+1]-G[i-W-1]) + .5*(G[i+W+1]-G[i+W-1]), gy = (G[i+W]-G[i-W]) + .5*(G[i+W-1]-G[i-W-1]) + .5*(G[i+W+1]-G[i-W+1]); const gm = Math.hypot(gx, gy); if(gm < 30) continue;
+      let dx = -gy/gm, dy = gx/gm; if(dy > 0){ dx = -dx; dy = -dy; } if(dy > -.25) continue;   // 위로 향하는 방향만(수평선 제외)
+      const w = .5 + 1.5*y/H; tot += w; let px = x, py = y; for(let k=0;k<400;k++){ px += dx*CS*.7; py += dy*CS*.7; if(py < Y0) break; if(px < X0 || px >= X1) break; if(py > Y1) continue; acc[((py-Y0)/CS|0)*AW + ((px-X0)/CS|0)] += w; } }
+    if(tot < 30) return { ok:false };
+    const sm = boxMean(acc, AW, AH, 2); let bi = -1, bv = 0; for(let i=0;i<sm.length;i++){ if(sm[i] > bv){ bv = sm[i]; bi = i; } }
+    if(bi < 0) return { ok:false }; const vx = X0 + ((bi % AW) + .5)*CS, vy = Y0 + ((bi / AW | 0) + .5)*CS;
+    // 평균 투표 대비 피크 강도
+    let mean = 0; for(let i=0;i<sm.length;i++) mean += sm[i]; mean /= sm.length; const peak = bv/(mean+1e-6);
+    return { ok: peak > 6, x:vx, y:vy, peak:+peak.toFixed(1), tex:true };
+  }
+  function vanish(lines, W, H){
+    let best = null;
+    for(let i=0;i<lines.length;i++) for(let j=i+1;j<lines.length;j++){ const a = lines[i], b = lines[j]; const det = a.c*b.s - a.s*b.c; if(Math.abs(det) < Math.sin(4*D2R)) continue;
+      const x = (a.rho*b.s - b.rho*a.s)/det, y = (a.c*b.rho - b.c*a.rho)/det; if(y < -1.4*H || y > .45*H || x < -1.5*W || x > 2.5*W) continue;
+      let vote = 0, n = 0; for(const l of lines){ const dd = Math.abs(x*l.c + y*l.s - l.rho); if(dd < 5){ vote += Math.sqrt(l.v); n++; } }
+      if(!best || vote > best.vote) best = { x, y, vote, n }; }
+    if(!best || best.n < 3) return { ok:false };
+    // 지지 직선들로 최소제곱 재추정
+    let sxx=0,sxy=0,syy=0,sxr=0,syr=0; for(const l of lines){ const dd = Math.abs(best.x*l.c + best.y*l.s - l.rho); if(dd >= 6) continue; const w = Math.sqrt(l.v); sxx+=w*l.c*l.c; sxy+=w*l.c*l.s; syy+=w*l.s*l.s; sxr+=w*l.c*l.rho; syr+=w*l.s*l.rho; }
+    const det = sxx*syy - sxy*sxy; if(Math.abs(det) > 1e-6){ best.x = (syy*sxr - sxy*syr)/det; best.y = (sxx*syr - sxy*sxr)/det; }
+    return { ok:true, x:best.x, y:best.y, n:best.n, vote:best.vote };
+  }
+
+  // ---- 투영 점수 ----
+  function cam(c, W, H){ const B=c.hd*D2R, T=c.pt*D2R, sB=Math.sin(B), cB=Math.cos(B), sT=Math.sin(T), cT=Math.cos(T); const tH=Math.tan(c.fov/2*D2R); return { f0:sB*cT, f1:cB*cT, f2:sT, r0:cB, r1:-sB, u0:-sB*sT, u1:-cB*sT, u2:cT, ax:W/2/tH, ay:W/2/tH, du:-c.h, hx:W/2, hy:H/2 }; }
+  function scoreM(c, P, F, FL){ const W=F.W, H=F.H, K = cam(c, W, H); let s=0, w=0; const E=P.E, N=P.N, L=E.length;
+    for(let i=0;i<L;i++){ const de=E[i]-c.e, dn=N[i]-c.n; const z=de*K.f0+dn*K.f1+K.du*K.f2; if(z<4 || z>130) continue; const x=K.hx+K.ax*(de*K.r0+dn*K.r1)/z; if(x<0 || x>=W) continue; const y=K.hy-K.ay*(de*K.u0+dn*K.u1+K.du*K.u2)/z; if(y<F.yTop || y>=F.yBot) continue; const wt = 1/(1+z/60); w+=wt; s+=FL[(y|0)*W+(x|0)]*wt; }
+    return [s, w]; }
+  function scoreA(c, A, F){ const W=F.W, H=F.H, K = cam(c, W, H); let s=0, w=0; const E=A.E, N=A.N, L=E.length;
+    for(let i=0;i<L;i++){ const de=E[i]-c.e, dn=N[i]-c.n; const z=de*K.f0+dn*K.f1+K.du*K.f2; if(z<4 || z>110) continue; const x=K.hx+K.ax*(de*K.r0+dn*K.r1)/z; if(x<0 || x>=W) continue; const y=K.hy-K.ay*(de*K.u0+dn*K.u1+K.du*K.u2)/z; if(y<F.yTop || y>=F.yBot) continue; w++; s+=F.asp[(y|0)*W+(x|0)]; }
+    return w < 20 ? 0 : s/w; }
+  let rbuf = null;
+  function recall(c, P, F, Ml){ const W=F.W, H=F.H; if(!rbuf || rbuf.length !== W*H) rbuf = new Uint8Array(W*H); rbuf.fill(0); const K = cam(c, W, H);
+    for(let i=0;i<P.E.length;i++){ const de=P.E[i]-c.e, dn=P.N[i]-c.n; const z=de*K.f0+dn*K.f1+K.du*K.f2; if(z<4||z>130) continue; const x=(K.hx+K.ax*(de*K.r0+dn*K.r1)/z)|0; if(x<0||x>=W) continue; const y=(K.hy-K.ay*(de*K.u0+dn*K.u1+K.du*K.u2)/z)|0; if(y<0||y>=H) continue; const rad = z<25?4:z<60?3:2; for(let yy=Math.max(0,y-rad); yy<=Math.min(H-1,y+rad); yy++) for(let xx=Math.max(0,x-rad); xx<=Math.min(W-1,x+rad); xx++) rbuf[yy*W+xx]=1; }
+    let hit=0; for(const k of Ml) hit+=rbuf[k]; return Ml.length ? hit/Ml.length : 0; }
+
+  // 영상의 아스팔트 픽셀을 지면으로 역투영 → OSM 도로 회랑 안에 떨어지는 비율 (좁은 갈래를 넓은 도로 영상에 맞추는 오류 방지)
+  function aRecall(c, F, Al, R){ const W=F.W, H=F.H, K = cam(c, W, H); let hit=0; const cell = R.cell, grid = R.grid;
+    for(let i=0;i<Al.length;i++){ const k = Al[i]; const x = (k % W) + .5, y = (k / W | 0) + .5; const sx = (x-K.hx)/K.ax, sy = (K.hy-y)/K.ay; const dz = K.f2 + sy*K.u2; if(dz > -1e-3) continue; const t = c.h / -dz; if(t > 150) continue; const e = c.e + t*(K.f0 + sx*K.r0 + sy*K.u0), n = c.n + t*(K.f1 + sx*K.r1 + sy*K.u1); if(grid.has(Math.round(e/cell)*4096 + Math.round(n/cell))) hit++; }
+    return Al.length ? hit/Al.length : 0; }
+
+  // ---- 추정 ----
+  // 영상에서 프레임 여러 장 복사(320 px 축소) · 도로·위성 불러오는 동안 병렬로
+  async function grabFrames(v, n, gap, sw, sh){ const out = []; const W = 320, H = Math.max(120, Math.round(W*sh/sw) || 180);
+    for(let i=0;i<n;i++){ const c = document.createElement('canvas'); c.width = W; c.height = H; try{ c.getContext('2d').drawImage(v, 0, 0, W, H); out.push(c); }catch(e){} if(i < n-1) await new Promise(r=>setTimeout(r, gap)); } return out; }
+  async function estimate(lon0, lat0, src, sw, sh, progress, opt){
+    opt = opt || {}; const t0 = performance.now(); const dbg = {};
+    progress && progress('도로(OSM)·위성 영상 불러오는 중…');
+    const isVid = src && src.tagName === 'VIDEO';
+    const [ways, OP, frames] = await Promise.all([roads(lon0, lat0), orthoPts(lon0, lat0, 110), isVid ? grabFrames(src, opt.nfr || 6, 380, sw, sh) : Promise.resolve([src])]);
+    if(!ways.length) throw new Error('주변 150 m에 도로 정보(OSM)가 없습니다');
+    const R = corridor(ways, lon0, lat0); if(!R.arms.length) throw new Error('카메라 주변 60 m에 도로 갈래가 없습니다');
+    const PE=[], PN=[]; for(let i=0;i<OP.E.length;i++){ if(R.grid.has(Math.round(OP.E[i]/R.cell)*4096+Math.round(OP.N[i]/R.cell))){ PE.push(OP.E[i]); PN.push(OP.N[i]); } }
+    const P = { E:Float32Array.from(PE), N:Float32Array.from(PN) }; if(P.E.length < 80) throw new Error('위성 영상에서 도로 노면 표시를 찾지 못했습니다');
+    const sub = (Q, n)=>{ const L = Q.E.length; if(L <= n) return Q; const st = L/n, E = new Float32Array(n), N = new Float32Array(n); for(let i=0;i<n;i++){ const j = Math.floor(i*st); E[i]=Q.E[j]; N[i]=Q.N[j]; } return { E, N }; };
+    const Pc = sub(P, 900), Ac = sub(R.A, 350);
+    await yieldUI(true); progress && progress('영상에서 차선·소실점 찾는 중…');
+    const F = await analyze(frames, sw, sh); dbg.F = { cnt:F.cnt, vp:F.vp, nlines:F.lines.length, mu2:F.mu2, nfr:F.nfr };
+    if(F.cnt < 60) throw new Error('영상에서 차선·횡단보도가 거의 보이지 않습니다(야간·악천후·도로 밖 장면)');
+    const W = F.W, H = F.H; const vp = F.vp;
+    // 지면 영역(소실점 아래)의 영상 표시 픽셀 목록 → 재현율
+    const gy = vp.ok ? Math.max(F.yTop, Math.round(vp.y + .12*H)) : Math.round(H*.3); const Ml = []; for(let y=gy;y<F.yBot;y++) for(let x=0;x<W;x++){ if(F.M[y*W+x]) Ml.push(y*W+x); }
+    if(Ml.length < 40) throw new Error('도로면(소실점 아래)에서 차선이 거의 보이지 않습니다');
+    const Al = []; for(let y=gy;y<F.yBot;y+=2) for(let x=0;x<W;x+=2){ const k=y*W+x; if(F.asp[k] > .75) Al.push(k); }
+    // 위치 후보: 목록 좌표 ±45 m, 5 m 간격, 도로 중심선 22 m 이내
+    const pos = []; for(let e=-45;e<=45;e+=6) for(let n=-45;n<=45;n+=6){ let md = 1e9; for(let i=0;i<R.CE.length;i+=2){ const d = (R.CE[i]-e)**2 + (R.CN[i]-n)**2; if(d < md) md = d; } if(md < 22*22) pos.push([e, n]); }
+    if(!pos.length) pos.push([0,0]);
+    await yieldUI(true);
+    const FOVS = [46, 54, 62], HS = [8, 11, 14.5]; const ptOf = (fov)=>{ const ay = W/2/Math.tan(fov/2*D2R); return Math.atan((vp.y - H/2)/ay)/D2R; }; const yawOf = (fov, pt)=>{ const ax = W/2/Math.tan(fov/2*D2R); return Math.atan((vp.x - W/2)/ax*Math.cos(pt*D2R))/D2R; };
+    const combos = []; // {fov, pt, yaw}
+    if(vp.ok){ for(const fov of FOVS){ const pt = Math.max(-45, Math.min(-4, ptOf(fov))); const yaw = yawOf(fov, pt); for(const dy of [-3, 0, 3]) combos.push({ fov, pt, yaw:yaw+dy }); } }
+    else { for(const fov of [50, 60]) for(const pt of [-10, -16, -24, -32]) for(const yaw of [-18, -9, 0, 9, 18]) combos.push({ fov, pt, yaw }); }
+    const Wref = Math.max(15, .06*P.E.length/(1+40/60)), WrefC = Wref*Pc.E.length/P.E.length;
+    const evC = (c)=>{ const r = scoreM(c, Pc, F, F.L2); if(r[1] < 1) return 0; const mp = r[0]/r[1] - F.mu2; if(mp <= 0) return 0; const ap = scoreA(c, Ac, F); return mp * (.3 + .7*ap) * Math.min(1, r[1]/WrefC); };
+    const evF = (c)=>{ const r = scoreM(c, P, F, F.L1); if(r[1] < 1) return 0; const mp = r[0]/r[1] - F.mu1; if(mp <= 0) return 0; const ap = scoreA(c, R.A, F); const rc = recall(c, P, F, Ml); return mp * (.3 + .7*ap) * Math.min(1, r[1]/Wref) * Math.sqrt(rc); };
+    const armRes = []; if(R.arms.length > 6) R.arms.length = 6;
+    for(let ai=0; ai<R.arms.length; ai++){ const arm = R.arms[ai]; const top = [];
+      for(const cb of combos){ const hd = arm.b - cb.yaw; for(const h of HS) for(const [e, n] of pos){ const c = { e, n, h, hd, pt:cb.pt, fov:cb.fov }; const s = evC(c); if(s <= 0) continue;
+          if(top.length < 14 || s > top[top.length-1].s){ top.push({ c, s }); top.sort((a,b)=>b.s-a.s); if(top.length > 14) top.pop(); } }
+        await yieldUI(); }
+      // 재현율 포함 재평가 → 갈래별 상위 2개 세밀 조정
+      for(const t of top){ t.f = evF(t.c); } top.sort((a,b)=>b.f-a.f); await yieldUI(true);
+      const seeds = []; for(const t of top){ if(seeds.every(s=>Math.hypot(t.c.e-s.c.e, t.c.n-s.c.n) > 8)) seeds.push(t); if(seeds.length >= 2) break; }
+      for(const sd of seeds){ const r = await refine(sd.c, evF, arm, vp); armRes.push({ arm:ai, c:r.c, f:r.s, name:arm.name, b:arm.b }); }
+      progress && progress('앵글 찾는 중… ' + Math.round(100*(ai+1)/R.arms.length) + '%');
+    }
+    armRes.sort((a,b)=>b.f-a.f); if(!armRes.length || armRes[0].f <= 0) throw new Error('영상과 맞는 도로 방향을 찾지 못했습니다');
+    // 후보 정리: 방향 25° 이상 또는 위치 12 m 이상 다른 것만
+    const cands = []; for(const r of armRes){ if(cands.every(q=>Math.abs(((q.c.hd-r.c.hd+540)%360)-180) > 25 || Math.hypot(q.c.e-r.c.e, q.c.n-r.c.n) > 12)) cands.push(r); if(cands.length >= 5) break; }
+    const best = cands[0]; const alt = cands.find(r=>Math.abs(((r.c.hd-best.c.hd+540)%360)-180) > 25); const margin = alt ? (best.f - alt.f)/best.f : 1;
+    const kx = kxOf(lat0); const toPose = (r, rank)=>{ const c = r.c; const conf = Math.max(5, Math.round(100 * Math.min(1, r.f/0.15) * (rank === 0 ? (.4 + .6*Math.min(1, margin/.3)) : .4))); return { lon:+(lon0 + c.e/kx).toFixed(6), lat:+(lat0 + c.n/KY).toFixed(6), h:Math.round(c.h*10)/10, hd:Math.round(((c.hd%360)+360)%360), pt:Math.round(c.pt*10)/10, fov:Math.round(c.fov), aspect:+(sw/sh).toFixed(4), auto:true, conf, f:+r.f.toFixed(4), arm:r.name, armB:Math.round(r.b), shift:Math.round(Math.hypot(c.e, c.n)) }; };
+    const out = cands.map(toPose); dbg.ms = Math.round(performance.now() - t0); dbg.arms = R.arms.map(a=>({ b:Math.round(a.b), name:a.name, hw:a.hw })); dbg.npts = P.E.length; dbg.nMl = Ml.length; dbg.npos = pos.length; dbg.margin = +margin.toFixed(3);
+    return { cands:out, sig:F.sig, dbg, F: opt.keepF ? F : undefined, P: opt.keepF ? P : undefined, R: opt.keepF ? R : undefined };
+  }
+  async function refine(c0, ev, arm, vp){
+    let best = { ...c0 }, bs = ev(best); const steps = [['e',3],['n',3],['h',1.5],['hd',2],['pt',1.5],['fov',4]];
+    const BND = { e:[-60,60], n:[-60,60], h:[5,24], pt:[-45,-3], fov:[36,76], hd:[c0.hd-10, c0.hd+10] };
+    for(const sc of [1, .5]){ let imp = true, it = 0; while(imp && it++ < 6){ imp = false; for(const [k, st] of steps) for(const sg of [1,-1]){ const cd = { ...best }; cd[k] = Math.max(BND[k][0], Math.min(BND[k][1], cd[k] + sg*st*sc)); const s = ev(cd); if(s > bs){ bs = s; best = cd; imp = true; } } await yieldUI(); } }
+    return { c:best, s:bs };
+  }
+
+  // ---- 카메라별 장면(뷰) 저장 ----
+  function loadLS(url){ try{ return JSON.parse(localStorage.getItem(LS + url) || 'null'); }catch(e){ return null; } }
+  function saveLS(url, views){ try{ localStorage.setItem(LS + url, JSON.stringify(views.filter(v=>!v.manual).slice(-6).map(v=>({ sig:v.sig, cands:v.cands, sel:v.sel, t:v.t })))); }catch(e){} }
+  function viewsOf(url){ let views = VIEWS[url]; if(!views){ views = VIEWS[url] = [ ...(loadLS(url) || []) ]; } return views; }
+  const MON = { url:null, sig:null, prev:null, n:0, busy:false, view:null };
+  function apply(url, view, cam){ const p = view.manual ? { ...MANUAL[url] } : { ...view.cands[view.sel || 0] }; p.name = cam[2]; p.v62 = true; if(!view.manual) p.note = (p.batch ? '자동 추정(3D 모델 렌더 정합 · 일괄)' : '자동 추정(소실점 + 위성 노면표시 정합)') + ' · ' + (p.arm ? p.arm + ' ' + p.armB + '° 갈래 · ' : '') + '신뢰도 ' + p.conf + '%' + (view.cands.length > 1 ? ' · 후보 ' + ((view.sel||0)+1) + '/' + view.cands.length : ''); POSE[url] = p; MON.url = url; MON.view = view; MON.sig = view.sig; MON.prev = view.sig; MON.n = 0; syncAlt(); return p; }
+  async function prepare(url, force){
+    const v = document.getElementById('cvV'); if(!(v && v.readyState >= 2 && v.videoWidth)){ tst('영상이 나온 뒤에 다시 눌러 주세요', 2200); return false; }
+    if(!S.cur) return false; const cam = S.data[S.cur.k].cams[S.cur.i]; const sig = sigOf(v);
+    const views = viewsOf(url); if(MANUAL[url] && !views.some(x=>x.manual)) views.unshift({ manual:true, sig, cands:[{ ...MANUAL[url] }], sel:0 });
+    let bestV = null, bc = 0; for(const vw of views){ const c = corr(sig, vw.sig); if(c > bc){ bc = c; bestV = vw; } }
+    if(!force && bestV && bc > (bestV.manual ? .5 : .62)){ apply(url, bestV, cam); return true; }
+    if(MON.busy) return false; MON.busy = true; setBusy(true);
+    try{
+      const r = await estimate(cam[0], cam[1], v, v.videoWidth, v.videoHeight, m=>tst(cam[2] + ' · ' + m, 1500));
+      const b0 = POSE[url] && POSE[url].auto && !POSE[url].v62 ? { ...POSE[url], batch:true, conf: POSE[url].conf || 0 } : null;   // 60 블록 일괄 결과(3D 렌더 정합)는 1순위 후보로
+      const cands = b0 ? [b0, ...r.cands] : r.cands; const view = { sig:r.sig, cands, sel:0, t:Date.now() }; views.push(view); saveLS(url, views); const p = apply(url, view, cam);
+      tst(cam[2] + ' · 앵글 자동 추정 완료 (' + (r.dbg.ms/1000).toFixed(1) + '초) · ' + (b0 ? '[일괄 3D 정합 결과 우선] ' : '') + (p.arm ? p.arm + ' 방향 ' : '방향 ') + p.hd + '° · 아래로 ' + (-p.pt) + '° · 신뢰도 ' + p.conf + '%' + (p.conf < 40 ? ' (낮음: 참고용)' : '') + (r.cands.length > 1 ? ' · 다른 후보 ' + (r.cands.length-1) + '개' : ''), 4200);
+      return true;
+    }catch(e){ tst(cam[2] + ' · 앵글 자동 추정 실패: ' + e.message, 3800); return false; }
+    finally{ MON.busy = false; setBusy(false); }
+  }
+  function refresh(url){ const st = X.st; if(st.pov && st.pov.key === url){ X.exitPov(); X.enterPov(url); } if(st.key === url){ X.show3d(url, { noFly:true }); } try{ X.sync && X.sync(); }catch(e){} }
+
+  // ---- 버튼: 다른 방향 후보 ----
+  const P = document.getElementById('cvPanel'); const row = P && P.querySelector('.row.r3'); const bAlt = document.createElement('button'); bAlt.id = 'cvAlt'; bAlt.textContent = '다른 방향 후보'; if(row) row.appendChild(bAlt);
+  function curUrl(){ return S.cur ? CV.urlOf(S.cur.k, S.cur.i) : null; }
+  function syncAlt(){ const url = curUrl(); const vw = (url && MON.url === url) ? MON.view : null; const n = vw && vw.cands ? vw.cands.length : 0; bAlt.disabled = !(n > 1) || MON.busy; bAlt.textContent = n > 1 ? '다른 방향 후보 ' + ((vw.sel||0)+1) + '/' + n : '다른 방향 후보'; bAlt.title = n > 1 ? '누를 때마다 다음 후보 방향으로 바꿉니다 · 선택은 저장됩니다' : '자동 추정을 하면 다른 갈래 후보가 생깁니다'; }
+  function setBusy(b){ const b3 = document.getElementById('cv3d'), bp = document.getElementById('cvPovB'); for(const el of [b3, bp, bAlt]){ if(!el) continue; el.disabled = b; } if(b3) b3.textContent = b ? '앵글 추정 중…' : (X.st.ds ? '3D 앵글 끄기' : '3D에 앵글 표시'); if(!b) syncAlt(); }
+  bAlt.onclick = ()=>{ const url = curUrl(); const vw = MON.view; if(!url || MON.url !== url || !vw || !vw.cands || vw.cands.length < 2) return; if(!S.cur) return; const cam = S.data[S.cur.k].cams[S.cur.i];
+    vw.sel = ((vw.sel||0) + 1) % vw.cands.length; const p = apply(url, vw, cam); saveLS(url, viewsOf(url)); if(vw.manual) return;
+    tst('후보 ' + (vw.sel+1) + '/' + vw.cands.length + ' · ' + (p.arm ? p.arm + ' ' : '') + '방향 ' + p.hd + '° · 아래로 ' + (-p.pt) + '° · 신뢰도 ' + p.conf + '% · 이 선택을 저장했습니다', 3000); refresh(url); };
+  // 영상 창이 열리면 도로(OSM)·위성 자료를 미리 받아 둔다(버튼을 누를 때 기다리지 않게) · 카메라당 1회
+  let preT = null; function prefetch(){ clearTimeout(preT); preT = setTimeout(()=>{ if(!S.cur || !P.classList.contains('open')) return; const cam = S.data[S.cur.k].cams[S.cur.i]; const url = CV.urlOf(S.cur.k, S.cur.i); if(POSE[url] && !POSE[url].auto) return; roads(cam[0], cam[1]).catch(()=>{}); orthoPts(cam[0], cam[1], 110).catch(()=>{}); }, 1200); }
+  try{ new MutationObserver(()=>{ syncAlt(); prefetch(); }).observe(document.getElementById('cvName'), { childList:true, characterData:true, subtree:true }); }catch(e){}
+
+  // ---- 회전(PTZ) 카메라 감시: 다른 방향으로 돌아가 멈추면 다시 맞춤 ----
+  const timer = setInterval(async ()=>{
+    const st = X.st; const url = st.key || (st.pov && st.pov.key); if(!url || MON.busy || url !== MON.url) return;
+    const v = document.getElementById('cvV'); if(!(v && v.readyState >= 2 && v.videoWidth && !v.paused)) return;
+    let sig; try{ sig = sigOf(v); }catch(e){ return; } const c = corr(sig, MON.sig); const stable = corr(sig, MON.prev) > .85; MON.prev = sig;
+    if(c > .55){ MON.n = 0; return; } MON.n = stable ? MON.n + 1 : 0; if(MON.n < 2) return; MON.n = 0;
+    tst('카메라 방향이 바뀌었습니다 · 앵글을 다시 맞춥니다', 1800);
+    const ok = await prepare(url); if(!ok){ MON.sig = sig; return; } refresh(url);
+  }, 2500);
+
+  syncAlt();
+  window.__CV62 = { version:VER, prepare, estimate, analyze, orthoPts, roads, corridor, scoreM, scoreA, recall, aRecall, sigOf, corr, VIEWS, MANUAL, MON, timer, apply, refresh, viewsOf, saveLS, OCACHE, RCACHE };
+  if(!window.__CV60) window.__CV60 = window.__CV62;   // 호환 별칭(60 블록은 __CVB/__CV60I 사용)
 })();
 </script>
 </body>
