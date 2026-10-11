@@ -8805,8 +8805,8 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     if(st.key && st.key !== k) clear3d(); if(st.pov && st.pov.key !== k) exitPov(); }
   new MutationObserver(sync).observe(document.getElementById('cvName'), { childList:true, characterData:true, subtree:true });
   new MutationObserver(()=>{ if(!P.classList.contains('open')){ clear3d(); exitPov(); } sync(); }).observe(P, { attributes:true, attributeFilter:['class'] });
-  b3.onclick = async ()=>{ const k = curKey(); if(!k) return; if(st.ds && st.key === k){ clear3d(); sync(); return; } if(!POSE[k] && window.__CV62){ if(!(await window.__CV62.prepare(k))) return; } if(!POSE[k]) return; show3d(k); };
-  bp.onclick = async ()=>{ const k = curKey(); if(!k) return; if(st.pov){ exitPov(); return; } if(!POSE[k] && window.__CV62){ if(!(await window.__CV62.prepare(k))) return; } if(!POSE[k]) return; enterPov(k); };
+  b3.onclick = async ()=>{ const k = curKey(); if(!k) return; if(st.ds && st.key === k){ clear3d(); sync(); return; } if(window.__CV62 && (!POSE[k] || !POSE[k].v62)){ if(!(await window.__CV62.prepare(k)) && !POSE[k]) return; } if(!POSE[k]) return; show3d(k); };
+  bp.onclick = async ()=>{ const k = curKey(); if(!k) return; if(st.pov){ exitPov(); return; } if(window.__CV62 && (!POSE[k] || !POSE[k].v62)){ if(!(await window.__CV62.prepare(k)) && !POSE[k]) return; } if(!POSE[k]) return; enterPov(k); };
 
   // ---- 기하: ENU 기준 카메라 축 ----
   function axes(p, g){
@@ -9185,7 +9185,7 @@ if(!window.__CVB) window.__CVB = (function(){
 (function(){
   if(window.__CV62 || !window.__CV59 || !window.__CV57) return;
   const C = Cesium, CV = window.__CV57, X = window.__CV59, POSE = X.POSE, S = CV.S, D2R = Math.PI/180;
-  const VER = '62.2';
+  const VER = '62.3';
   const MANUAL = {}; for(const k in POSE){ if(!POSE[k].auto) MANUAL[k] = { ...POSE[k], manual:true }; }
   const OVP = ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.openstreetmap.fr/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter','https://overpass.private.coffee/api/interpreter'];
   const VKEY = '57C7018D-1A36-4873-99CD-A2272BD3040E';
