@@ -9476,5 +9476,309 @@ if(!window.__CVB) window.__CVB = (function(){
   if(!window.__CV60) window.__CV60 = window.__CV62;   // 호환 별칭(60 블록은 __CVB/__CV60I 사용)
 })();
 </script>
+<script>
+/* ---------- 63. SITE › 3D 모델 › 차량 지우기 (도로 평면화 · 화면 중심 300 m) (2026-10-11) ----------
+   - 화면 중심 반경 150 m(지름 300 m)의 OSM 차도(위성으로 폭 보정)를 대상으로
+   1) 위에서 수직 정사(직교 투영)로 3D 모델을 두 번 찍음: ① 원본 색 ② 높이 인코딩 셰이더(화소마다 높이 = DSM, 약 1 cm 단위)
+   2) DSM에서 도로면 기준면 계산: 1 m 칸마다 하위 20% → 7 m 창 하위 25% → 매끈하게 (차량·가로수 가지는 기준면에서 빠짐) · 기준면보다 0.35 m 넘게 높은 곳 = 차량
+   3) 차량 자리 + 주변 1 m + 붙어 있는 진한 그림자를 지우고, 도로 방향을 따라 앞뒤 노면 색으로 채움(차선·중앙선이 이어지도록 도로 방향 보간)
+   4) 3D 모델을 도로 모양으로 잘라내고 그 자리에 평면화한 도로면(차량 지운 정사 텍스처)을 원래 노면 높이로 깔음
+   - 끄면 원래대로 · 도로만 보기(61)·수평 단면(30)과 동시에 쓸 수 없어 켤 때 끔
+   - 63.1 (시험판 62.x 통합): 납작하게 찍혀 높이가 없는 차량은 앞뒤 노면 색과 다른 차 크기 덩어리로 찾음(그늘에선 기준 자동 완화) · 앞유리로 조각난 차는 조각을 묶어 판단
+            차 높이는 상위 10% 튀는 값을 뺀 높이로 판단 · 촬영 중 직교 폭·SSE(화질 자동 무시) 고정 + 캐시 1 GB로 처음 켜도 최고 해상도로 촬영
+   - 한계: 정체로 30 m 넘게 차량이 이어진 곳은 색이 흐리게 채워짐 · 도로 가장자리 1~2 m는 OSM·위성 폭 오차 · 처리 약 1~2분
+---------------------------------------------------------------------------------------------- */
+(function(){
+  if(window.__VR63) return;
+  const C = Cesium, D2R = Math.PI/180, R = 150;
+  const OVP = ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter','https://overpass.private.coffee/api/interpreter'];
+  const TWO = { motorway:4, trunk:6, primary:6, secondary:4, tertiary:2, unclassified:2, residential:2, living_street:1, service:1 };
+  const ONE = { motorway:2, trunk:2, primary:2, secondary:2, tertiary:1, unclassified:1, residential:1, living_street:1, service:1, motorway_link:1, trunk_link:1, primary_link:1, secondary_link:1, tertiary_link:1 };
+  const tst = (m, t)=>{ try{ toast(m, t||2400); }catch(e){} };
+  const sleep0 = ()=>new Promise(r=>setTimeout(r, 0));
+
+  async function fetchRoads(lon, lat){
+    const ck = 'rd63:' + lon.toFixed(3) + ',' + lat.toFixed(3); try{ const c = JSON.parse(localStorage.getItem(ck) || 'null'); if(c && Date.now() - c.t < 7*864e5) return c.w; }catch(e){}
+    let lastE; for(let attempt=0; attempt<3; attempt++){ try{ const w = await fetchRoads1(lon, lat); try{ const keys = Object.keys(localStorage).filter(k=>k.startsWith('rd63:')); if(keys.length > 3) keys.slice(0, keys.length-3).forEach(k=>localStorage.removeItem(k)); localStorage.setItem(ck, JSON.stringify({ t:Date.now(), w })); }catch(e){} return w; }catch(e){ lastE = e; if(!RD.on) throw e; tst('OSM 서버가 바빠서 다시 시도합니다 (' + (attempt+2) + '/3)…', 2500); await new Promise(r=>setTimeout(r, 2500 + attempt*3000)); } }
+    throw lastE;
+  }
+  async function fetchRoads1(lon, lat){
+    const q = '[out:json][timeout:40];way(around:' + R + ',' + lat + ',' + lon + ')[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"]["tunnel"!~"yes|building_passage"]["service"!~"parking_aisle|drive-through"]["area"!="yes"];out geom;';
+    const ctl = OVP.map(()=>new AbortController()); const to = setTimeout(()=>ctl.forEach(a=>a.abort()), 45000);
+    try{ const w = await Promise.any(OVP.map(async (ep, i)=>{ const r = await fetch(ep + '?data=' + encodeURIComponent(q), { signal: ctl[i].signal }); if(!r.ok) throw new Error('HTTP ' + r.status); const j = await r.json(); return (j.elements||[]).filter(e=>e.geometry && e.geometry.length > 1).map(e=>({ tags:e.tags, geometry:e.geometry.map(p=>({ lat:+p.lat.toFixed(6), lon:+p.lon.toFixed(6) })) })); }));
+      ctl.forEach(a=>{ try{ a.abort(); }catch(e){} }); return w; }
+    catch(e){ throw new Error('OSM 도로 서버가 응답하지 않습니다 · 잠시 후 다시 켜 주세요'); } finally{ clearTimeout(to); }
+  }
+  function roadSpec(t){ const hw = t.highway; const one = t.oneway === 'yes' || t.oneway === '1' || t.junction === 'roundabout' || /motorway|_link/.test(hw) && t.oneway !== 'no';
+    let lanes = parseInt(t.lanes); if(!(lanes > 0)) lanes = one ? (ONE[hw] || 1) : (TWO[hw] || 2);
+    let w = parseFloat(t.width); if(!(w > 2 && w < 60)) w = lanes*3.3 + (hw==='service' || hw==='living_street' ? .5 : 1);
+    return { one, lanes, w: hw==='service' ? Math.min(w, 5.5) : w, major: !/service|living_street|residential|unclassified/.test(hw) }; }
+  // 폴리라인 → 폭 w 다각형(마이터, 끝은 w/2 연장) · 꼭짓점 많으면 조각으로 나눔
+  function offsetPoly(pts, w){
+    const h = w/2, n = pts.length; if(n < 2) return null; const L = [], Rr = [];
+    const p = pts.map(q=>q.slice());
+    const d0 = norm(sub(p[1], p[0])), d1 = norm(sub(p[n-1], p[n-2])); p[0] = [p[0][0] - d0[0]*h*.6, p[0][1] - d0[1]*h*.6]; p[n-1] = [p[n-1][0] + d1[0]*h*.6, p[n-1][1] + d1[1]*h*.6];
+    for(let i=0;i<n;i++){ const a = i>0 ? norm(sub(p[i], p[i-1])) : null, b = i<n-1 ? norm(sub(p[i+1], p[i])) : null;
+      if(!a || !b){ const d = a || b; const nx = -d[1], ny = d[0]; L.push([p[i][0]+nx*h, p[i][1]+ny*h]); Rr.push([p[i][0]-nx*h, p[i][1]-ny*h]); continue; }
+      const na = [-a[1], a[0]], nb = [-b[1], b[0]]; const m = norm([na[0]+nb[0], na[1]+nb[1]]); const cos = m[0]*na[0] + m[1]*na[1];
+      if(cos < .5){ L.push([p[i][0]+na[0]*h, p[i][1]+na[1]*h], [p[i][0]+nb[0]*h, p[i][1]+nb[1]*h]); Rr.push([p[i][0]-na[0]*h, p[i][1]-na[1]*h], [p[i][0]-nb[0]*h, p[i][1]-nb[1]*h]); }
+      else { const s = h/cos; L.push([p[i][0]+m[0]*s, p[i][1]+m[1]*s]); Rr.push([p[i][0]-m[0]*s, p[i][1]-m[1]*s]); } }
+    return L.concat(Rr.reverse());
+  }
+  const sub = (a, b)=>[a[0]-b[0], a[1]-b[1]], norm = v=>{ const l = Math.hypot(v[0], v[1]) || 1; return [v[0]/l, v[1]/l]; };
+  function chunks(pts, maxN){ const out = []; for(let s=0; s<pts.length-1; s+=maxN-1) out.push(pts.slice(s, Math.min(pts.length, s+maxN))); return out; }
+  function simplify(pts, tol){ if(pts.length < 3) return pts; const out = [pts[0]]; for(let i=1;i<pts.length-1;i++){ const a = out[out.length-1], b = pts[i], c = pts[i+1]; const ab = sub(b, a), ac = sub(c, a); const L = Math.hypot(ac[0], ac[1]) || 1; const d = Math.abs(ab[0]*ac[1] - ab[1]*ac[0])/L; if(d > tol || Math.hypot(ab[0], ab[1]) > 60) out.push(b); } out.push(pts[pts.length-1]); return out; }
+  function offsetLine(pts, o){ const out = []; const n = pts.length; for(let i=0;i<n;i++){ const a = i>0 ? norm(sub(pts[i], pts[i-1])) : null, b = i<n-1 ? norm(sub(pts[i+1], pts[i])) : null; const d = norm(a && b ? [a[0]+b[0], a[1]+b[1]] : (a || b)); out.push([pts[i][0] - d[1]*o, pts[i][1] + d[0]*o]); } return out; }
+
+
+  // 위성(브이월드 z17 ≈ 1 m/px)으로 도로마다 실제 아스팔트 폭·중심 보정: 20 m마다 도로에 수직으로 ±30 m 단면을 읽어 아스팔트(회색·저채도) 연속 구간을 찾음
+  async function fitWidths(roads, P, c0){
+    const z = 17, n = 2**z, KEY = '57C7018D-1A36-4873-99CD-A2272BD3040E';
+    const tx = lon=>(lon+180)/360*n, ty = lat=>(1-Math.log(Math.tan(lat*D2R)+1/Math.cos(lat*D2R))/Math.PI)/2*n;
+    const a = P.i(-R-40, R+40), b = P.i(R+40, -R-40); const X0 = Math.floor(tx(a[0])), X1 = Math.floor(tx(b[0])), Y0 = Math.floor(ty(a[1])), Y1 = Math.floor(ty(b[1]));
+    const W = (X1-X0+1)*256, H = (Y1-Y0+1)*256; if(W*H > 4096*4096) return 0;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d', { willReadFrequently:true });
+    const jobs = []; for(let j=Y0;j<=Y1;j++) for(let i=X0;i<=X1;i++) jobs.push([i, j]);
+    let ok = 0; await Promise.all(jobs.map(([i, j])=>new Promise(res=>{ const im = new Image(); im.crossOrigin = 'anonymous'; const done = ()=>res(); im.onload = ()=>{ try{ g.drawImage(im, (i-X0)*256, (j-Y0)*256); ok++; }catch(e){} done(); }; im.onerror = done; setTimeout(done, 15000); im.src = 'https://api.vworld.kr/req/wmts/1.0.0/'+KEY+'/Satellite/'+z+'/'+j+'/'+i+'.jpeg'; })));
+    if(ok < jobs.length*.6) return 0; let d; try{ d = g.getImageData(0, 0, W, H).data; }catch(e){ return 0; }
+    const px = (x, y)=>{ const ll = P.i(x, y); const gx = Math.floor((tx(ll[0]) - X0)*256), gy = Math.floor((ty(ll[1]) - Y0)*256); if(gx<0||gy<0||gx>=W||gy>=H) return -1; const k = (gy*W + gx)*4; const r = d[k], gg = d[k+1], bb = d[k+2]; const G = .299*r + .587*gg + .114*bb, S = Math.max(r,gg,bb) - Math.min(r,gg,bb);
+      if(S < 32 && G > 30 && G < 150) return 1;           // 아스팔트
+      if(S < 40 && G >= 150) return .5;                    // 흰 노면표시·밝은 차량(경계 불확실)
+      return 0; };
+    let fitted = 0;
+    for(let ri=0; ri<roads.length; ri++){ const r = roads[ri]; if(r.tags.highway === 'service' || (r.tags.width && r.sp.w)) continue; const ws = [], mids = []; let acc = 0;
+      for(let i=0;i<r.pts.length-1;i++){ const p0 = r.pts[i], p1 = r.pts[i+1]; const L = Math.hypot(p1[0]-p0[0], p1[1]-p0[1]); const dd = norm(sub(p1, p0)); const nx = -dd[1], ny = dd[0];
+        for(let s=10; s<L-5; s+=20){ const x = p0[0] + dd[0]*s, y = p0[1] + dd[1]*s; const prof = []; for(let o=-30; o<=30; o+=.5) prof.push(px(x + nx*o, y + ny*o));
+          // 중심(61번째)에서 좌우로 아스팔트 연속 구간(비도로 2.5 m 이하 끊김 허용)
+          const c = 60; if(prof[c] < .5 && prof[c-2] < .5 && prof[c+2] < .5) continue; const run = dir=>{ let k = c, gap = 0, last = c; while(k+dir >= 0 && k+dir < prof.length){ k += dir; if(prof[k] >= .5){ last = k; gap = 0; } else if(++gap > 5) break; } return last; };
+          const lft = run(-1), rgt = run(1); const wd = (rgt - lft)*.5 + .5; if(wd < 4 || wd > 45) continue; ws.push(wd); mids.push(((lft + rgt)/2 - c)*.5); } }
+      if(ws.length >= 2){ ws.sort((p,q)=>p-q); mids.sort((p,q)=>p-q); const wm = ws[Math.floor(ws.length/2)], mm = mids[Math.floor(mids.length/2)];
+        const w0 = r.sp.w; r.sp.w = Math.max(w0*.8, Math.min(w0*2.6, wm)); if(Math.abs(mm) <= 4 && Math.abs(mm) > .4) r.pts = offsetLine(r.pts, mm);
+        if(!(parseInt(r.tags.lanes) > 0)){ const nl = Math.max(1, Math.round((r.sp.w - 1)/3.3)); r.sp.lanes = r.sp.one ? Math.min(nl, 4) : Math.min(6, Math.max(2, nl - nl%2)); }   // 차선 표시는 일방 4·양방향 6개까지
+        fitted++; }
+      if(ri % 20 === 0){ await sleep0(); if(!RD.on) return fitted; } }
+    return fitted;
+  }
+
+
+  const RD = { on:false, busy:false, prim:null, clip:null, stat:null };
+  const sleep = ms=>new Promise(r=>setTimeout(r, ms));
+  const item = { id:'vremove', q:'3D 모델에서 도로 위 차량을 지우려면', name:'차량 지우기 (도로 평면화 · 300 m)', src:'화면 중심 300 m · 도로면 높이로 DSM 평면화 · 차량 자리를 도로 방향 노면 색으로 채움 · 원래 질감 유지 · 약 1~2분', type:'layer' };
+  const mc = MENUS.site.find(c=>c.id==='model'); if(mc && !mc.items.some(i=>i.id==='vremove')) mc.items.push(item);
+  try{ renderCats(); renderSub(); }catch(e){}
+  const tilesets = ()=>PROJECTS.map(p=>p.ts).filter(Boolean);
+  function center(){ const cv = scene.canvas; let cart = null; try{ const ray = camera.getPickRay(new C.Cartesian2(cv.clientWidth/2, cv.clientHeight/2)); const hit = scene.globe.pick(ray, scene); if(hit) cart = C.Cartographic.fromCartesian(hit); }catch(e){} if(!cart) cart = camera.positionCartographic; return { lon: cart.longitude/D2R, lat: cart.latitude/D2R }; }
+  function mkProj(lon0, lat0){ const kx = 111320*Math.cos(lat0*D2R), ky = 110950; return { f:(lon, lat)=>[(lon-lon0)*kx, (lat-lat0)*ky], i:(x, y)=>[lon0 + x/kx, lat0 + y/ky] }; }
+  // 원 밖 부분 잘라내기(반경 R+5)
+  function clipToCircle(pts, r){ const out = []; let cur = []; for(const p of pts){ if(Math.hypot(p[0], p[1]) <= r){ cur.push(p); } else { if(cur.length >= 2) out.push(cur); cur = []; } } if(cur.length >= 2) out.push(cur); return out; }
+  async function waitTiles(maxMs){ const ts = tilesets(); const t0 = performance.now(); let st = 0; while(performance.now()-t0 < maxMs){ await sleep(200); const ok = scene.globe.tilesLoaded && ts.every(t=>t.tilesLoaded && (!t._statistics || (t._statistics.numberOfPendingRequests + t._statistics.numberOfTilesProcessing) === 0)); st = ok ? st+1 : 0; if(st >= 4) break; } }
+
+  async function build(){
+    const c0 = center(); const P = mkProj(c0.lon, c0.lat);
+    tst('차량 지우기 · 도로 정보 불러오는 중…', 3000);
+    const ways = await fetchRoads(c0.lon, c0.lat); if(!RD.on) return;
+    let roads = []; for(const w of ways){ const t = w.tags || {}; if(t.highway === 'service') continue; const sp = roadSpec(t); for(const part of clipToCircle(simplify(w.geometry.map(g=>P.f(g.lon, g.lat)), .3), R+5)) roads.push({ pts:part, sp, tags:t }); }
+    if(!roads.length) throw new Error('화면 중심 150 m 안에 차도가 없습니다');
+    tst('위성으로 도로 폭 맞추는 중…', 2500); try{ await fitWidths(roads, P, c0); }catch(e){} if(!RD.on) return;
+    const rings = [], segs = []; for(const r of roads){ for(const ch of chunks(r.pts, 14)){ const ring = offsetPoly(ch, r.sp.w); if(ring && ring.length >= 3) rings.push(ring); } for(let i=0;i<r.pts.length-1;i++) segs.push([r.pts[i], r.pts[i+1], r.sp.w]); }
+    let minE=1e9, minN=1e9, maxE=-1e9, maxN=-1e9; for(const g of rings) for(const q of g){ minE=Math.min(minE,q[0]); maxE=Math.max(maxE,q[0]); minN=Math.min(minN,q[1]); maxN=Math.max(maxN,q[1]); }
+    minE-=2; minN-=2; maxE+=2; maxN+=2; const BW = maxE-minE, BH = maxN-minN;
+    const cv = scene.canvas; const Wb = cv.width, Hb = cv.height; const res = Math.max(.08, Math.max(BW, BH)/3800); const tileW = Wb*res, tileH = Hb*res;
+    const MW = Math.ceil(BW/res), MH = Math.ceil(BH/res), N = MW*MH;
+    const mos = document.createElement('canvas'); mos.width = MW; mos.height = MH; const mg = mos.getContext('2d', { willReadFrequently:true });
+    const Z = new Float32Array(N).fill(NaN);
+    const toPx = (e, n)=>[(e-minE)/res, (maxN-n)/res];
+    const rm = document.createElement('canvas'); rm.width = MW; rm.height = MH; const rg = rm.getContext('2d', { willReadFrequently:true }); rg.fillStyle = '#000'; rg.fillRect(0,0,MW,MH);
+    for(const [a, b, w] of segs){ const d = norm(sub(b, a)); let ang = Math.atan2(-d[1], d[0]); if(ang < 0) ang += Math.PI; if(ang >= Math.PI) ang -= Math.PI; const v = Math.max(1, Math.round(ang/Math.PI*254)+1);
+      const nx = -d[1]*w/2, ny = d[0]*w/2, ex = d[0]*w*.3, ey = d[1]*w*.3; const q = [[a[0]-ex+nx, a[1]-ey+ny], [b[0]+ex+nx, b[1]+ey+ny], [b[0]+ex-nx, b[1]+ey-ny], [a[0]-ex-nx, a[1]-ey-ny]].map(p=>toPx(p[0], p[1]));
+      rg.fillStyle = 'rgb(' + v + ',0,0)'; rg.beginPath(); rg.moveTo(q[0][0], q[0][1]); for(const p of q.slice(1)) rg.lineTo(p[0], p[1]); rg.closePath(); rg.fill(); }
+    const rmd = rg.getImageData(0,0,MW,MH).data;
+    const ENC = new C.CustomShader({ lightingModel: C.LightingModel.UNLIT, uniforms:{ u_dmin:{ type:C.UniformType.FLOAT, value:220.0 } },
+      fragmentShaderText: 'void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material){ float t = -fsInput.attributes.positionEC.z - u_dmin; material.diffuse = vec3(clamp(t/128.0,0.0,1.0), fract(t/8.0), fract(t)); }' });
+    const lin = c=>{ const s = c/255; return s <= .04045 ? s/12.92 : Math.pow((s+.055)/1.055, 2.4); }; const LUT = new Float32Array(256); for(let i=0;i<256;i++) LUT[i] = lin(i);
+    const hid = []; for(let i=0;i<scene.primitives.length;i++){ const p = scene.primitives.get(i); if(tilesets().includes(p)) continue; if(p.show){ hid.push(p); p.show = false; } }
+    const dsHid = []; for(let i=0;i<viewer.dataSources.length;i++){ const d = viewer.dataSources.get(i); if(d.show){ dsHid.push(d); d.show = false; } }
+    const entShow = viewer.entities.show; viewer.entities.show = false;
+    const ts0 = tilesets();
+    const sv = { minZ: scene.screenSpaceCameraController.minimumZoomDistance, inp: scene.screenSpaceCameraController.enableInputs, view:{ pos: camera.position.clone(), hd: camera.heading, pt: camera.pitch }, frus: camera.frustum, sse: ts0.map(t=>t.maximumScreenSpaceError), cs: ts0.map(t=>t.customShader), cpe: ts0.map(t=>t.clippingPolygons && !t.clippingPolygons.isDestroyed() ? t.clippingPolygons.enabled : null), fog: scene.fog.enabled, cb: ts0.map(t=>[t.cacheBytes, t.maximumCacheOverflowBytes, t.foveatedScreenSpaceError]) };
+    let tilesUsed = 0;
+    try{
+      for(const t of ts0){ if(t.clippingPolygons && !t.clippingPolygons.isDestroyed()) t.clippingPolygons.enabled = false; }
+      scene.screenSpaceCameraController.enableInputs = false; scene.screenSpaceCameraController.minimumZoomDistance = 1; scene.fog.enabled = false;
+      camera.switchToOrthographicFrustum(); for(const t of ts0){ try{ Object.defineProperty(t, 'maximumScreenSpaceError', { get: ()=>1.5, set: ()=>{}, configurable: true, enumerable: true }); }catch(e){ t.maximumScreenSpaceError = 1.5; } t.cacheBytes = Math.max(t.cacheBytes, 1024*1024*1024); t.maximumCacheOverflowBytes = Math.max(t.maximumCacheOverflowBytes, 512*1024*1024); t.foveatedScreenSpaceError = false; }
+      const fx = ()=>{ camera.frustum.aspectRatio = Wb/Hb; camera.frustum.width = tileW; camera.frustum.near = 1; camera.frustum.far = 2000; };
+      // 매 프레임 직교 폭 고정: 기본 렌더 루프가 폭을 되돌리면 타일이 낮은 단계로만 불려와 흐려짐
+      if(RD._rmPre) RD._rmPre(); RD._rmPre = scene.preRender.addEventListener(fx);
+      const nTx = Math.ceil(BW/tileW), nTy = Math.ceil(BH/tileH);
+      const tmp = document.createElement('canvas'); tmp.width = Wb; tmp.height = Hb; const tg = tmp.getContext('2d', { willReadFrequently:true });
+      for(let ty=0; ty<nTy; ty++) for(let tx=0; tx<nTx; tx++){ if(!RD.on) return;
+        const e0 = minE + tx*tileW, n1 = maxN - ty*tileH; const ce = e0 + tileW/2, cn = n1 - tileH/2;
+        const ax = Math.round((e0-minE)/res), ay = Math.round((maxN-n1)/res);
+        let any = false; for(let yy=Math.max(0,ay); yy<Math.min(MH, ay+Hb) && !any; yy+=8) for(let xx=Math.max(0,ax); xx<Math.min(MW, ax+Wb); xx+=8){ if(rmd[(yy*MW+xx)*4]){ any = true; break; } } if(!any) continue;
+        tilesUsed++; tst('정사 촬영·높이(DSM) 읽는 중 ' + tilesUsed + '…', 2000);
+        const ll = P.i(ce, cn); let hc = scene.globe.getHeight(C.Cartographic.fromDegrees(ll[0], ll[1])); if(!(hc > -100)) hc = 0; const camAlt = hc + 300;
+        camera.setView({ destination: C.Cartesian3.fromDegrees(ll[0], ll[1], camAlt), orientation:{ heading:0, pitch:-90*D2R, roll:0 } });
+        for(let i=0;i<ts0.length;i++) ts0[i].customShader = sv.cs[i];
+        fx(); await waitTiles(30000); fx(); scene.render(); mg.drawImage(cv, 0, 0, Wb, Hb, ax, ay, Wb, Hb);
+        for(const t of ts0) t.customShader = ENC; const gsh = scene.globe.show, gbg = scene.backgroundColor.clone(); scene.globe.show = false; scene.backgroundColor = C.Color.BLACK; fx(); scene.render(); await sleep(150); fx(); await waitTiles(4000); fx(); scene.render();
+        tg.clearRect(0,0,Wb,Hb); tg.drawImage(cv, 0, 0); const dd = tg.getImageData(0,0,Wb,Hb).data; scene.globe.show = gsh; scene.backgroundColor = gbg;
+        for(let y=0;y<Hb;y++){ const my = ay + y; if(my<0||my>=MH) continue; for(let x=0;x<Wb;x++){ const mx = ax + x; if(mx<0||mx>=MW) continue; const mi = my*MW+mx; if(!rmd[mi*4]) continue; const k = (y*Wb+x)*4; if(dd[k] < 3 && dd[k+1] < 3 && dd[k+2] < 3) continue;   // 배경(모델 없음)
+          const tc = LUT[dd[k]]*128, f8 = LUT[dd[k+1]]*8, f1 = LUT[dd[k+2]]; const t8 = f8 + 8*Math.round((tc - f8)/8); const t = f1 + Math.round(t8 - f1); Z[mi] = camAlt - (220 + t); } }
+        await sleep(0); }
+    } finally {
+      if(RD._rmPre){ try{ RD._rmPre(); }catch(e){} RD._rmPre = null; }
+      for(let i=0;i<ts0.length;i++){ if(sv.cb[i]){ ts0[i].cacheBytes = sv.cb[i][0]; ts0[i].maximumCacheOverflowBytes = sv.cb[i][1]; ts0[i].foveatedScreenSpaceError = sv.cb[i][2]; } ts0[i].customShader = sv.cs[i]; try{ delete ts0[i].maximumScreenSpaceError; }catch(e){} if(sv.sse[i] !== undefined) ts0[i].maximumScreenSpaceError = (window.STATE && STATE.sse) || sv.sse[i]; if(sv.cpe[i] !== null && ts0[i].clippingPolygons && !ts0[i].clippingPolygons.isDestroyed()) ts0[i].clippingPolygons.enabled = sv.cpe[i]; }
+      camera.switchToPerspectiveFrustum(); camera.frustum = sv.frus; scene.screenSpaceCameraController.minimumZoomDistance = sv.minZ; scene.screenSpaceCameraController.enableInputs = sv.inp; scene.fog.enabled = sv.fog;
+      for(const p of hid) p.show = true; for(const d of dsHid) d.show = true; viewer.entities.show = entShow;
+      camera.setView({ destination: sv.view.pos, orientation:{ heading: sv.view.hd, pitch: sv.view.pt, roll:0 } });
+    }
+    if(!RD.on) return;
+    // ---- 도로면 높이(평면화 기준면): 1 m 칸 하위 20% → 7 m 창 하위 25% → 매끈하게 ----
+    tst('도로면 평면 계산·차량 찾는 중…', 2500); await sleep(30);
+    const cs = Math.max(1, Math.round(1/res)), CW = Math.ceil(MW/cs), CH = Math.ceil(MH/cs); const cell = new Float32Array(CW*CH).fill(NaN);
+    for(let cy=0; cy<CH; cy++) for(let cx=0; cx<CW; cx++){ const v = []; for(let y=cy*cs; y<Math.min(MH,(cy+1)*cs); y++) for(let x=cx*cs; x<Math.min(MW,(cx+1)*cs); x++){ const z = Z[y*MW+x]; if(z === z) v.push(z); } if(v.length >= cs){ v.sort((a,b)=>a-b); cell[cy*CW+cx] = v[Math.floor(v.length*.2)]; } }
+    const g1 = new Float32Array(CW*CH).fill(NaN); const WR = 3;
+    for(let cy=0; cy<CH; cy++) for(let cx=0; cx<CW; cx++){ const v = []; for(let y=Math.max(0,cy-WR); y<=Math.min(CH-1,cy+WR); y++) for(let x=Math.max(0,cx-WR); x<=Math.min(CW-1,cx+WR); x++){ const z = cell[y*CW+x]; if(z === z) v.push(z); } if(v.length >= 6){ v.sort((a,b)=>a-b); g1[cy*CW+cx] = v[Math.floor(v.length*.25)]; } }
+    // 빈 칸 채우기(주변 값 전파)
+    let G = g1; for(let it=0; it<60; it++){ let miss = 0; const nx = new Float32Array(G); for(let cy=0; cy<CH; cy++) for(let cx=0; cx<CW; cx++){ const i = cy*CW+cx; if(G[i] === G[i]) continue; let s=0, n=0; for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){ const x=cx+dx, y=cy+dy; if(x<0||y<0||x>=CW||y>=CH) continue; const z = G[y*CW+x]; if(z === z){ s+=z; n++; } } if(n){ nx[i] = s/n; } else miss++; } G = nx; if(!miss) break; }
+    const Gs = new Float32Array(CW*CH); for(let cy=0; cy<CH; cy++) for(let cx=0; cx<CW; cx++){ let s=0, n=0; for(let y=Math.max(0,cy-1); y<=Math.min(CH-1,cy+1); y++) for(let x=Math.max(0,cx-1); x<=Math.min(CW-1,cx+1); x++){ const z = G[y*CW+x]; if(z === z){ s+=z; n++; } } Gs[cy*CW+cx] = n ? s/n : 0; }
+    const gAt = (px, py)=>{ const fx = Math.max(0, Math.min(CW-1.001, px/cs - .5)), fy = Math.max(0, Math.min(CH-1.001, py/cs - .5)); const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(CW-1, x0+1), y1 = Math.min(CH-1, y0+1), u = fx-x0, v = fy-y0; return (Gs[y0*CW+x0]*(1-u) + Gs[y0*CW+x1]*u)*(1-v) + (Gs[y1*CW+x0]*(1-u) + Gs[y1*CW+x1]*u)*v; };
+    // ---- 튀어나온 곳(도로면 +0.35 m) → 덩어리별로 차량만 고르기 ----
+    const md = mg.getImageData(0,0,MW,MH), D = md.data; const road = new Uint8Array(N), high = new Uint8Array(N);
+    for(let i=0;i<N;i++){ if(!rmd[i*4]) continue; road[i] = 1; const z = Z[i]; if(z === z && z - gAt(i%MW, (i/MW)|0) > .35) high[i] = 1; }
+    const lum = i=>.299*D[i*4]+.587*D[i*4+1]+.114*D[i*4+2];
+    const isGreen = i=>{ const r=D[i*4], g=D[i*4+1], b=D[i*4+2]; return g > r+5 && g > b+5 && (Math.max(r,g,b)-Math.min(r,g,b)) > 22; };
+    const ls = []; for(let i=0;i<N;i+=7) if(road[i] && !high[i]) ls.push(lum(i)); ls.sort((p,q)=>p-q); const med = ls.length ? ls[Math.floor(ls.length/2)] : 90;
+    const lab = new Int32Array(N); const comps = []; const stack = [];
+    for(let s=0;s<N;s++){ if(!high[s] || lab[s]) continue; const id = comps.length + 1; const px = []; lab[s] = id; stack.push(s); let green = 0, maxH = 0; const hs = [];
+      while(stack.length){ const i = stack.pop(); px.push(i); if(isGreen(i)) green++; const x = i%MW, y = (i/MW)|0; const h = Z[i] - gAt(x, y); if(h > maxH) maxH = h; if((px.length & 3) === 0) hs.push(h);
+        for(const j of [i-1, i+1, i-MW, i+MW]){ if(j<0||j>=N||!high[j]||lab[j]) continue; if(Math.abs(j%MW - x) > 1) continue; lab[j] = id; stack.push(j); } }
+      const area = px.length*res*res; hs.sort((p,q)=>p-q); const p90 = hs.length ? hs[Math.floor(hs.length*.9)] : maxH; comps.push({ id, px, area, green: green/px.length, maxH, p90 }); if(comps.length % 200 === 0) await sleep(0); }
+
+    // ---- 질감에만 남은(납작한) 차량: 도로 방향 앞뒤 노면 색과 다른 1.3 m 이상 굵기의 덩어리 ----
+    const f = 3, SW = Math.floor(MW/f), SH = Math.floor(MH/f), SN = SW*SH, rs = res*f; const sR = new Float32Array(SN), sG = new Float32Array(SN), sB = new Float32Array(SN), sRoad = new Uint8Array(SN), sAng = new Float32Array(SN), sHigh = new Uint8Array(SN);
+    for(let y=0;y<SH;y++) for(let x=0;x<SW;x++){ const i = (y*f+1)*MW + x*f+1; const k = y*SW+x; sR[k]=D[i*4]; sG[k]=D[i*4+1]; sB[k]=D[i*4+2]; sRoad[k] = road[i]; sAng[k] = ((rmd[i*4]||1)-1)/254*Math.PI; sHigh[k] = high[i]; }
+    const diff = new Uint8Array(SN); const HW = Math.round(12/rs), STP = 2; const tr = [], tg2 = [], tb = [];
+    for(let k=0;k<SN;k++){ if(!sRoad[k]) continue; const x = k%SW, y = (k/SW)|0; const sx = Math.cos(sAng[k]), sy = -Math.sin(sAng[k]); tr.length = tg2.length = tb.length = 0;
+      for(let s=-HW; s<=HW; s+=STP){ const xx = Math.round(x+sx*s), yy = Math.round(y+sy*s); if(xx<0||yy<0||xx>=SW||yy>=SH) continue; const j = yy*SW+xx; if(!sRoad[j]) continue; tr.push(sR[j]); tg2.push(sG[j]); tb.push(sB[j]); }
+      if(tr.length < 6) continue; tr.sort((a,b)=>a-b); tg2.sort((a,b)=>a-b); tb.sort((a,b)=>a-b); const m = tr.length>>1;
+      const dr = sR[k]-tr[m], dg = sG[k]-tg2[m], db = sB[k]-tb[m]; const red = sR[k] > sG[k]+35 && sR[k] > sB[k]+35; const yel = sR[k] > 120 && sG[k] > 95 && sB[k] < 90;
+      const thr = Math.max(22, Math.min(42, .7*(.299*tr[m]+.587*tg2[m]+.114*tb[m]))); if(!red && !yel && Math.sqrt(dr*dr+dg*dg+db*db) > thr) diff[k] = 1; if(k % 60000 === 0) await sleep(0); }
+    // 열림 연산(반경 0.65 m): 가는 노면표시 제거, 굵은 차량만 남김
+    // 닫힘 연산(0.45 m): 지붕·보닛 사이 어두운 앞유리 틈 메움
+    const cr0 = Math.max(1, Math.round(.45/rs)); const dl0 = new Uint8Array(SN), dc = new Uint8Array(SN);
+    for(let y=cr0;y<SH-cr0;y++) for(let x=cr0;x<SW-cr0;x++){ if(!diff[y*SW+x]) continue; for(let dy=-cr0; dy<=cr0; dy++) for(let dx=-cr0; dx<=cr0; dx++){ if(dx*dx+dy*dy <= cr0*cr0) dl0[(y+dy)*SW+x+dx] = 1; } }
+    for(let y=cr0;y<SH-cr0;y++) for(let x=cr0;x<SW-cr0;x++){ let ok = 1; for(let dy=-cr0; dy<=cr0 && ok; dy++) for(let dx=-cr0; dx<=cr0; dx++){ if(dx*dx+dy*dy > cr0*cr0) continue; if(!dl0[(y+dy)*SW+x+dx]){ ok = 0; break; } } dc[y*SW+x] = ok && sRoad[y*SW+x] ? 1 : 0; }
+    await sleep(0);
+    const er = Math.max(1, Math.round(.5/rs)); const ero = new Uint8Array(SN), opn = new Uint8Array(SN);
+    for(let y=er;y<SH-er;y++) for(let x=er;x<SW-er;x++){ let ok = 1; for(let dy=-er; dy<=er && ok; dy++) for(let dx=-er; dx<=er; dx++){ if(dx*dx+dy*dy > er*er) continue; if(!dc[(y+dy)*SW+x+dx]){ ok = 0; break; } } ero[y*SW+x] = ok; }
+    for(let y=er;y<SH-er;y++) for(let x=er;x<SW-er;x++){ if(!ero[y*SW+x]) continue; for(let dy=-er; dy<=er; dy++) for(let dx=-er; dx<=er; dx++){ if(dx*dx+dy*dy > er*er) continue; opn[(y+dy)*SW+x+dx] = 1; } }
+    const slab = new Int32Array(SN); let nCol = 0, nGrp = 0; const colorComps = []; const frags = [];
+    for(let s=0;s<SN;s++){ if(!opn[s] || slab[s]) continue; const q = [s]; slab[s] = 1; const px = []; let hiN = 0;
+      while(q.length){ const k = q.pop(); px.push(k); hiN += sHigh[k]; const x = k%SW; for(const j of [k-1,k+1,k-SW,k+SW]){ if(j<0||j>=SN||!opn[j]||slab[j]) continue; if(Math.abs(j%SW-x) > 1) continue; slab[j] = 1; q.push(j); } }
+      const area = px.length*rs*rs; let dn = 0; for(const k of px) dn += diff[k]; if(dn/px.length < .5) continue;
+      if(area >= .4 && area < 2.5){ let sx = 0, sy = 0; for(const k of px){ sx += k%SW; sy += (k/SW)|0; } frags.push({ px, cx: sx/px.length, cy: sy/px.length, ang: sAng[px[0]] }); continue; }
+      if(area < .4 || area > 26) continue;
+      // 도로 방향 기준 길이·폭
+      const a0 = sAng[px[0]], ux = Math.cos(a0), uy = -Math.sin(a0); let amin=1e9, amax=-1e9, cmin=1e9, cmax=-1e9; for(const k of px){ const x = k%SW, y = (k/SW)|0; const al = x*ux + y*uy, cr = -x*uy + y*ux; if(al<amin) amin=al; if(al>amax) amax=al; if(cr<cmin) cmin=cr; if(cr>cmax) cmax=cr; }
+      const L = (amax-amin+1)*rs, Wd = (cmax-cmin+1)*rs; if(Wd < 1.2 || Wd > 3.6 || L < 2.2 || L > 14) continue; if(area/(L*Wd) < .45) continue;
+      // 그림자 거르기: 밝은 부분이 거의 없고 속이 매끈하면(창·윤곽선 없음) 나무·건물 그림자로 봄
+      let bright = 0, edge = 0, ne = 0; const ml = med; for(const k of px){ const l = .299*sR[k]+.587*sG[k]+.114*sB[k]; if(l > ml + 28) bright++; const x = k%SW; if(x+1 < SW && opn[k+1]){ const l2 = .299*sR[k+1]+.587*sG[k+1]+.114*sB[k+1]; edge += Math.abs(l-l2); ne++; } if(k+SW < SN && opn[k+SW]){ const l2 = .299*sR[k+SW]+.587*sG[k+SW]+.114*sB[k+SW]; edge += Math.abs(l-l2); ne++; } }
+      const bf = bright/px.length, ed = ne ? edge/ne : 0; if(bf < .12 && ed < 9) continue;
+      // 원해상도 화소로
+      const full = []; for(const k of px){ const x = (k%SW)*f, y = ((k/SW)|0)*f; for(let dy=-1; dy<f+1; dy++) for(let dx=-1; dx<f+1; dx++){ const xx = x+dx, yy = y+dy; if(xx<0||yy<0||xx>=MW||yy>=MH) continue; const i = yy*MW+xx; if(road[i]) full.push(i); } }
+      colorComps.push({ px: full, area, green: 0, maxH: 0, flat: true, L, Wd }); nCol++; }
+    // ---- 앞유리 등으로 조각난 차량: 도로 방향으로 가까운 조각을 묶어 차 크기면 차량으로 봄 (노면 글씨와 구분: 조각 사이가 노면보다 어둡거나 약간 솟아 있어야 함)
+    { const par = frags.map((_, i)=>i); const fd = i=>{ while(par[i] !== i){ par[i] = par[par[i]]; i = par[i]; } return i; };
+      for(let a=0;a<frags.length;a++) for(let b=a+1;b<frags.length;b++){ const A = frags[a], B = frags[b]; const ux = Math.cos(A.ang), uy = -Math.sin(A.ang); const dx = B.cx-A.cx, dy = B.cy-A.cy; const al = Math.abs(dx*ux + dy*uy)*rs, cr = Math.abs(-dx*uy + dy*ux)*rs; if(al <= 2.6 && cr <= 1.0) par[fd(a)] = fd(b); }
+      const grp = new Map(); frags.forEach((fr, i)=>{ const r = fd(i); if(!grp.has(r)) grp.set(r, []); grp.get(r).push(fr); });
+      for(const g of grp.values()){ if(g.length < 2) continue; const px = [].concat(...g.map(x=>x.px)); const area = px.length*rs*rs; if(area < 2.2) continue;
+        const ang = g[0].ang, ux = Math.cos(ang), uy = -Math.sin(ang); let amin=1e9, amax=-1e9, cmin=1e9, cmax=-1e9; for(const k of px){ const x = k%SW, y = (k/SW)|0; const al = x*ux + y*uy, cr = -x*uy + y*ux; if(al<amin) amin=al; if(al>amax) amax=al; if(cr<cmin) cmin=cr; if(cr>cmax) cmax=cr; }
+        const L = (amax-amin+1)*rs, Wd = (cmax-cmin+1)*rs; if(L < 3.0 || L > 6.0 || Wd < 1.3 || Wd > 2.4) continue;
+        // 상자 안 조각 밖 화소(앞유리 자리)와 상자 앞뒤 노면 밝기 비교
+        const inF = new Set(px); let gapL = 0, gapN = 0, hiN = 0, boxN = 0; const roadL = [];
+        const x0 = Math.min(...px.map(k=>k%SW)) - 12, x1 = Math.max(...px.map(k=>k%SW)) + 12, y0 = Math.min(...px.map(k=>(k/SW)|0)) - 12, y1 = Math.max(...px.map(k=>(k/SW)|0)) + 12;
+        for(let y=Math.max(0,y0); y<=Math.min(SH-1,y1); y++) for(let x=Math.max(0,x0); x<=Math.min(SW-1,x1); x++){ const k = y*SW+x; if(!sRoad[k]) continue; const al = x*ux + y*uy, cr = -x*uy + y*ux; if(cr < cmin || cr > cmax) continue; const l = .299*sR[k]+.587*sG[k]+.114*sB[k];
+          if(al >= amin && al <= amax){ boxN++; hiN += sHigh[k]; if(!inF.has(k)){ gapL += l; gapN++; } } else if(!opn[k] && !diff[k]) roadL.push(l); }
+        if(!gapN || roadL.length < 10) continue; roadL.sort((a,b)=>a-b); const rmed = roadL[roadL.length>>1]; const gm = gapL/gapN;
+        if(!(gm < rmed - 6 || hiN/boxN > .05)) continue;
+        if(area/(L*Wd) < .3) continue;
+        const full = []; for(const k of px){ const x = (k%SW)*f, y = ((k/SW)|0)*f; for(let dy=-1; dy<f+1; dy++) for(let dx=-1; dx<f+1; dx++){ const xx = x+dx, yy = y+dy; if(xx<0||yy<0||xx>=MW||yy>=MH) continue; const i = yy*MW+xx; if(road[i]) full.push(i); } }
+        // 앞유리 자리도 지우도록 상자 전체를 채움
+        for(let y=Math.max(0,y0); y<=Math.min(SH-1,y1); y++) for(let x=Math.max(0,x0); x<=Math.min(SW-1,x1); x++){ const al = x*ux + y*uy, cr = -x*uy + y*ux; if(al < amin || al > amax || cr < cmin || cr > cmax) continue; for(let dy=0; dy<f; dy++) for(let dx=0; dx<f; dx++){ const i = (y*f+dy)*MW + x*f+dx; if(i < MW*MH && road[i]) full.push(i); } }
+        colorComps.push({ px: full, area, green: 0, maxH: 0, flat: true, L, Wd, grouped: g.length }); nCol++; nGrp++; } }
+        // 높이는 상위 10% 튀는 값(가지·메시 가시)을 빼고 판단
+    const cars = comps.filter(c=>c.area >= 1.2 && c.area <= 160 && c.green < .3 && c.p90 < 4.2).concat(colorComps);
+    // 차량 + 붙은 진한 그림자(1.6 m까지) → 볼록 껍질 + 0.45 m 여유 = 지울 조각
+    const hulls = []; const seen = new Uint8Array(N);
+    for(const c of cars){ const pts = c.px.slice(); for(const i of pts) seen[i] = 1; let front = c.px.slice(); const maxStep = Math.round(1.6/res);
+      for(let s=0; s<maxStep && front.length; s++){ const nf = []; for(const i of front){ const x = i%MW; for(const j of [i-1, i+1, i-MW, i+MW]){ if(j<0||j>=N||seen[j]||!road[j]||high[j]) continue; if(Math.abs(j%MW - x) > 1) continue; if(lum(j) < med*.62){ seen[j] = 1; pts.push(j); nf.push(j); } } } front = nf; }
+      // 외곽 점(행별 좌우 끝)만으로 볼록 껍질
+      const rows = new Map(); for(const i of pts){ const x = i%MW, y = (i/MW)|0; const r = rows.get(y); if(!r) rows.set(y, [x, x]); else { if(x < r[0]) r[0] = x; if(x > r[1]) r[1] = x; } }
+      const P2 = []; for(const [y, [a, b]] of rows){ P2.push([a, y], [b+1, y], [a, y+1], [b+1, y+1]); }
+      P2.sort((p, q)=>p[0]-q[0] || p[1]-q[1]); const cr = (o, a, b)=>(a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0]); const lo = [], up = [];
+      for(const p of P2){ while(lo.length >= 2 && cr(lo[lo.length-2], lo[lo.length-1], p) <= 0) lo.pop(); lo.push(p); } for(let k=P2.length-1;k>=0;k--){ const p = P2[k]; while(up.length >= 2 && cr(up[up.length-2], up[up.length-1], p) <= 0) up.pop(); up.push(p); }
+      let hull = lo.slice(0, -1).concat(up.slice(0, -1)); if(hull.length < 3) continue;
+      const cx = hull.reduce((s,p)=>s+p[0],0)/hull.length, cy = hull.reduce((s,p)=>s+p[1],0)/hull.length; const ex = .45/res;
+      hull = hull.map(p=>{ const dx = p[0]-cx, dy = p[1]-cy, L = Math.hypot(dx, dy) || 1; return [p[0] + dx/L*ex, p[1] + dy/L*ex]; });
+      hulls.push(hull); }
+    // 조각 래스터 = 채울 곳
+    const pc = document.createElement('canvas'); pc.width = MW; pc.height = MH; const pg = pc.getContext('2d', { willReadFrequently:true }); pg.fillStyle = '#fff';
+    for(const h of hulls){ pg.beginPath(); pg.moveTo(h[0][0], h[0][1]); for(const p of h.slice(1)) pg.lineTo(p[0], p[1]); pg.closePath(); pg.fill(); }
+    const pd = pg.getImageData(0,0,MW,MH).data; const mask = new Uint8Array(N); for(let i=0;i<N;i++) if(pd[i*4+3] > 0) mask[i] = 1;
+    // ---- 도로 방향 보간으로 채우기 (원본 도로면·노면표시에서만 가져옴) ----
+    const src = i=>road[i] && !mask[i] && !high[i] && !isGreen(i);
+    const out = new Uint8ClampedArray(D); const maxL = Math.round(30/res); let filled = 0, flat = 0;
+    const cr2 = [], cg2 = [], cb2 = []; for(let i=0;i<N;i+=5) if(src(i)){ cr2.push(D[i*4]); cg2.push(D[i*4+1]); cb2.push(D[i*4+2]); } const medc = [cr2, cg2, cb2].map(a=>{ a.sort((p,q)=>p-q); return a.length ? a[a.length>>1] : 80; });
+    for(let i=0;i<N;i++){ if(!mask[i]) continue; const x = i%MW, y = (i/MW)|0; const rv = rmd[i*4]; const ang = ((rv || 1)-1)/254*Math.PI; const sx = Math.cos(ang), sy = -Math.sin(ang);
+      let c1 = -1, d1 = 0, c2 = -1, d2 = 0;
+      for(let s=1; s<=maxL; s++){ const xx = Math.round(x + sx*s), yy = Math.round(y + sy*s); if(xx<0||yy<0||xx>=MW||yy>=MH) break; const j = yy*MW+xx; if(src(j)){ c1 = j; d1 = s; break; } }
+      for(let s=1; s<=maxL; s++){ const xx = Math.round(x - sx*s), yy = Math.round(y - sy*s); if(xx<0||yy<0||xx>=MW||yy>=MH) break; const j = yy*MW+xx; if(src(j)){ c2 = j; d2 = s; break; } }
+      const o = i*4; if(c1 >= 0 && c2 >= 0){ const w1 = d2/(d1+d2), w2 = d1/(d1+d2); for(let c=0;c<3;c++) out[o+c] = D[c1*4+c]*w1 + D[c2*4+c]*w2; filled++; }
+      else if(c1 >= 0 || c2 >= 0){ const j = c1 >= 0 ? c1 : c2; for(let c=0;c<3;c++) out[o+c] = D[j*4+c]*.6 + medc[c]*.4; filled++; }
+      else { for(let c=0;c<3;c++) out[o+c] = medc[c]; flat++; } }
+    const out2 = new Uint8ClampedArray(out); for(let i=MW;i<N-MW;i++){ if(!mask[i]) continue; for(let c=0;c<3;c++){ let s = 0; for(const j of [i-MW-1,i-MW,i-MW+1,i-1,i,i+1,i+MW-1,i+MW,i+MW+1]) s += out[j*4+c]; out2[i*4+c] = s/9; } }
+    for(let i=0;i<N;i++) out2[i*4+3] = mask[i] ? 255 : 0;
+    const tex = document.createElement('canvas'); tex.width = MW; tex.height = MH; tex.getContext('2d').putImageData(new ImageData(out2, MW, MH), 0, 0);
+    const prev = document.createElement('canvas'); prev.width = MW; prev.height = MH; const pvg = prev.getContext('2d'); pvg.drawImage(mos, 0, 0); pvg.drawImage(tex, 0, 0);
+    RD.tex = tex; RD.debug = window.__VR63_DEBUG ? { mos, Z, mask, high, MW, MH, prev, cars: cars.length, comps: comps.length } : { MW, MH, cars: cars.length, comps: comps.length };   // 큰 배열은 디버그 때만 보관(메모리 절약)
+    // ---- 3D 반영: 차량 조각만 잘라내기 + 평면화(DSM 도로 기준면 높이)한 노면 ----
+    RD.carPos = hulls.map(h=>{ const cx = h.reduce((s,p)=>s+p[0],0)/h.length, cy = h.reduce((s,p)=>s+p[1],0)/h.length; return P.i(minE + cx*res, maxN - cy*res); });
+    RD.clip = hulls.map(h=>new C.ClippingPolygon({ positions: h.map(p=>{ const e = minE + p[0]*res, n = maxN - p[1]*res; const ll = P.i(e, n); return C.Cartesian3.fromDegrees(ll[0], ll[1]); }) }));
+    const GS = 1.5, nx = Math.ceil(BW/GS)+1, ny = Math.ceil(BH/GS)+1; const pos = new Float64Array(nx*ny*3), st = new Float32Array(nx*ny*2); let pk = 0, sk = 0;
+    for(let j=0;j<ny;j++){ const n = minN + Math.min(BH, j*GS); for(let i=0;i<nx;i++){ const e = minE + Math.min(BW, i*GS); const ll = P.i(e, n); const [px, py] = toPx(e, n); const p = C.Cartesian3.fromDegrees(ll[0], ll[1], gAt(px, py) + .03); pos[pk++] = p.x; pos[pk++] = p.y; pos[pk++] = p.z; st[sk++] = (e-minE)/(MW*res); st[sk++] = 1 - (maxN-n)/(MH*res); } }
+    const idx = []; for(let j=0;j<ny-1;j++) for(let i=0;i<nx-1;i++){ const a = j*nx+i, b = a+1, c = a+nx, d = c+1; idx.push(a,b,c, b,d,c); }
+    let geom = new C.Geometry({ attributes:{ position:new C.GeometryAttribute({ componentDatatype:C.ComponentDatatype.DOUBLE, componentsPerAttribute:3, values:pos }), st:new C.GeometryAttribute({ componentDatatype:C.ComponentDatatype.FLOAT, componentsPerAttribute:2, values:st }) }, indices: (nx*ny > 65535 ? new Uint32Array(idx) : new Uint16Array(idx)), primitiveType:C.PrimitiveType.TRIANGLES, boundingSphere:C.BoundingSphere.fromVertices(Array.from(pos)) });
+    RD.geom = C.GeometryPipeline.computeNormal(geom);
+    RD.stat = { roads: roads.length, tiles: tilesUsed, res: +res.toFixed(3), size: MW + 'x' + MH, comps: comps.length, cars: cars.length, flatCars: nCol, grouped: nGrp, maskPx: mask.reduce((s,v)=>s+v,0), filled, flat, medLum: Math.round(med) };
+    if(!RD.on) return;
+    applyClip();
+    RD.prim = scene.primitives.add(new C.Primitive({ geometryInstances: new C.GeometryInstance({ geometry: RD.geom }), appearance: new C.MaterialAppearance({ material: C.Material.fromType('Image', { image: RD.tex.toDataURL('image/png') }), flat:true, faceForward:true, translucent:true, closed:false }), asynchronous:false }));
+    tst('차량 지우기 완료 · 차량 ' + RD.stat.cars + '대 자리(' + Math.round(RD.stat.maskPx*res*res) + ' ㎡)를 도로면 높이로 평면화하고 노면 색으로 채움', 3800);
+  }
+  // 국소 평면 보간(IDW, 가까운 점 위주)
+  function idwFactory(pts){ return (x, y)=>{ let sw = 0, sv = 0, best = null, bd = 1e18; for(const p of pts){ const d2 = (p[0]-x)**2 + (p[1]-y)**2; if(d2 < bd){ bd = d2; best = p; } if(d2 > 6400) continue; const w = 1/(d2 + 25); sw += w; sv += w*p[2]; } return sw ? sv/sw : (best ? best[2] : 0); }; }
+  // 잘라내기 컬렉션: 이미 있으면 재사용(교체 시 렌더 오류 방지)
+  function applyClip(){ for(const ts of tilesets()){ try{ let cp = ts.clippingPolygons; if(cp && !cp.isDestroyed()){ cp.removeAll(); for(const p of RD.clip) cp.add(p); cp.enabled = true; } else { ts.clippingPolygons = new C.ClippingPolygonCollection({ polygons: RD.clip, enabled:true }); } }catch(e){ console.warn('vr62 clip', e); } } }
+  function clearAll(){ if(RD.prim){ try{ scene.primitives.remove(RD.prim); }catch(e){} } RD.prim = null; RD.geom = null;
+    if(RD.clip){ for(const ts of tilesets()){ const cp = ts.clippingPolygons; if(cp && !cp.isDestroyed()){ try{ cp.enabled = false; cp.removeAll(); }catch(e){} } } } RD.clip = null; }
+  async function on(){ RD.on = true; for(const id of ['osmroad','xsec']) if(STATE.on.has(id)){ try{ await toggleLayer(id, false); }catch(e){} }
+    RD.busy = true; try{ await build(); }catch(e){ RD.lastErr = e.message; tst('차량 지우기 실패: ' + e.message, 3500); RD.on = false; STATE.on.delete('vremove'); clearAll(); try{ renderCats(); renderSub(); }catch(_){} } finally{ RD.busy = false; } }
+  function off(){ RD.on = false; clearAll(); }
+  try{ const _ens = ensureTileset; ensureTileset = async function(p){ const ts = await _ens.apply(this, arguments); if(ts && RD.on && RD.clip && RD.prim) applyClip(); return ts; }; }catch(e){}
+  const _t63 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(id === 'vremove'){ const want = force !== undefined ? force : !STATE.on.has('vremove');
+      if(want && STATE.mode !== 'site'){ tst('차량 지우기는 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ if(RD.busy) return; STATE.on.add('vremove'); try{ renderCats(); renderSub(); }catch(e){} off(); await on(); } else { STATE.on.delete('vremove'); off(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
+    if((id === 'osmroad' || id === 'xsec') && force !== false && !STATE.on.has(id) && STATE.on.has('vremove')){ STATE.on.delete('vremove'); off(); }
+    return _t63.apply(this, arguments);
+  };
+  try{ const _sm63 = setMode; setMode = function(m){ if(m !== 'site' && STATE.on.has('vremove')){ STATE.on.delete('vremove'); off(); } return _sm63.apply(this, arguments); }; }catch(e){}
+  if(STATE.on.has('vremove')) STATE.on.delete('vremove');
+  window.__VR63 = { version:'63.1', RD, build, clearAll };
+})();
+</script>
 </body>
 </html>
