@@ -9477,8 +9477,10 @@ if(!window.__CVB) window.__CVB = (function(){
 })();
 </script>
 <script>
-/* ---------- 63. SITE › 3D 모델 › 차량 지우기 (도로 평면화 · 화면 중심 300 m) (2026-10-11) ----------
-   - 화면 중심 반경 150 m(지름 300 m)의 OSM 차도(위성으로 폭 보정)를 대상으로
+/* ---------- 63. SITE › 3D 모델 › 차량 지우기 (도로 평면화 · 화면 영역 / 직접 그린 영역) (2026-10-11) ----------
+   - 63.2: 대상 지역을 두 가지로 고름 ① 화면 영역: 지금 화면에 보이는 땅(넓으면 화면 중심 600 m 사각형까지)
+           ② 영역 그리기: 지도를 클릭해 다각형을 그리고 더블클릭·오른쪽 클릭·Enter로 완료하면 그 안만 처리(최대 600 m)
+   - 대상 영역 안의 OSM 차도(위성으로 폭 보정)를 대상으로
    1) 위에서 수직 정사(직교 투영)로 3D 모델을 두 번 찍음: ① 원본 색 ② 높이 인코딩 셰이더(화소마다 높이 = DSM, 약 1 cm 단위)
    2) DSM에서 도로면 기준면 계산: 1 m 칸마다 하위 20% → 7 m 창 하위 25% → 매끈하게 (차량·가로수 가지는 기준면에서 빠짐) · 기준면보다 0.35 m 넘게 높은 곳 = 차량
    3) 차량 자리 + 주변 1 m + 붙어 있는 진한 그림자를 지우고, 도로 방향을 따라 앞뒤 노면 색으로 채움(차선·중앙선이 이어지도록 도로 방향 보간)
@@ -9490,7 +9492,7 @@ if(!window.__CVB) window.__CVB = (function(){
 ---------------------------------------------------------------------------------------------- */
 (function(){
   if(window.__VR63) return;
-  const C = Cesium, D2R = Math.PI/180, R = 150;
+  const C = Cesium, D2R = Math.PI/180, MAXE = 600; let R = 150;   // R: 영역을 감싸는 반경(빌드마다 다시 계산)
   const OVP = ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter','https://overpass.private.coffee/api/interpreter'];
   const TWO = { motorway:4, trunk:6, primary:6, secondary:4, tertiary:2, unclassified:2, residential:2, living_street:1, service:1 };
   const ONE = { motorway:2, trunk:2, primary:2, secondary:2, tertiary:1, unclassified:1, residential:1, living_street:1, service:1, motorway_link:1, trunk_link:1, primary_link:1, secondary_link:1, tertiary_link:1 };
@@ -9498,7 +9500,7 @@ if(!window.__CVB) window.__CVB = (function(){
   const sleep0 = ()=>new Promise(r=>setTimeout(r, 0));
 
   async function fetchRoads(lon, lat){
-    const ck = 'rd63:' + lon.toFixed(3) + ',' + lat.toFixed(3); try{ const c = JSON.parse(localStorage.getItem(ck) || 'null'); if(c && Date.now() - c.t < 7*864e5) return c.w; }catch(e){}
+    const ck = 'rd63:' + lon.toFixed(4) + ',' + lat.toFixed(4) + ',' + Math.round(R); try{ const c = JSON.parse(localStorage.getItem(ck) || 'null'); if(c && Date.now() - c.t < 7*864e5) return c.w; }catch(e){}
     let lastE; for(let attempt=0; attempt<3; attempt++){ try{ const w = await fetchRoads1(lon, lat); try{ const keys = Object.keys(localStorage).filter(k=>k.startsWith('rd63:')); if(keys.length > 3) keys.slice(0, keys.length-3).forEach(k=>localStorage.removeItem(k)); localStorage.setItem(ck, JSON.stringify({ t:Date.now(), w })); }catch(e){} return w; }catch(e){ lastE = e; if(!RD.on) throw e; tst('OSM 서버가 바빠서 다시 시도합니다 (' + (attempt+2) + '/3)…', 2500); await new Promise(r=>setTimeout(r, 2500 + attempt*3000)); } }
     throw lastE;
   }
@@ -9563,25 +9565,76 @@ if(!window.__CVB) window.__CVB = (function(){
 
   const RD = { on:false, busy:false, prim:null, clip:null, stat:null };
   const sleep = ms=>new Promise(r=>setTimeout(r, ms));
-  const item = { id:'vremove', q:'3D 모델에서 도로 위 차량을 지우려면', name:'차량 지우기 (도로 평면화 · 300 m)', src:'화면 중심 300 m · 도로면 높이로 DSM 평면화 · 차량 자리를 도로 방향 노면 색으로 채움 · 원래 질감 유지 · 약 1~2분', type:'layer' };
-  const mc = MENUS.site.find(c=>c.id==='model'); if(mc && !mc.items.some(i=>i.id==='vremove')) mc.items.push(item);
+  const IDS = ['vremove', 'vremovePoly'];
+  const items = [ { id:'vremove', q:'지금 화면에 보이는 도로의 차량을 지우려면', name:'차량 지우기 · 화면 영역', src:'화면에 보이는 지역의 도로(넓으면 화면 중심 600 m까지) · 도로면 높이로 평면화 · 차량 자리를 도로 방향 노면 색으로 채움 · 원래 질감 유지 · 약 1~2분', type:'layer' },
+    { id:'vremovePoly', q:'원하는 구역만 골라 차량을 지우려면', name:'차량 지우기 · 영역 그리기', src:'지도를 클릭해 다각형을 그리고 더블클릭(오른쪽 클릭·Enter)으로 완료 → 그 안의 도로 차량을 지움 · 최대 600 m · Backspace 되돌리기 · Esc 취소', type:'layer' } ];
+  const mc = MENUS.site.find(c=>c.id==='model'); if(mc) for(const it of items) if(!mc.items.some(i=>i.id===it.id)) mc.items.push(it);
+  const curId = ()=>IDS.find(id=>STATE.on.has(id));
   try{ renderCats(); renderSub(); }catch(e){}
   const tilesets = ()=>PROJECTS.map(p=>p.ts).filter(Boolean);
   function center(){ const cv = scene.canvas; let cart = null; try{ const ray = camera.getPickRay(new C.Cartesian2(cv.clientWidth/2, cv.clientHeight/2)); const hit = scene.globe.pick(ray, scene); if(hit) cart = C.Cartographic.fromCartesian(hit); }catch(e){} if(!cart) cart = camera.positionCartographic; return { lon: cart.longitude/D2R, lat: cart.latitude/D2R }; }
   function mkProj(lon0, lat0){ const kx = 111320*Math.cos(lat0*D2R), ky = 110950; return { f:(lon, lat)=>[(lon-lon0)*kx, (lat-lat0)*ky], i:(x, y)=>[lon0 + x/kx, lat0 + y/ky] }; }
   // 원 밖 부분 잘라내기(반경 R+5)
   function clipToCircle(pts, r){ const out = []; let cur = []; for(const p of pts){ if(Math.hypot(p[0], p[1]) <= r){ cur.push(p); } else { if(cur.length >= 2) out.push(cur); cur = []; } } if(cur.length >= 2) out.push(cur); return out; }
+  // 볼록 다각형을 사각형으로 자르기(서덜랜드-호지먼)
+  function clipRect(poly, x0, y0, x1, y1){ let out = poly; const E = [[p=>p[0]>=x0, (a,b)=>[x0, a[1]+(x0-a[0])/(b[0]-a[0])*(b[1]-a[1])]], [p=>p[0]<=x1, (a,b)=>[x1, a[1]+(x1-a[0])/(b[0]-a[0])*(b[1]-a[1])]], [p=>p[1]>=y0, (a,b)=>[a[0]+(y0-a[1])/(b[1]-a[1])*(b[0]-a[0]), y0]], [p=>p[1]<=y1, (a,b)=>[a[0]+(y1-a[1])/(b[1]-a[1])*(b[0]-a[0]), y1]]];
+    for(const [inside, cut] of E){ const inp = out; out = []; for(let i=0;i<inp.length;i++){ const cur = inp[i], prev = inp[(i+inp.length-1)%inp.length]; if(inside(cur)){ if(!inside(prev)) out.push(cut(prev, cur)); out.push(cur); } else if(inside(prev)) out.push(cut(prev, cur)); } if(!out.length) break; } return out; }
+  // 화면에 보이는 땅의 테두리(하늘에 걸린 가장자리는 화면 중심 쪽으로 당김)
+  function screenArea(){ const cv = scene.canvas, w = cv.clientWidth, h = cv.clientHeight, N = 6; const bd = [];
+    for(let i=0;i<=N;i++) bd.push([w*i/N, 0]); for(let i=1;i<=N;i++) bd.push([w, h*i/N]); for(let i=N-1;i>=0;i--) bd.push([w*i/N, h]); for(let i=N-1;i>=1;i--) bd.push([0, h*i/N]);
+    const out = []; for(const [x, y] of bd){ let hit = null; for(let t=0; t<=.9 && !hit; t+=.1){ try{ const ray = camera.getPickRay(new C.Cartesian2(x+(w/2-x)*t, y+(h/2-y)*t)); hit = scene.globe.pick(ray, scene); }catch(e){} } if(hit){ const g = C.Cartographic.fromCartesian(hit); out.push([g.longitude/D2R, g.latitude/D2R]); } }
+    return out.length >= 3 ? out : null; }
+  // ---- 영역 그리기 ----
+  const DR = { h:null, pts:[], mouse:null, ents:[], resolve:null, bar:null, key:null, dbl:null };
+  function pickLL(pos){ let c = null; try{ if(scene.pickPositionSupported) c = scene.pickPosition(pos); }catch(e){} if(!c){ try{ c = scene.globe.pick(camera.getPickRay(pos), scene); }catch(e){} } if(!c) return null; const g = C.Cartographic.fromCartesian(c); if(!isFinite(g.longitude)) return null; return [g.longitude/D2R, g.latitude/D2R, g.height]; }
+  function extentOf(ll){ const P = mkProj(ll[0][0], ll[0][1]); const q = ll.map(p=>P.f(p[0], p[1])); const xs = q.map(p=>p[0]), ys = q.map(p=>p[1]); return Math.max(Math.max(...xs)-Math.min(...xs), Math.max(...ys)-Math.min(...ys)); }
+  function drawEnts(){ const pos = ()=>{ const a = DR.pts.slice(); if(DR.mouse && DR.h) a.push(DR.mouse); if(a.length >= 2) a.push(a[0]); return a.map(p=>C.Cartesian3.fromDegrees(p[0], p[1], p[2] || 0)); };
+    DR.ents.push(viewer.entities.add({ polyline:{ positions: new C.CallbackProperty(pos, false), width: 3, clampToGround: true, material: C.Color.fromCssColorString('#ffd400') } }));
+    DR.ents.push(viewer.entities.add({ polygon:{ hierarchy: new C.CallbackProperty(()=>{ const a = pos(); return a.length >= 4 ? new C.PolygonHierarchy(a.slice(0, -1)) : undefined; }, false), material: C.Color.fromCssColorString('#ffd400').withAlpha(.16), classificationType: C.ClassificationType.BOTH } })); }
+  function dotEnt(p){ DR.ents.push(viewer.entities.add({ position: C.Cartesian3.fromDegrees(p[0], p[1], p[2] || 0), point:{ pixelSize: 8, color: C.Color.fromCssColorString('#ffd400'), outlineColor: C.Color.BLACK, outlineWidth: 1.5, disableDepthTestDistance: Number.POSITIVE_INFINITY } })); }
+  function clearEnts(){ for(const e of DR.ents){ try{ viewer.entities.remove(e); }catch(_){} } DR.ents = []; }
+  function endDraw(result){ if(DR.h){ try{ DR.h.destroy(); }catch(e){} DR.h = null; } if(DR.key){ window.removeEventListener('keydown', DR.key, true); DR.key = null; } if(DR.bar){ DR.bar.remove(); DR.bar = null; }
+    if(DR.dbl){ try{ viewer.cesiumWidget.screenSpaceEventHandler.setInputAction(DR.dbl, C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK); }catch(e){} DR.dbl = null; }
+    DR.mouse = null; const r = DR.resolve; DR.resolve = null; if(!result) clearEnts(); if(r) r(result); }
+  function startDraw(){ endDraw(null); clearEnts(); DR.pts = []; return new Promise(resolve=>{ DR.resolve = resolve;
+    try{ const sh = viewer.cesiumWidget.screenSpaceEventHandler; DR.dbl = sh.getInputAction(C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK); sh.removeInputAction(C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK); }catch(e){}
+    const h = new C.ScreenSpaceEventHandler(scene.canvas); DR.h = h; drawEnts();
+    const add = pos=>{ const p = pickLL(pos); if(!p) return; const L = DR.pts[DR.pts.length-1]; if(L){ const P = mkProj(L[0], L[1]); const d = P.f(p[0], p[1]); if(Math.hypot(d[0], d[1]) < .8) return; } DR.pts.push(p); dotEnt(p); upd(); };
+    const finish = ()=>{ if(DR.pts.length < 3){ tst('꼭짓점을 3개 이상 찍어 주세요', 1800); return; } const ex = extentOf(DR.pts); if(ex > MAXE){ tst('영역이 너무 큽니다 (' + Math.round(ex) + ' m) · ' + MAXE + ' m 안으로 그려 주세요 · Backspace로 되돌리기', 3200); return; } endDraw(DR.pts.map(p=>[p[0], p[1]])); };
+    const undo = ()=>{ if(!DR.pts.length) return; DR.pts.pop(); const e = DR.ents.pop(); try{ viewer.entities.remove(e); }catch(_){} upd(); };
+    h.setInputAction(e=>add(e.position), C.ScreenSpaceEventType.LEFT_CLICK);
+    h.setInputAction(e=>{ DR.mouse = pickLL(e.endPosition); }, C.ScreenSpaceEventType.MOUSE_MOVE);
+    h.setInputAction(()=>finish(), C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+    h.setInputAction(()=>finish(), C.ScreenSpaceEventType.RIGHT_CLICK);
+    DR.key = ev=>{ if(ev.target && /INPUT|TEXTAREA/.test(ev.target.tagName)) return; if(ev.key === 'Escape'){ ev.preventDefault(); ev.stopPropagation(); endDraw(null); } else if(ev.key === 'Enter'){ ev.preventDefault(); ev.stopPropagation(); finish(); } else if(ev.key === 'Backspace'){ ev.preventDefault(); ev.stopPropagation(); undo(); } };
+    window.addEventListener('keydown', DR.key, true);
+    const bar = document.createElement('div'); bar.id = 'vr63Bar'; bar.style.cssText = 'position:fixed;left:50%;top:84px;transform:translateX(-50%);max-width:min(860px,92vw);z-index:60;background:rgba(14,22,38,.94);color:#fff;border:1px solid #ffd400;border-radius:12px;padding:9px 12px;font:13px/1.45 system-ui,sans-serif;display:flex;gap:10px;align-items:center;box-shadow:0 6px 20px rgba(0,0,0,.4)';
+    bar.innerHTML = '<span><b style="color:#ffd400">차량 지울 영역 그리기</b> · 클릭으로 꼭짓점 추가 · 더블클릭·오른쪽 클릭·Enter로 완료 · Backspace 되돌리기 <span id="vr63Info" style="color:#9fb3c8"></span></span><button id="vr63Undo" style="white-space:nowrap;flex:none;background:#2a3a55;color:#fff;border:0;border-radius:8px;padding:5px 9px;cursor:pointer">되돌리기</button><button id="vr63Done" style="white-space:nowrap;flex:none;background:#ffd400;color:#111;border:0;border-radius:8px;padding:5px 11px;font-weight:700;cursor:pointer">완료</button><button id="vr63Cancel" style="white-space:nowrap;flex:none;background:#3a2a2a;color:#fff;border:0;border-radius:8px;padding:5px 9px;cursor:pointer">취소</button>';
+    document.body.appendChild(bar); DR.bar = bar; bar.querySelector('#vr63Done').onclick = finish; bar.querySelector('#vr63Undo').onclick = undo; bar.querySelector('#vr63Cancel').onclick = ()=>{ endDraw(null); };
+    function upd(){ const i = bar.querySelector('#vr63Info'); if(!i) return; const n = DR.pts.length; i.textContent = n ? '(' + n + '점' + (n >= 2 ? ' · 폭 ' + Math.round(extentOf(DR.pts)) + ' m' : '') + ')' : ''; }
+  }); }
+  // 처리 영역 테두리 표시(켜져 있는 동안)
+  function showArea(ll){ clearEnts(); const ps = ll.concat([ll[0]]).map(p=>C.Cartesian3.fromDegrees(p[0], p[1])); DR.ents.push(viewer.entities.add({ polyline:{ positions: ps, width: 2.5, clampToGround: true, material: new C.PolylineDashMaterialProperty({ color: C.Color.fromCssColorString('#ffd400'), dashLength: 14 }) } })); }
+
   async function waitTiles(maxMs){ const ts = tilesets(); const t0 = performance.now(); let st = 0; while(performance.now()-t0 < maxMs){ await sleep(200); const ok = scene.globe.tilesLoaded && ts.every(t=>t.tilesLoaded && (!t._statistics || (t._statistics.numberOfPendingRequests + t._statistics.numberOfTilesProcessing) === 0)); st = ok ? st+1 : 0; if(st >= 4) break; } }
 
-  async function build(){
-    const c0 = center(); const P = mkProj(c0.lon, c0.lat);
-    tst('차량 지우기 · 도로 정보 불러오는 중…', 3000);
+  async function build(area, cc){
+    let c0 = cc; if(!c0){ c0 = { lon: area.reduce((s,p)=>s+p[0],0)/area.length, lat: area.reduce((s,p)=>s+p[1],0)/area.length }; } const P = mkProj(c0.lon, c0.lat);
+    let A = area.map(p=>P.f(p[0], p[1])); RD.clipped = false;
+    { const xs = A.map(p=>p[0]), ys = A.map(p=>p[1]); if(Math.max(...xs)-Math.min(...xs) > MAXE || Math.max(...ys)-Math.min(...ys) > MAXE){ A = clipRect(A, -MAXE/2, -MAXE/2, MAXE/2, MAXE/2); RD.clipped = true; } }
+    if(A.length < 3) throw new Error('처리할 영역을 찾지 못했습니다');
+    R = Math.max(30, ...A.map(p=>Math.hypot(p[0], p[1]))) + 8;
+    RD.area = A.map(p=>P.i(p[0], p[1])); RD.areaM2 = Math.abs(A.reduce((s,p,i)=>{ const q = A[(i+1)%A.length]; return s + p[0]*q[1] - q[0]*p[1]; }, 0))/2;
+    showArea(RD.area);
+    tst('차량 지우기 · 영역 ' + Math.round(RD.areaM2/100)/100 + ' ha' + (RD.clipped ? ' (넓어서 화면 중심 ' + MAXE + ' m만)' : '') + ' · 도로 정보 불러오는 중…', 3200);
     const ways = await fetchRoads(c0.lon, c0.lat); if(!RD.on) return;
     let roads = []; for(const w of ways){ const t = w.tags || {}; if(t.highway === 'service') continue; const sp = roadSpec(t); for(const part of clipToCircle(simplify(w.geometry.map(g=>P.f(g.lon, g.lat)), .3), R+5)) roads.push({ pts:part, sp, tags:t }); }
-    if(!roads.length) throw new Error('화면 중심 150 m 안에 차도가 없습니다');
+    if(!roads.length) throw new Error('선택한 영역 안에 차도가 없습니다');
     tst('위성으로 도로 폭 맞추는 중…', 2500); try{ await fitWidths(roads, P, c0); }catch(e){} if(!RD.on) return;
     const rings = [], segs = []; for(const r of roads){ for(const ch of chunks(r.pts, 14)){ const ring = offsetPoly(ch, r.sp.w); if(ring && ring.length >= 3) rings.push(ring); } for(let i=0;i<r.pts.length-1;i++) segs.push([r.pts[i], r.pts[i+1], r.sp.w]); }
     let minE=1e9, minN=1e9, maxE=-1e9, maxN=-1e9; for(const g of rings) for(const q of g){ minE=Math.min(minE,q[0]); maxE=Math.max(maxE,q[0]); minN=Math.min(minN,q[1]); maxN=Math.max(maxN,q[1]); }
+    { const xs = A.map(p=>p[0]), ys = A.map(p=>p[1]); minE = Math.max(minE, Math.min(...xs)); maxE = Math.min(maxE, Math.max(...xs)); minN = Math.max(minN, Math.min(...ys)); maxN = Math.min(maxN, Math.max(...ys)); }
+    if(!(maxE - minE > 4 && maxN - minN > 4)) throw new Error('선택한 영역 안에 차도가 없습니다');
     minE-=2; minN-=2; maxE+=2; maxN+=2; const BW = maxE-minE, BH = maxN-minN;
     const cv = scene.canvas; const Wb = cv.width, Hb = cv.height; const res = Math.max(.08, Math.max(BW, BH)/3800); const tileW = Wb*res, tileH = Hb*res;
     const MW = Math.ceil(BW/res), MH = Math.ceil(BH/res), N = MW*MH;
@@ -9589,10 +9642,11 @@ if(!window.__CVB) window.__CVB = (function(){
     const Z = new Float32Array(N).fill(NaN);
     const toPx = (e, n)=>[(e-minE)/res, (maxN-n)/res];
     const rm = document.createElement('canvas'); rm.width = MW; rm.height = MH; const rg = rm.getContext('2d', { willReadFrequently:true }); rg.fillStyle = '#000'; rg.fillRect(0,0,MW,MH);
+    rg.save(); rg.beginPath(); A.forEach((p, i)=>{ const q = toPx(p[0], p[1]); if(i) rg.lineTo(q[0], q[1]); else rg.moveTo(q[0], q[1]); }); rg.closePath(); rg.clip();   // 영역 밖 도로는 대상 아님
     for(const [a, b, w] of segs){ const d = norm(sub(b, a)); let ang = Math.atan2(-d[1], d[0]); if(ang < 0) ang += Math.PI; if(ang >= Math.PI) ang -= Math.PI; const v = Math.max(1, Math.round(ang/Math.PI*254)+1);
       const nx = -d[1]*w/2, ny = d[0]*w/2, ex = d[0]*w*.3, ey = d[1]*w*.3; const q = [[a[0]-ex+nx, a[1]-ey+ny], [b[0]+ex+nx, b[1]+ey+ny], [b[0]+ex-nx, b[1]+ey-ny], [a[0]-ex-nx, a[1]-ey-ny]].map(p=>toPx(p[0], p[1]));
       rg.fillStyle = 'rgb(' + v + ',0,0)'; rg.beginPath(); rg.moveTo(q[0][0], q[0][1]); for(const p of q.slice(1)) rg.lineTo(p[0], p[1]); rg.closePath(); rg.fill(); }
-    const rmd = rg.getImageData(0,0,MW,MH).data;
+    rg.restore(); const rmd = rg.getImageData(0,0,MW,MH).data;
     const ENC = new C.CustomShader({ lightingModel: C.LightingModel.UNLIT, uniforms:{ u_dmin:{ type:C.UniformType.FLOAT, value:220.0 } },
       fragmentShaderText: 'void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material){ float t = -fsInput.attributes.positionEC.z - u_dmin; material.diffuse = vec3(clamp(t/128.0,0.0,1.0), fract(t/8.0), fract(t)); }' });
     const lin = c=>{ const s = c/255; return s <= .04045 ? s/12.92 : Math.pow((s+.055)/1.055, 2.4); }; const LUT = new Float32Array(256); for(let i=0;i<256;i++) LUT[i] = lin(i);
@@ -9615,11 +9669,11 @@ if(!window.__CVB) window.__CVB = (function(){
         const e0 = minE + tx*tileW, n1 = maxN - ty*tileH; const ce = e0 + tileW/2, cn = n1 - tileH/2;
         const ax = Math.round((e0-minE)/res), ay = Math.round((maxN-n1)/res);
         let any = false; for(let yy=Math.max(0,ay); yy<Math.min(MH, ay+Hb) && !any; yy+=8) for(let xx=Math.max(0,ax); xx<Math.min(MW, ax+Wb); xx+=8){ if(rmd[(yy*MW+xx)*4]){ any = true; break; } } if(!any) continue;
-        tilesUsed++; tst('정사 촬영·높이(DSM) 읽는 중 ' + tilesUsed + '…', 2000);
+        tilesUsed++; tst('정사 촬영·높이(DSM) 읽는 중 ' + tilesUsed + '…', 2000); const _tt0 = performance.now();
         const ll = P.i(ce, cn); let hc = scene.globe.getHeight(C.Cartographic.fromDegrees(ll[0], ll[1])); if(!(hc > -100)) hc = 0; const camAlt = hc + 300;
         camera.setView({ destination: C.Cartesian3.fromDegrees(ll[0], ll[1], camAlt), orientation:{ heading:0, pitch:-90*D2R, roll:0 } });
         for(let i=0;i<ts0.length;i++) ts0[i].customShader = sv.cs[i];
-        fx(); await waitTiles(30000); fx(); scene.render(); mg.drawImage(cv, 0, 0, Wb, Hb, ax, ay, Wb, Hb);
+        fx(); await waitTiles(30000); (RD.tt = RD.tt || []).push(Math.round(performance.now() - _tt0)); fx(); scene.render(); mg.drawImage(cv, 0, 0, Wb, Hb, ax, ay, Wb, Hb);
         for(const t of ts0) t.customShader = ENC; const gsh = scene.globe.show, gbg = scene.backgroundColor.clone(); scene.globe.show = false; scene.backgroundColor = C.Color.BLACK; fx(); scene.render(); await sleep(150); fx(); await waitTiles(4000); fx(); scene.render();
         tg.clearRect(0,0,Wb,Hb); tg.drawImage(cv, 0, 0); const dd = tg.getImageData(0,0,Wb,Hb).data; scene.globe.show = gsh; scene.backgroundColor = gbg;
         for(let y=0;y<Hb;y++){ const my = ay + y; if(my<0||my>=MH) continue; for(let x=0;x<Wb;x++){ const mx = ax + x; if(mx<0||mx>=MW) continue; const mi = my*MW+mx; if(!rmd[mi*4]) continue; const k = (y*Wb+x)*4; if(dd[k] < 3 && dd[k+1] < 3 && dd[k+2] < 3) continue;   // 배경(모델 없음)
@@ -9754,7 +9808,7 @@ if(!window.__CVB) window.__CVB = (function(){
     if(!RD.on) return;
     applyClip();
     RD.prim = scene.primitives.add(new C.Primitive({ geometryInstances: new C.GeometryInstance({ geometry: RD.geom }), appearance: new C.MaterialAppearance({ material: C.Material.fromType('Image', { image: RD.tex.toDataURL('image/png') }), flat:true, faceForward:true, translucent:true, closed:false }), asynchronous:false }));
-    tst('차량 지우기 완료 · 차량 ' + RD.stat.cars + '대 자리(' + Math.round(RD.stat.maskPx*res*res) + ' ㎡)를 도로면 높이로 평면화하고 노면 색으로 채움', 3800);
+    tst('차량 지우기 완료 · ' + (RD.mode === 'vremovePoly' ? '그린 영역' : '화면 영역') + ' ' + Math.round(RD.areaM2/100)/100 + ' ha · 차량 ' + RD.stat.cars + '대 자리(' + Math.round(RD.stat.maskPx*res*res) + ' ㎡)를 도로면 높이로 평면화하고 노면 색으로 채움', 3800);
   }
   // 국소 평면 보간(IDW, 가까운 점 위주)
   function idwFactory(pts){ return (x, y)=>{ let sw = 0, sv = 0, best = null, bd = 1e18; for(const p of pts){ const d2 = (p[0]-x)**2 + (p[1]-y)**2; if(d2 < bd){ bd = d2; best = p; } if(d2 > 6400) continue; const w = 1/(d2 + 25); sw += w; sv += w*p[2]; } return sw ? sv/sw : (best ? best[2] : 0); }; }
@@ -9762,22 +9816,26 @@ if(!window.__CVB) window.__CVB = (function(){
   function applyClip(){ for(const ts of tilesets()){ try{ let cp = ts.clippingPolygons; if(cp && !cp.isDestroyed()){ cp.removeAll(); for(const p of RD.clip) cp.add(p); cp.enabled = true; } else { ts.clippingPolygons = new C.ClippingPolygonCollection({ polygons: RD.clip, enabled:true }); } }catch(e){ console.warn('vr62 clip', e); } } }
   function clearAll(){ if(RD.prim){ try{ scene.primitives.remove(RD.prim); }catch(e){} } RD.prim = null; RD.geom = null;
     if(RD.clip){ for(const ts of tilesets()){ const cp = ts.clippingPolygons; if(cp && !cp.isDestroyed()){ try{ cp.enabled = false; cp.removeAll(); }catch(e){} } } } RD.clip = null; }
-  async function on(){ RD.on = true; for(const id of ['osmroad','xsec']) if(STATE.on.has(id)){ try{ await toggleLayer(id, false); }catch(e){} }
-    RD.busy = true; try{ await build(); }catch(e){ RD.lastErr = e.message; tst('차량 지우기 실패: ' + e.message, 3500); RD.on = false; STATE.on.delete('vremove'); clearAll(); try{ renderCats(); renderSub(); }catch(_){} } finally{ RD.busy = false; } }
-  function off(){ RD.on = false; clearAll(); }
+  async function on(id){ RD.on = true; RD.mode = id; for(const o of ['osmroad','xsec']) if(STATE.on.has(o)){ try{ await toggleLayer(o, false); }catch(e){} }
+    const fail = msg=>{ RD.on = false; STATE.on.delete(id); clearAll(); clearEnts(); if(msg) tst(msg, 3500); try{ renderCats(); renderSub(); updateSrc(); }catch(_){} };
+    let area, cc = null;
+    if(id === 'vremovePoly'){ area = await startDraw(); if(!area || !RD.on || RD.mode !== id){ if(RD.mode === id) fail(area ? null : '영역 그리기를 취소했습니다'); return; } }
+    else { area = screenArea(); const c = center(); cc = { lon:c.lon, lat:c.lat }; if(!area){ fail('화면에서 땅을 찾지 못했습니다 · 지면이 보이게 기울기를 낮춰 주세요'); return; } }
+    RD.busy = true; try{ await build(area, cc); }catch(e){ RD.lastErr = e.message; fail('차량 지우기 실패: ' + e.message); } finally{ RD.busy = false; } }
+  function off(){ RD.on = false; RD.mode = null; endDraw(null); clearAll(); clearEnts(); }
   try{ const _ens = ensureTileset; ensureTileset = async function(p){ const ts = await _ens.apply(this, arguments); if(ts && RD.on && RD.clip && RD.prim) applyClip(); return ts; }; }catch(e){}
   const _t63 = toggleLayer;
   toggleLayer = async function(id, force){
-    if(id === 'vremove'){ const want = force !== undefined ? force : !STATE.on.has('vremove');
+    if(IDS.includes(id)){ const want = force !== undefined ? force : !STATE.on.has(id);
       if(want && STATE.mode !== 'site'){ tst('차량 지우기는 SITE 모드에서 사용합니다', 2000); return; }
-      if(want){ if(RD.busy) return; STATE.on.add('vremove'); try{ renderCats(); renderSub(); }catch(e){} off(); await on(); } else { STATE.on.delete('vremove'); off(); }
+      if(want){ if(RD.busy){ tst('차량 지우기 처리 중입니다 · 잠시만 기다려 주세요', 2000); return; } for(const o of IDS) STATE.on.delete(o); STATE.on.add(id); try{ renderCats(); renderSub(); }catch(e){} off(); await on(id); } else { STATE.on.delete(id); if(!RD.busy || RD.mode === id) off(); }
       try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
-    if((id === 'osmroad' || id === 'xsec') && force !== false && !STATE.on.has(id) && STATE.on.has('vremove')){ STATE.on.delete('vremove'); off(); }
+    if((id === 'osmroad' || id === 'xsec') && force !== false && !STATE.on.has(id) && curId()){ for(const o of IDS) STATE.on.delete(o); off(); }
     return _t63.apply(this, arguments);
   };
-  try{ const _sm63 = setMode; setMode = function(m){ if(m !== 'site' && STATE.on.has('vremove')){ STATE.on.delete('vremove'); off(); } return _sm63.apply(this, arguments); }; }catch(e){}
-  if(STATE.on.has('vremove')) STATE.on.delete('vremove');
-  window.__VR63 = { version:'63.1', RD, build, clearAll };
+  try{ const _sm63 = setMode; setMode = function(m){ if(m !== 'site' && curId()){ for(const o of IDS) STATE.on.delete(o); off(); } return _sm63.apply(this, arguments); }; }catch(e){}
+  for(const o of IDS) STATE.on.delete(o);
+  window.__VR63 = { version:'63.2', RD, DR, build, clearAll, screenArea, startDraw, endDraw };
 })();
 </script>
 </body>
