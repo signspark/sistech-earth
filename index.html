@@ -9480,6 +9480,9 @@ if(!window.__CVB) window.__CVB = (function(){
 /* ---------- 63. SITE › 3D 모델 › 차량 지우기 (도로 평면화 · 화면 영역 / 직접 그린 영역) (2026-10-11) ----------
    - 63.2: 대상 지역을 두 가지로 고름 ① 화면 영역: 지금 화면에 보이는 땅(넓으면 화면 중심 600 m 사각형까지)
            ② 영역 그리기: 지도를 클릭해 다각형을 그리고 더블클릭·오른쪽 클릭·Enter로 완료하면 그 안만 처리(최대 600 m)
+   - 63.3: 나무 수관 아래 차량은 건너뜀(잘라내기가 위아래 전체를 자르므로) · 촬영 후 화면 비율 복원
+   - 63.3: '차량 지운 모델 비교 (좌우 분할)' · 왼쪽 원본 / 오른쪽 두 번째 뷰어(같은 3D 타일을 따로 불러온 '3D 타일 2')에 차량 지운 결과만 표시 · 두 화면 카메라 동기화
+           (원본 3D 타일 파일은 바꾸지 않음: 렌더 시 잘라내기 + 평면 노면 덧씌우기)
    - 대상 영역 안의 OSM 차도(위성으로 폭 보정)를 대상으로
    1) 위에서 수직 정사(직교 투영)로 3D 모델을 두 번 찍음: ① 원본 색 ② 높이 인코딩 셰이더(화소마다 높이 = DSM, 약 1 cm 단위)
    2) DSM에서 도로면 기준면 계산: 1 m 칸마다 하위 20% → 7 m 창 하위 25% → 매끈하게 (차량·가로수 가지는 기준면에서 빠짐) · 기준면보다 0.35 m 넘게 높은 곳 = 차량
@@ -9567,7 +9570,8 @@ if(!window.__CVB) window.__CVB = (function(){
   const sleep = ms=>new Promise(r=>setTimeout(r, ms));
   const IDS = ['vremove', 'vremovePoly'];
   const items = [ { id:'vremove', q:'지금 화면에 보이는 도로의 차량을 지우려면', name:'차량 지우기 · 화면 영역', src:'화면에 보이는 지역의 도로(넓으면 화면 중심 600 m까지) · 도로면 높이로 평면화 · 차량 자리를 도로 방향 노면 색으로 채움 · 원래 질감 유지 · 약 1~2분', type:'layer' },
-    { id:'vremovePoly', q:'원하는 구역만 골라 차량을 지우려면', name:'차량 지우기 · 영역 그리기', src:'지도를 클릭해 다각형을 그리고 더블클릭(오른쪽 클릭·Enter)으로 완료 → 그 안의 도로 차량을 지움 · 최대 600 m · Backspace 되돌리기 · Esc 취소', type:'layer' } ];
+    { id:'vremovePoly', q:'원하는 구역만 골라 차량을 지우려면', name:'차량 지우기 · 영역 그리기', src:'지도를 클릭해 다각형을 그리고 더블클릭(오른쪽 클릭·Enter)으로 완료 → 그 안의 도로 차량을 지움 · 최대 600 m · Backspace 되돌리기 · Esc 취소', type:'layer' },
+    { id:'vrsplit', q:'원본과 차량 지운 모델을 나란히 보려면', name:'차량 지운 모델 비교 (좌우 분할)', src:'왼쪽 원본 · 오른쪽 차량 지운 모델(3D 타일 2) · 두 화면 카메라 함께 움직임 · 차량 지우기 결과는 오른쪽에만 표시 · 3D 모델을 두 번 불러와 메모리 2배', type:'layer' } ];
   const mc = MENUS.site.find(c=>c.id==='model'); if(mc) for(const it of items) if(!mc.items.some(i=>i.id===it.id)) mc.items.push(it);
   const curId = ()=>IDS.find(id=>STATE.on.has(id));
   try{ renderCats(); renderSub(); }catch(e){}
@@ -9682,7 +9686,7 @@ if(!window.__CVB) window.__CVB = (function(){
     } finally {
       if(RD._rmPre){ try{ RD._rmPre(); }catch(e){} RD._rmPre = null; }
       for(let i=0;i<ts0.length;i++){ if(sv.cb[i]){ ts0[i].cacheBytes = sv.cb[i][0]; ts0[i].maximumCacheOverflowBytes = sv.cb[i][1]; ts0[i].foveatedScreenSpaceError = sv.cb[i][2]; } ts0[i].customShader = sv.cs[i]; try{ delete ts0[i].maximumScreenSpaceError; }catch(e){} if(sv.sse[i] !== undefined) ts0[i].maximumScreenSpaceError = (window.STATE && STATE.sse) || sv.sse[i]; if(sv.cpe[i] !== null && ts0[i].clippingPolygons && !ts0[i].clippingPolygons.isDestroyed()) ts0[i].clippingPolygons.enabled = sv.cpe[i]; }
-      camera.switchToPerspectiveFrustum(); camera.frustum = sv.frus; scene.screenSpaceCameraController.minimumZoomDistance = sv.minZ; scene.screenSpaceCameraController.enableInputs = sv.inp; scene.fog.enabled = sv.fog;
+      camera.switchToPerspectiveFrustum(); camera.frustum = sv.frus; try{ camera.frustum.aspectRatio = scene.drawingBufferWidth / scene.drawingBufferHeight; }catch(e){} scene.screenSpaceCameraController.minimumZoomDistance = sv.minZ; scene.screenSpaceCameraController.enableInputs = sv.inp; scene.fog.enabled = sv.fog;
       for(const p of hid) p.show = true; for(const d of dsHid) d.show = true; viewer.entities.show = entShow;
       camera.setView({ destination: sv.view.pos, orientation:{ heading: sv.view.hd, pitch: sv.view.pt, roll:0 } });
     }
@@ -9776,6 +9780,12 @@ if(!window.__CVB) window.__CVB = (function(){
       const cx = hull.reduce((s,p)=>s+p[0],0)/hull.length, cy = hull.reduce((s,p)=>s+p[1],0)/hull.length; const ex = .45/res;
       hull = hull.map(p=>{ const dx = p[0]-cx, dy = p[1]-cy, L = Math.hypot(dx, dy) || 1; return [p[0] + dx/L*ex, p[1] + dy/L*ex]; });
       hulls.push(hull); }
+    // 나무 아래 차량은 건너뜀: 잘라내기는 위아래로 끝까지 잘리므로 위를 덮은 가로수 수관까지 구멍이 남
+    let canopy = 0; { const pip = (h, x, y)=>{ let c = false; for(let a=0, b=h.length-1; a<h.length; b=a++){ const [xa, ya] = h[a], [xb, yb] = h[b]; if((ya > y) !== (yb > y) && x < (xb-xa)*(y-ya)/(yb-ya) + xa) c = !c; } return c; };
+      const keep = []; for(const h of hulls){ let x0=1e9, y0=1e9, x1=-1e9, y1=-1e9; for(const p of h){ if(p[0]<x0) x0=p[0]; if(p[0]>x1) x1=p[0]; if(p[1]<y0) y0=p[1]; if(p[1]>y1) y1=p[1]; }
+        let n = 0, bad = 0; for(let y=Math.max(0, Math.floor(y0)); y<Math.min(MH, y1); y+=2) for(let x=Math.max(0, Math.floor(x0)); x<Math.min(MW, x1); x+=2){ if(!pip(h, x, y)) continue; n++; const i = y*MW+x; const z = Z[i]; if(isGreen(i) || (z === z && z - gAt(x, y) > 4.5)) bad++; }
+        if(n && bad/n > .12){ canopy++; continue; } keep.push(h); }
+      hulls.length = 0; for(const h of keep) hulls.push(h); }
     // 조각 래스터 = 채울 곳
     const pc = document.createElement('canvas'); pc.width = MW; pc.height = MH; const pg = pc.getContext('2d', { willReadFrequently:true }); pg.fillStyle = '#fff';
     for(const h of hulls){ pg.beginPath(); pg.moveTo(h[0][0], h[0][1]); for(const p of h.slice(1)) pg.lineTo(p[0], p[1]); pg.closePath(); pg.fill(); }
@@ -9804,18 +9814,63 @@ if(!window.__CVB) window.__CVB = (function(){
     const idx = []; for(let j=0;j<ny-1;j++) for(let i=0;i<nx-1;i++){ const a = j*nx+i, b = a+1, c = a+nx, d = c+1; idx.push(a,b,c, b,d,c); }
     let geom = new C.Geometry({ attributes:{ position:new C.GeometryAttribute({ componentDatatype:C.ComponentDatatype.DOUBLE, componentsPerAttribute:3, values:pos }), st:new C.GeometryAttribute({ componentDatatype:C.ComponentDatatype.FLOAT, componentsPerAttribute:2, values:st }) }, indices: (nx*ny > 65535 ? new Uint32Array(idx) : new Uint16Array(idx)), primitiveType:C.PrimitiveType.TRIANGLES, boundingSphere:C.BoundingSphere.fromVertices(Array.from(pos)) });
     RD.geom = C.GeometryPipeline.computeNormal(geom);
-    RD.stat = { roads: roads.length, tiles: tilesUsed, res: +res.toFixed(3), size: MW + 'x' + MH, comps: comps.length, cars: cars.length, flatCars: nCol, grouped: nGrp, maskPx: mask.reduce((s,v)=>s+v,0), filled, flat, medLum: Math.round(med) };
+    RD.stat = { roads: roads.length, tiles: tilesUsed, res: +res.toFixed(3), size: MW + 'x' + MH, comps: comps.length, cars: cars.length, flatCars: nCol, grouped: nGrp, underTree: canopy, erased: hulls.length, maskPx: mask.reduce((s,v)=>s+v,0), filled, flat, medLum: Math.round(med) };
     if(!RD.on) return;
-    applyClip();
-    RD.prim = scene.primitives.add(new C.Primitive({ geometryInstances: new C.GeometryInstance({ geometry: RD.geom }), appearance: new C.MaterialAppearance({ material: C.Material.fromType('Image', { image: RD.tex.toDataURL('image/png') }), flat:true, faceForward:true, translucent:true, closed:false }), asynchronous:false }));
-    tst('차량 지우기 완료 · ' + (RD.mode === 'vremovePoly' ? '그린 영역' : '화면 영역') + ' ' + Math.round(RD.areaM2/100)/100 + ' ha · 차량 ' + RD.stat.cars + '대 자리(' + Math.round(RD.stat.maskPx*res*res) + ' ㎡)를 도로면 높이로 평면화하고 노면 색으로 채움', 3800);
+    RD.texURL = null; reapply();
+    tst('차량 지우기 완료 · ' + (RD.mode === 'vremovePoly' ? '그린 영역' : '화면 영역') + ' ' + Math.round(RD.areaM2/100)/100 + ' ha · 차량 ' + RD.stat.erased + '대 자리(' + Math.round(RD.stat.maskPx*res*res) + ' ㎡)를 도로면 높이로 평면화하고 노면 색으로 채움' + (SP.on ? ' · 오른쪽 창(3D 타일 2)에 표시' : ''), 3800);
   }
   // 국소 평면 보간(IDW, 가까운 점 위주)
   function idwFactory(pts){ return (x, y)=>{ let sw = 0, sv = 0, best = null, bd = 1e18; for(const p of pts){ const d2 = (p[0]-x)**2 + (p[1]-y)**2; if(d2 < bd){ bd = d2; best = p; } if(d2 > 6400) continue; const w = 1/(d2 + 25); sw += w; sv += w*p[2]; } return sw ? sv/sw : (best ? best[2] : 0); }; }
   // 잘라내기 컬렉션: 이미 있으면 재사용(교체 시 렌더 오류 방지)
-  function applyClip(){ for(const ts of tilesets()){ try{ let cp = ts.clippingPolygons; if(cp && !cp.isDestroyed()){ cp.removeAll(); for(const p of RD.clip) cp.add(p); cp.enabled = true; } else { ts.clippingPolygons = new C.ClippingPolygonCollection({ polygons: RD.clip, enabled:true }); } }catch(e){ console.warn('vr62 clip', e); } } }
-  function clearAll(){ if(RD.prim){ try{ scene.primitives.remove(RD.prim); }catch(e){} } RD.prim = null; RD.geom = null;
-    if(RD.clip){ for(const ts of tilesets()){ const cp = ts.clippingPolygons; if(cp && !cp.isDestroyed()){ try{ cp.enabled = false; cp.removeAll(); }catch(e){} } } } RD.clip = null; }
+  function applyClip(){ for(const ts of tgtTs()){ try{ let cp = ts.clippingPolygons; if(cp && !cp.isDestroyed()){ cp.removeAll(); for(const p of RD.clip) cp.add(p); cp.enabled = true; } else { ts.clippingPolygons = new C.ClippingPolygonCollection({ polygons: RD.clip, enabled:true }); } }catch(e){ console.warn('vr62 clip', e); } } }
+  function clipOffAll(){ for(const ts of tilesets().concat(SP.ts.map(x=>x.ts))){ try{ const cp = ts.clippingPolygons; if(cp && !cp.isDestroyed()){ cp.enabled = false; cp.removeAll(); } }catch(e){} } }
+  function primOff(){ if(RD.prim){ try{ (RD.primScene || scene).primitives.remove(RD.prim); }catch(e){} } RD.prim = null; RD.primScene = null; }
+  function clearAll(){ primOff(); RD.geom = null; RD.texURL = null; if(RD.clip) clipOffAll(); RD.clip = null; }
+  // 결과(잘라내기 + 평면 노면)를 지금 대상 화면(분할 중이면 오른쪽, 아니면 원본 화면)에 다시 붙임
+  function reapply(){ if(!RD.geom || !RD.clip || !RD.tex) return false; primOff(); clipOffAll(); applyClip();
+    if(!RD.texURL) RD.texURL = RD.tex.toDataURL('image/png'); RD.primScene = tgtScene();
+    RD.prim = RD.primScene.primitives.add(new C.Primitive({ geometryInstances: new C.GeometryInstance({ geometry: RD.geom }), appearance: new C.MaterialAppearance({ material: C.Material.fromType('Image', { image: RD.texURL }), flat:true, faceForward:true, translucent:true, closed:false }), asynchronous:false })); return true; }
+
+  // ---- 좌우 분할: 오른쪽 = 두 번째 뷰어('3D 타일 2', 같은 타일셋을 따로 불러옴) ----
+  const SP = { on:false, v:null, div:null, ts:[], active:'L', rm:[], iv:null, ui:null, hostCss:'' };
+  const tgtTs = ()=> SP.on && SP.v ? SP.ts.map(x=>x.ts) : tilesets();
+  const tgtScene = ()=> SP.on && SP.v ? SP.v.scene : scene;
+  function copyCam(a, b){ const ca = a.camera, cb = b.camera; const ortho = ca.frustum.fov === undefined;
+    if(ortho && cb.frustum.fov !== undefined){ try{ cb.switchToOrthographicFrustum(); }catch(e){} } else if(!ortho && cb.frustum.fov === undefined){ try{ cb.switchToPerspectiveFrustum(); }catch(e){} }
+    cb.setView({ destination: ca.positionWC, orientation:{ direction: ca.directionWC, up: ca.upWC } });
+    if(ortho){ if(ca.frustum.width) cb.frustum.width = ca.frustum.width; } else if(ca.frustum.fov) cb.frustum.fov = ca.frustum.fov;
+    const ar = b.scene.drawingBufferWidth / b.scene.drawingBufferHeight; if(ar > 0 && Math.abs(cb.frustum.aspectRatio - ar) > 1e-3) cb.frustum.aspectRatio = ar; }
+  async function syncTs(){ if(!SP.v) return; for(const p of PROJECTS){ if(!p.ts) continue; let x = SP.ts.find(t=>t.p === p);
+      if(!x && p.tsId && !SP.loading){ SP.loading = true; try{ const ts = await Cesium.Cesium3DTileset.fromUrl('https://3dview.sistech3d.com/api/tileset/project/' + p.tsId + '/tileset.json', { maximumScreenSpaceError: p.ts.maximumScreenSpaceError, skipLevelOfDetail: true, dynamicScreenSpaceError: true, cacheBytes: 256*1024*1024, foveatedScreenSpaceError: true });
+          if(!SP.v){ try{ ts.destroy(); }catch(e){} return; } SP.v.scene.primitives.add(ts); x = { p, ts }; SP.ts.push(x); if(RD.on && RD.geom && !RD.busy) reapply(); }catch(e){ console.warn('vr63 split ts', e); } finally{ SP.loading = false; } }
+      if(x){ x.ts.show = p.ts.show; const s = p.ts.maximumScreenSpaceError; if(!RD.busy && Math.abs(x.ts.maximumScreenSpaceError - s) > .05) x.ts.maximumScreenSpaceError = s; } } }
+  async function splitOn(){ if(SP.on) return; SP.on = true; SP.active = 'L';
+    const host = viewer.container; SP.hostCss = host.style.cssText; host.style.right = '50%';
+    const div = document.createElement('div'); div.id = 'vr63Split'; div.style.cssText = 'position:fixed;top:0;bottom:0;left:50%;right:0;background:#06224A'; host.parentNode.insertBefore(div, host.nextSibling); SP.div = div;
+    const credit = document.createElement('div'); credit.style.display = 'none';
+    const v = new Cesium.Viewer(div, { baseLayer:false, animation:false, timeline:false, geocoder:false, homeButton:false, sceneModePicker:false, baseLayerPicker:false, navigationHelpButton:false, fullscreenButton:false, infoBox:false, selectionIndicator:false, creditContainer: credit, terrainProvider: viewer.terrainProvider });
+    SP.v = v; try{ v.screenSpaceEventHandler.removeInputAction(C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK); }catch(e){}
+    for(let i=0;i<viewer.imageryLayers.length;i++){ const l = viewer.imageryLayers.get(i); if(!l.show) continue; try{ const nl = v.imageryLayers.addImageryProvider(l.imageryProvider); nl.alpha = l.alpha; nl.brightness = l.brightness; }catch(e){} }
+    const s2 = v.scene; s2.globe.enableLighting = false; s2.globe.baseColor = scene.globe.baseColor; s2.globe.depthTestAgainstTerrain = scene.globe.depthTestAgainstTerrain; s2.fog.enabled = scene.fog.enabled; s2.globe.maximumScreenSpaceError = scene.globe.maximumScreenSpaceError;
+    s2.screenSpaceCameraController.minimumZoomDistance = scene.screenSpaceCameraController.minimumZoomDistance; try{ s2.verticalExaggeration = scene.verticalExaggeration; }catch(e){}
+    copyCam(viewer, v);
+    SP.rm.push(scene.preRender.addEventListener(()=>{ if(SP.v && !RD.busy && SP.active === 'L') copyCam(viewer, SP.v); }));
+    SP.rm.push(s2.preRender.addEventListener(()=>{ if(SP.v && !RD.busy && SP.active === 'R') copyCam(SP.v, viewer); }));
+    const setL = ()=>{ SP.active = 'L'; }, setR = ()=>{ SP.active = 'R'; };
+    for(const ev of ['pointerdown','wheel']){ host.addEventListener(ev, setL, true); div.addEventListener(ev, setR, true); }
+    SP.rm.push(()=>{ for(const ev of ['pointerdown','wheel']){ host.removeEventListener(ev, setL, true); div.removeEventListener(ev, setR, true); } });
+    const ui = document.createElement('div'); ui.id = 'vr63SplitUI'; ui.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:4';
+    const pill = 'position:absolute;bottom:64px;transform:translateX(-50%);background:rgba(10,18,32,.86);color:#fff;font:600 13px system-ui,sans-serif;padding:6px 12px;border-radius:999px;border:1px solid ';
+    ui.innerHTML = '<div style="position:absolute;top:0;bottom:0;left:50%;width:3px;margin-left:-1px;background:#ffd400;box-shadow:0 0 6px rgba(0,0,0,.6)"></div><div style="' + pill + '#9fb3c8;left:25%">원본 3D 타일</div><div id="vr63SplitR" style="' + pill + '#ffd400;left:75%"><span style="color:#ffd400">차량 지운 모델</span> · 3D 타일 2</div>';
+    document.body.appendChild(ui); SP.ui = ui;
+    await syncTs(); SP.iv = setInterval(syncTs, 1500);
+    if(RD.on && RD.geom && !RD.busy){ reapply(); tst('좌우 분할 · 오른쪽에 차량 지운 모델 표시 · 왼쪽은 원본', 3000); }
+    else tst('좌우 분할 · 오른쪽(3D 타일 2)에 차량 지운 결과가 표시됩니다 · 3D 모델 메뉴에서 “차량 지우기 · 화면 영역” 또는 “영역 그리기”를 누르세요', 4200); }
+  function splitOff(){ if(!SP.on) return; SP.on = false; const had = RD.on && RD.geom; if(RD.prim && RD.primScene !== scene) primOff();
+    if(SP.iv){ clearInterval(SP.iv); SP.iv = null; } for(const f of SP.rm){ try{ f(); }catch(e){} } SP.rm = [];
+    for(const x of SP.ts){ try{ const cp = x.ts.clippingPolygons; if(cp && !cp.isDestroyed()){ cp.enabled = false; cp.removeAll(); } }catch(e){} } SP.ts = [];
+    if(SP.v){ try{ SP.v.destroy(); }catch(e){} SP.v = null; } if(SP.div){ SP.div.remove(); SP.div = null; } if(SP.ui){ SP.ui.remove(); SP.ui = null; }
+    viewer.container.style.cssText = SP.hostCss; if(had && !RD.busy) reapply(); }
   async function on(id){ RD.on = true; RD.mode = id; for(const o of ['osmroad','xsec']) if(STATE.on.has(o)){ try{ await toggleLayer(o, false); }catch(e){} }
     const fail = msg=>{ RD.on = false; STATE.on.delete(id); clearAll(); clearEnts(); if(msg) tst(msg, 3500); try{ renderCats(); renderSub(); updateSrc(); }catch(_){} };
     let area, cc = null;
@@ -9823,9 +9878,15 @@ if(!window.__CVB) window.__CVB = (function(){
     else { area = screenArea(); const c = center(); cc = { lon:c.lon, lat:c.lat }; if(!area){ fail('화면에서 땅을 찾지 못했습니다 · 지면이 보이게 기울기를 낮춰 주세요'); return; } }
     RD.busy = true; try{ await build(area, cc); }catch(e){ RD.lastErr = e.message; fail('차량 지우기 실패: ' + e.message); } finally{ RD.busy = false; } }
   function off(){ RD.on = false; RD.mode = null; endDraw(null); clearAll(); clearEnts(); }
-  try{ const _ens = ensureTileset; ensureTileset = async function(p){ const ts = await _ens.apply(this, arguments); if(ts && RD.on && RD.clip && RD.prim) applyClip(); return ts; }; }catch(e){}
+  try{ const _ens = ensureTileset; ensureTileset = async function(p){ const ts = await _ens.apply(this, arguments); if(ts && RD.on && RD.clip && RD.prim && !SP.on) applyClip(); return ts; }; }catch(e){}
   const _t63 = toggleLayer;
   toggleLayer = async function(id, force){
+    if(id === 'vrsplit'){ const want = force !== undefined ? force : !STATE.on.has('vrsplit');
+      if(want && STATE.mode !== 'site'){ tst('좌우 분할은 SITE 모드에서 사용합니다', 2000); return; }
+      if(RD.busy){ tst('차량 지우기 처리 중입니다 · 끝난 뒤 다시 눌러 주세요', 2200); return; }
+      if(want){ STATE.on.add('vrsplit'); try{ await splitOn(); }catch(e){ console.warn(e); tst('좌우 분할 실패: ' + e.message, 3000); STATE.on.delete('vrsplit'); try{ splitOff(); }catch(_){} } }
+      else { STATE.on.delete('vrsplit'); splitOff(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
     if(IDS.includes(id)){ const want = force !== undefined ? force : !STATE.on.has(id);
       if(want && STATE.mode !== 'site'){ tst('차량 지우기는 SITE 모드에서 사용합니다', 2000); return; }
       if(want){ if(RD.busy){ tst('차량 지우기 처리 중입니다 · 잠시만 기다려 주세요', 2000); return; } for(const o of IDS) STATE.on.delete(o); STATE.on.add(id); try{ renderCats(); renderSub(); }catch(e){} off(); await on(id); } else { STATE.on.delete(id); if(!RD.busy || RD.mode === id) off(); }
@@ -9833,9 +9894,9 @@ if(!window.__CVB) window.__CVB = (function(){
     if((id === 'osmroad' || id === 'xsec') && force !== false && !STATE.on.has(id) && curId()){ for(const o of IDS) STATE.on.delete(o); off(); }
     return _t63.apply(this, arguments);
   };
-  try{ const _sm63 = setMode; setMode = function(m){ if(m !== 'site' && curId()){ for(const o of IDS) STATE.on.delete(o); off(); } return _sm63.apply(this, arguments); }; }catch(e){}
-  for(const o of IDS) STATE.on.delete(o);
-  window.__VR63 = { version:'63.2', RD, DR, build, clearAll, screenArea, startDraw, endDraw };
+  try{ const _sm63 = setMode; setMode = function(m){ if(m !== 'site' && curId()){ for(const o of IDS) STATE.on.delete(o); off(); } if(m !== 'site' && SP.on){ STATE.on.delete('vrsplit'); splitOff(); } return _sm63.apply(this, arguments); }; }catch(e){}
+  for(const o of IDS) STATE.on.delete(o); STATE.on.delete('vrsplit');
+  window.__VR63 = { version:'63.3', RD, DR, SP, splitOn, splitOff, reapply, build, clearAll, screenArea, startDraw, endDraw };
 })();
 </script>
 </body>
