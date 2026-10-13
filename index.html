@@ -10238,5 +10238,367 @@ if(!window.__CVB) window.__CVB = (function(){
 })();
 </script>
 
+<script>
+/* ---------- 66. SITE › 3D 모델 › 보안 처리 · 영역 위장 (폴리곤 그리기 · 2026-10-13) ----------
+   - 지도에 다각형을 그리면 그 안의 시설·지물을 지우고, 주변과 비슷한 곳의 3D 모델(나무·지형지물)을 옮겨 와 채움 → 다른 지역과 구분되지 않게 함
+   - 원본 3D 타일 파일은 바꾸지 않음(렌더할 때만 적용) · 끄면 원래대로 · 그린 영역은 이 브라우저에 저장되어 다시 켜면 복원
+   - 처리 순서
+     ① 원본 모델: 다각형 안 정점을 지면 높이(지형 + 드론 모델 보정값)로 내려 건물·차량·시설을 모두 지우고 바닥을 주변 평균색(어둡게)으로 칠함
+     ② 채울 자리 자동 선택: 다각형 둘레 띠(바깥 4~30 m)의 위성 영상 색 분포 · 밝기 변화량 · 녹지 비율, 지형 모양, 드론 모델 높이(나무 높이) 분포를
+        주변 64곳 후보(16방향 × 4거리)와 비교해 가장 비슷한 곳을 고름 · 다른 보안 영역이나 자기 자신과 겹치는 후보는 제외 · 3D 모델이 없는 곳 제외
+     ③ 복제 레이어: 같은 3D 타일을 한 번 더 불러와 고른 자리를 다각형 위치로 옮김 · 높이 = 원래 높이 + (이 자리 지형 − 그 자리 지형) → 땅 모양 유지
+     ④ 경계 이음: 다각형 바로 바깥의 실제 표면 높이(드론 모델 · 경계 밖 2~6 m 중앙값)에 맞춰 안쪽 10~40 m 동안 높이를 서서히 이어 붙여 단차 없앰
+   - 최대 4곳 · 영역 하나당 최대 400 m · 영역마다 3D 모델을 한 번 더 불러오므로 메모리 증가
+   - 주의: 화면 표시만 바꾸는 위장임. 원본 3D 타일 데이터는 서버에 그대로 있으므로 실제 보안 납품은 이 다각형(GeoJSON 내보내기)으로 타일을 다시 만들어야 함
+---------------------------------------------------------------------------------------------- */
+(function(){
+  if(window.__SM66) return;
+  const C = Cesium, D2R = Math.PI/180, KEEP = 0.003, ID = 'secmask', MAXE = 400, MAXM = 4, LS = 'sistech.secmask.v1', RE = 6371000;
+  const OTHERS = ['treeflat','treeflatPoly','vremove','vremovePoly','vrsplit','osmroad','icforest'];
+  const tst = (m, t)=>{ try{ toast(m, t||2400); }catch(e){} };
+  const item = { id:ID, q:'특정 구역을 주변과 비슷하게 가리려면(보안 처리)', name:'보안 처리 · 영역 위장 (다각형 그리기)', src:'다각형을 그리면 안의 시설을 지우고 주변과 가장 비슷한 곳의 나무·지형지물(3D)을 옮겨 와 채움 · 경계 높이 자동 이음 · 최대 4곳 · 원본 3D 타일은 그대로 · 화면 표시용(실제 데이터 보안은 GeoJSON으로 타일 재생성)', type:'layer' };
+  const mc = MENUS.site.find(c=>c.id==='model'); if(mc && !mc.items.some(i=>i.id===ID)) mc.items.push(item);
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  const SM = { on:false, busy:false, E0:null, E:null, Einv:null, masks:[], sel:-1, sh1:null, rm:null, bar:null, ts1:null };
+  const mainTs = ()=>{ const p = PROJECTS.find(p=>p.id==='incheon1'); return p && p.ts; };
+
+  // ---------- 좌표 ----------
+  function setFrame(lon, lat){ SM.E0 = [lon, lat]; SM.E = C.Transforms.eastNorthUpToFixedFrame(C.Cartesian3.fromDegrees(lon, lat, 0)); SM.Einv = C.Matrix4.inverseTransformation(SM.E, new C.Matrix4()); }
+  const sc3 = new C.Cartesian3();
+  function toXY(lon, lat){ C.Cartesian3.fromDegrees(lon, lat, 0, undefined, sc3); const q = C.Matrix4.multiplyByPoint(SM.Einv, sc3, new C.Cartesian3()); return [q.x, q.y]; }
+  function toLL(x, y){ const p = C.Matrix4.multiplyByPoint(SM.E, new C.Cartesian3(x, y, 0), new C.Cartesian3()); const g = C.Cartographic.fromCartesian(p); return [g.longitude/D2R, g.latitude/D2R]; }
+  const zl = (h, x, y)=>h - (x*x + y*y)/(2*RE);   // 타원체 높이 → 기준 좌표계 z
+  const area = P=>{ let a = 0; for(let i=0;i<P.length;i++){ const p = P[i], q = P[(i+1)%P.length]; a += p[0]*q[1] - q[0]*p[1]; } return a/2; };
+  function inPoly(x, y, P){ let c = false; for(let i=0, j=P.length-1; i<P.length; j=i++){ const a = P[i], b = P[j]; if(((a[1] > y) !== (b[1] > y)) && (x < (b[0]-a[0])*(y-a[1])/(b[1]-a[1]) + a[0])) c = !c; } return c; }
+  function dPoly(x, y, P){ let best = 1e18; for(let i=0;i<P.length;i++){ const a = P[i], b = P[(i+1)%P.length], vx = b[0]-a[0], vy = b[1]-a[1], L = vx*vx + vy*vy; let t = L ? ((x-a[0])*vx + (y-a[1])*vy)/L : 0; t = Math.max(0, Math.min(1, t)); const dx = a[0] + t*vx - x, dy = a[1] + t*vy - y, d = dx*dx + dy*dy; if(d < best) best = d; } return Math.sqrt(best); }
+  const bboxOf = P=>{ const xs = P.map(p=>p[0]), ys = P.map(p=>p[1]); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
+  const med = a=>{ const v = a.filter(x=>isFinite(x)).sort((p, q)=>p-q); return v.length ? v[Math.floor(v.length/2)] : NaN; };
+  const pct = (a, q)=>{ const v = a.filter(x=>isFinite(x)).sort((p, r)=>p-r); return v.length ? v[Math.min(v.length-1, Math.floor(v.length*q))] : NaN; };
+  const stdv = a=>{ const v = a.filter(x=>isFinite(x)); if(v.length < 2) return 0; const m = v.reduce((s, x)=>s+x, 0)/v.length; return Math.sqrt(v.reduce((s, x)=>s+(x-m)*(x-m), 0)/v.length); };
+
+  // ---------- 지형 격자 (Esri World Elevation 등 현재 지형) ----------
+  async function terrainGrid(x0, y0, x1, y1, step){
+    const nx = Math.max(2, Math.ceil((x1-x0)/step)+1), ny = Math.max(2, Math.ceil((y1-y0)/step)+1), cs = [];
+    for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){ const ll = toLL(x0+i*step, y0+j*step); cs.push(C.Cartographic.fromDegrees(ll[0], ll[1])); }
+    try{ await C.sampleTerrainMostDetailed(scene.terrainProvider, cs); }catch(e){ console.warn('terrain', e); }
+    const A = new Float32Array(nx*ny); for(let k=0;k<A.length;k++){ const i = k % nx, j = (k - i)/nx; const h = cs[k].height; A[k] = zl(isFinite(h) ? h : 0, x0+i*step, y0+j*step); }
+    return { x0, y0, step, nx, ny, A };
+  }
+  function bil(G, x, y){ const fx = Math.max(0, Math.min(G.nx-1.001, (x-G.x0)/G.step)), fy = Math.max(0, Math.min(G.ny-1.001, (y-G.y0)/G.step)); const i = Math.floor(fx), j = Math.floor(fy), a = fx-i, b = fy-j, A = G.A, n = G.nx;
+    return A[j*n+i]*(1-a)*(1-b) + A[j*n+i+1]*a*(1-b) + A[(j+1)*n+i]*(1-a)*b + A[(j+1)*n+i+1]*a*b; }
+
+  // ---------- 드론 3D 모델 표면 높이 (없으면 NaN) ----------
+  async function dsm(pts){
+    const cs = pts.map(p=>{ const ll = toLL(p[0], p[1]); return C.Cartographic.fromDegrees(ll[0], ll[1]); });
+    const ex = SM.masks.map(m=>m.clone).filter(Boolean); let r = null;
+    try{ r = await Promise.race([ scene.sampleHeightMostDetailed(cs, ex), new Promise(res=>setTimeout(()=>res(null), 45000)) ]); }catch(e){ console.warn('dsm', e); }
+    return pts.map((p, k)=>{ const h = r && r[k] ? r[k].height : NaN; return (isFinite(h) && h > -500 && h < 9000) ? zl(h, p[0], p[1]) : NaN; });
+  }
+
+  // ---------- 위성 영상(색 비교용 · Esri World Imagery) ----------
+  async function imagery(x0, y0, x1, y1){
+    const a = toLL(x0, y0), b = toLL(x1, y1); let z = 17;
+    const tx = (lon, zz)=>(lon+180)/360*Math.pow(2, zz), ty = (lat, zz)=>{ const s = Math.sin(lat*D2R); return (0.5 - Math.log((1+s)/(1-s))/(4*Math.PI))*Math.pow(2, zz); };
+    while(z > 14 && (Math.floor(tx(b[0], z))-Math.floor(tx(a[0], z))+1)*(Math.floor(ty(a[1], z))-Math.floor(ty(b[1], z))+1) > 100) z--;
+    const X0 = Math.floor(tx(a[0], z)), X1 = Math.floor(tx(b[0], z)), Y0 = Math.floor(ty(b[1], z)), Y1 = Math.floor(ty(a[1], z));
+    const cv = document.createElement('canvas'); cv.width = (X1-X0+1)*256; cv.height = (Y1-Y0+1)*256; const g = cv.getContext('2d', { willReadFrequently:true });
+    const jobs = []; let ok = 0;
+    for(let X=X0; X<=X1; X++) for(let Y=Y0; Y<=Y1; Y++) jobs.push(new Promise(res=>{ const im = new Image(); im.crossOrigin = 'anonymous';
+      im.onload = ()=>{ try{ g.drawImage(im, (X-X0)*256, (Y-Y0)*256); ok++; }catch(e){} res(); }; im.onerror = ()=>res();
+      im.src = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + z + '/' + Y + '/' + X; }));
+    await Promise.all(jobs);
+    let data = null; try{ data = g.getImageData(0, 0, cv.width, cv.height).data; }catch(e){ console.warn('img', e); }
+    return { data, w:cv.width, h:cv.height, ox:X0*256, oy:Y0*256, z, ok, tx, ty };
+  }
+  function rgbAt(I, x, y){ if(I.rgb) return I.rgb(x, y); if(!I.data) return null; const ll = toLL(x, y); const px = Math.floor(I.tx(ll[0], I.z)*256 - I.ox), py = Math.floor(I.ty(ll[1], I.z)*256 - I.oy);
+    if(px < 0 || py < 0 || px >= I.w || py >= I.h) return null; const k = (py*I.w + px)*4; if(I.data[k+3] < 200) return null; return [I.data[k], I.data[k+1], I.data[k+2]]; }
+  function feat(I, pts){ const h = new Float32Array(64); let n = 0, ls = 0, ls2 = 0, gr = 0, cr = 0, cg = 0, cb = 0, gd = 0;
+    for(const p of pts){ const c = rgbAt(I, p[0], p[1]); if(!c) continue; n++; h[(c[0]>>6)*16 + (c[1]>>6)*4 + (c[2]>>6)]++; const l = (0.299*c[0] + 0.587*c[1] + 0.114*c[2])/255; ls += l; ls2 += l*l; if(c[1] > c[0]*1.05 && c[1] > c[2]*1.05) gr++; cr += c[0]; cg += c[1]; cb += c[2]; gd += c[3] || 0; }
+    if(!n) return null; for(let i=0;i<64;i++) h[i] /= n; const lm = ls/n; return { h, n, lm, ls:Math.sqrt(Math.max(0, ls2/n - lm*lm)), gr:gr/n, gd:gd/n, col:[cr/n/255, cg/n/255, cb/n/255] }; }
+  const bc = (a, b)=>{ let s = 0; for(let i=0;i<64;i++) s += Math.sqrt(a.h[i]*b.h[i]); return s; };
+
+
+  // ---------- 드론 3D 모델을 위에서 내려다본 화면 촬영(색 · 표면 높이 비교용) ----------
+  async function capture(cx, cy, span, work){
+    const sv = { p:C.Cartesian3.clone(camera.positionWC), h:camera.heading, pt:camera.pitch, r:camera.roll }; const ortho0 = camera.frustum instanceof C.OrthographicFrustum;
+    const ll = toLL(cx, cy), ts = mainTs(); let I = null;
+    try{
+      camera.switchToOrthographicFrustum();
+      camera.setView({ destination:C.Cartesian3.fromDegrees(ll[0], ll[1], 1500), orientation:{ heading:0, pitch:-Math.PI/2, roll:0 } });
+      const cw = scene.canvas.clientWidth, chh = scene.canvas.clientHeight; camera.frustum.width = 2*span*Math.max(1, cw/chh);
+      const t0 = Date.now(); let stable = 0;
+      while(Date.now() - t0 < 15000){ scene.requestRender(); await new Promise(r=>setTimeout(r, 250)); if(ts && ts.tilesLoaded){ if(++stable >= 3) break; } else stable = 0; }
+      viewer.render();
+      const W = scene.canvas.width, H = scene.canvas.height, k = W/cw, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d', { willReadFrequently:true }); g.drawImage(scene.canvas, 0, 0);
+      const data = g.getImageData(0, 0, W, H).data;
+      const px = (x, y)=>{ const ll2 = toLL(x, y); const s = scene.cartesianToCanvasCoordinates(C.Cartesian3.fromDegrees(ll2[0], ll2[1], 0)); return s ? [s.x, s.y] : null; };
+      const zAt = pts=>pts.map(p=>{ const s = I && I.px ? I.px(p[0], p[1]) : px(p[0], p[1]); if(!s || s[0] < 1 || s[1] < 1 || s[0] > cw-2 || s[1] > chh-2) return NaN; let c = null; try{ c = scene.pickPosition(new C.Cartesian2(s[0], s[1])); }catch(e){} if(!c) return NaN; const q = C.Matrix4.multiplyByPoint(SM.Einv, c, new C.Cartesian3()); return q.z; });
+      const a0 = px(0, 0), ax = px(100, 0), ay = px(0, 100); const A6 = a0 && ax && ay ? [a0[0], a0[1], (ax[0]-a0[0])/100, (ax[1]-a0[1])/100, (ay[0]-a0[0])/100, (ay[1]-a0[1])/100] : null;
+      const pxA = (x, y)=>A6 ? [A6[0] + A6[2]*x + A6[4]*y, A6[1] + A6[3]*x + A6[5]*y] : null;
+      I = { data, w:W, h:H, k, px:pxA, zAt };
+      I.rgb = (x, y)=>{ const s = pxA(x, y); if(!s) return null; const X = Math.round(s[0]*k), Y = Math.round(s[1]*k); if(X < 1 || Y < 1 || X >= W-1 || Y >= H-1) return null; const o = (Y*W + X)*4; return [data[o], data[o+1], data[o+2], (Math.abs(data[o]-data[o+4]) + Math.abs(data[o+1]-data[o+W*4+1]))/510]; };
+      if(work) await work(I); I.zAt = null;
+    } finally {
+      try{ if(!ortho0) camera.switchToPerspectiveFrustum(); camera.setView({ destination:sv.p, orientation:{ heading:sv.h, pitch:sv.pt, roll:sv.r } }); scene.requestRender(); }catch(e){}
+    }
+    return I;
+  }
+  // ---------- 영역 분석: 경계 높이 · 지면 보정 · 채울 자리 후보 ----------
+  function ringPts(P, sp){ const ccw = area(P) > 0, out = [];
+    for(let i=0;i<P.length;i++){ const a = P[i], b = P[(i+1)%P.length], L = Math.hypot(b[0]-a[0], b[1]-a[1]); if(L < 0.01) continue; const tx = (b[0]-a[0])/L, ty = (b[1]-a[1])/L, nx = ccw ? ty : -ty, ny = ccw ? -tx : tx; const n = Math.max(1, Math.round(L/sp));
+      for(let k=0;k<n;k++){ const t = k/n; out.push({ x:a[0]+(b[0]-a[0])*t, y:a[1]+(b[1]-a[1])*t, nx, ny }); } } return out; }
+  function gridIn(P, step, dx, dy){ const bb = bboxOf(P), out = []; for(let y=bb[1]+step/2; y<bb[3]; y+=step) for(let x=bb[0]+step/2; x<bb[2]; x+=step) if(inPoly(x, y, P)) out.push([x+(dx||0), y+(dy||0)]); return out; }
+  function band(P, d0, d1, step){ const bb = bboxOf(P), out = []; for(let y=bb[1]-d1; y<bb[3]+d1; y+=step) for(let x=bb[0]-d1; x<bb[2]+d1; x+=step){ if(inPoly(x, y, P)) continue; const d = dPoly(x, y, P); if(d >= d0 && d <= d1) out.push([x, y]); } return out; }
+  function circSmooth(A, r, fn){ const n = A.length; return A.map((_, i)=>{ const s = []; for(let k=-r;k<=r;k++) s.push(A[(i+k+n)%n]); return fn(s); }); }
+
+  async function analyze(M, prog){
+    const P = M.loc, bb = bboxOf(P), cx = (bb[0]+bb[2])/2, cy = (bb[1]+bb[3])/2, R = Math.max(...P.map(p=>Math.hypot(p[0]-cx, p[1]-cy)));
+    const dists = [2*R+25, 2*R+70, 3*R+110, 4*R+160], span = dists[3] + R + 20;
+    prog('지형 읽는 중…');
+    const TG = await terrainGrid(cx-span, cy-span, cx+span, cy+span, Math.max(6, span/110));
+    // 후보 64곳(16방향 × 4거리) 위치 · 다른 보안 영역/자기 자신과 겹치면 제외
+    const st = Math.max(3, Math.sqrt(Math.abs(area(P)))/12), inner = gridIn(P, st);
+    const Tt = inner.map(p=>bil(TG, p[0], p[1]));
+    const others = SM.masks.filter(m=>m !== M && m.loc).map(m=>m.loc).concat([P]);
+    const cands = [];
+    for(const d of dists) for(let k=0;k<16;k++){ const a = k*Math.PI/8 + (d === dists[1] || d === dists[3] ? Math.PI/16 : 0), ox = Math.cos(a)*d, oy = Math.sin(a)*d;
+      const sp = inner.map(p=>[p[0]+ox, p[1]+oy]), sv = P.map(p=>[p[0]+ox, p[1]+oy]);
+      let bad = false; for(const Q of others){ for(const p of sp.concat(sv)){ if(inPoly(p[0], p[1], Q) || dPoly(p[0], p[1], Q) < 12){ bad = true; break; } } if(bad) break; } if(bad) continue;
+      const sub = []; const stp = Math.max(1, Math.floor(sp.length/40)); for(let i=0;i<sp.length;i+=stp) sub.push(sp[i]);
+      cands.push({ off:[+ox.toFixed(1), +oy.toFixed(1)], d, sp, sub }); }
+    const ring = ringPts(P, 4), q = []; for(const s of ring) for(const o of [2, 4, 6]) q.push([s.x + s.nx*o, s.y + s.ny*o]);
+    const bandP = band(P, 4, 4 + Math.max(15, 0.6*R), 3);
+    // ① 드론 모델을 위에서 촬영하면서 색 · 표면 높이를 한 번에 읽음(실패하면 위성 영상 + 개별 높이 조회)
+    prog('주변 3D 모델 촬영 중…');
+    let I = null, H = null, bandZ = null;
+    try{ I = await capture(cx, cy, span, J=>{ H = J.zAt(q); bandZ = J.zAt(bandP); for(const c of cands) c.z = J.zAt(c.sub); }); }catch(e){ console.warn('capture', e); I = null; }
+    if(!I){ I = await imagery(cx-span, cy-span, cx+span, cy+span); H = await dsm(q); }
+    const Er = ring.map((s, i)=>med([H[i*3], H[i*3+1], H[i*3+2]]));
+    // 지면 보정값: 둘레의 (드론 표면 − 지형) 하위 10 % · 둘레 나무(지물) 높이 중앙값
+    const dRing = ring.map((s, i)=>Er[i] - bil(TG, s.x + s.nx*4, s.y + s.ny*4));
+    let offLow = pct(dRing, 0.1); if(!isFinite(offLow)) offLow = 0; offLow = Math.max(-6, Math.min(2, offLow - 0.5));
+    const canRing = med(dRing.map(v=>v - offLow)), canStd = stdv(dRing);
+    const Ef = Er.map((v, i)=>isFinite(v) ? v : bil(TG, ring[i].x, ring[i].y) + offLow + (isFinite(canRing) ? canRing : 0));
+    const Es = circSmooth(circSmooth(Ef, 3, med), 3, s=>s.reduce((a, b)=>a+b, 0)/s.length);
+    M.ring = ring.map((s, i)=>[+s.x.toFixed(2), +s.y.toFixed(2), +Es[i].toFixed(2)]); M.offLow = offLow; M.canRing = isFinite(canRing) ? +canRing.toFixed(2) : null;
+    const FR = feat(I, bandP);
+    const bandC = bandZ ? bandZ.map((z, i)=>z - bil(TG, bandP[i][0], bandP[i][1]) - offLow) : [];
+    const bcMed = med(bandC), bcStd = stdv(bandC);
+    M.col = FR ? FR.col.map(v=>+(v*0.55).toFixed(3)) : [0.12, 0.17, 0.08];
+    // ③ 후보 비교: 색 분포 · 밝기 변화 · 녹지 비율 · 질감 · 지형 모양 · 나무(지물) 높이
+    prog('주변과 비슷한 자리 찾는 중…');
+    for(const c of cands){ const F = feat(I, c.sp); if(!F || F.n < c.sp.length*0.8){ c.sc = 1e9; continue; }
+      const dT = c.sp.map((p, i)=>Tt[i] - bil(TG, p[0], p[1]));
+      let sc = stdv(dT)/8 + c.d/4000;
+      if(FR) sc += (1 - bc(F, FR)) + 3*Math.abs(F.ls - FR.ls) + 1.5*Math.abs(F.gr - FR.gr) + 4*Math.abs((F.gd||0) - (FR.gd||0));
+      if(c.z && isFinite(bcMed)){ const v = c.z.map((z, i)=>z - bil(TG, c.sub[i][0], c.sub[i][1]) - offLow).filter(isFinite); if(v.length < c.sub.length*0.7){ c.sc = 1e9; continue; } sc += Math.abs(med(v) - bcMed)/5 + Math.abs(stdv(v) - bcStd)/6; }
+      c.sc = sc; }
+    for(let i=cands.length-1;i>=0;i--) if(cands[i].sc >= 1e9) cands.splice(i, 1);
+    cands.sort((a, b)=>a.sc - b.sc);
+    // ④ 상위 후보: 드론 모델이 있는지 + 나무(지물) 높이 분포 비교
+    prog('후보 자리 3D 모델 확인 중…');
+    const top = cands.slice(0, 8), probe = [];
+    for(const c of top){ const n = c.sp.length, pick = []; for(let i=0;i<9;i++) pick.push(c.sp[Math.floor((i+0.5)*n/9)]); c.pk = pick; probe.push(...pick); }
+    const PH = probe.length ? await dsm(probe) : [];
+    const ok = [];
+    top.forEach((c, ci)=>{ const hs = PH.slice(ci*9, ci*9+9), can = hs.map((h, i)=>h - bil(TG, c.pk[i][0], c.pk[i][1]) - offLow), valid = can.filter(v=>isFinite(v));
+      if(valid.length < 7) return; c.sc2 = c.sc + (I.zAt ? 0 : (isFinite(canRing) ? Math.abs(med(valid) - canRing)/6 : 0) + Math.abs(stdv(valid) - canStd)/8); ok.push(c); });
+    ok.sort((a, b)=>a.sc2 - b.sc2);
+    M.cands = ok.map(c=>({ off:c.off, sc:+c.sc2.toFixed(3) })); M.ci = 0;
+    if(!M.cands.length) throw new Error('주변에서 채울 만한 3D 모델 자리를 찾지 못했습니다(3D 모델 범위 끝일 수 있음)');
+  }
+
+  // ---------- 텍스처 ----------
+  async function buildTex(M){
+    const P = M.loc, bb = bboxOf(P), x0 = bb[0]-3, y0 = bb[1]-3, x1 = bb[2]+3, y1 = bb[3]+3, ext = Math.max(x1-x0, y1-y0);
+    const N = ext/0.6 > 256 ? 512 : 256, sx = N/(x1-x0), sy = N/(y1-y0), off = M.cands[M.ci].off;
+    if(!M.Tt) M.Tt = await terrainGrid(x0, y0, x1, y1, 4);
+    const Ts = await terrainGrid(x0+off[0], y0+off[1], x1+off[0], y1+off[1], 4);
+    const base = document.createElement('canvas'); base.width = N; base.height = N; const g = base.getContext('2d');
+    g.fillStyle = '#000'; g.fillRect(0, 0, N, N); g.fillStyle = '#fff'; g.beginPath(); P.forEach((p, i)=>{ const X = (p[0]-x0)*sx, Y = (p[1]-y0)*sy; i ? g.lineTo(X, Y) : g.moveTo(X, Y); }); g.closePath(); g.fill();
+    const c2 = document.createElement('canvas'); c2.width = N; c2.height = N; const g2 = c2.getContext('2d', { willReadFrequently:true }); g2.filter = 'blur(' + Math.max(.5, .6*sx).toFixed(1) + 'px)'; g2.drawImage(base, 0, 0); const m1 = g2.getImageData(0, 0, N, N).data;
+    // 평균 지형 차(복제 레이어 이동 높이)
+    let s = 0, n = 0; for(const p of gridIn(P, 4)){ s += bil(M.Tt, p[0], p[1]) - bil(Ts, p[0]+off[0], p[1]+off[1]); n++; } const dz = n ? s/n : 0;
+    // 경계 바깥 표면 높이 → 안쪽으로 보간(2 m 격자)
+    const RG = M.ring, gs = 2, gnx = Math.ceil((x1-x0)/gs)+1, gny = Math.ceil((y1-y0)/gs)+1, EB = new Float32Array(gnx*gny).fill(NaN);
+    for(let j=0;j<gny;j++) for(let i=0;i<gnx;i++){ const x = x0+i*gs, y = y0+j*gs; let bd = 1e18; for(const r of RG){ const d = (r[0]-x)*(r[0]-x) + (r[1]-y)*(r[1]-y); if(d < bd) bd = d; } const d0 = Math.sqrt(bd); if(d0 > 45) continue;
+      let sw = 0, sz = 0; for(const r of RG){ const e = Math.hypot(r[0]-x, r[1]-y) - d0; if(e > 24) continue; const w = Math.exp(-e*e/72); sw += w; sz += w*r[2]; } EB[j*gnx+i] = sz/sw; }
+    const ebAt = (x, y)=>{ const fx = Math.max(0, Math.min(gnx-1.001, (x-x0)/gs)), fy = Math.max(0, Math.min(gny-1.001, (y-y0)/gs)), i = Math.floor(fx), j = Math.floor(fy), a = fx-i, b = fy-j;
+      const v = [EB[j*gnx+i], EB[j*gnx+i+1], EB[(j+1)*gnx+i], EB[(j+1)*gnx+i+1]], w = [(1-a)*(1-b), a*(1-b), (1-a)*b, a*b]; let sv = 0, sw = 0; for(let k=0;k<4;k++) if(isFinite(v[k])){ sv += v[k]*w[k]; sw += w[k]; } return sw ? sv/sw : NaN; };
+    const can = isFinite(M.canRing) ? M.canRing : 8;
+    const A = new Float32Array(N*N*4), B = new Float32Array(N*N*4);
+    for(let j=0;j<N;j++){ const y = y0 + (j+.5)/sy; for(let i=0;i<N;i++){ const k = j*N+i, m = m1[k*4]/255; A[k*4] = m; B[k*4] = m; if(m < 0.004) continue; const x = x0 + (i+.5)/sx;
+      const tt = bil(M.Tt, x, y), ts = bil(Ts, x+off[0], y+off[1]);
+      A[k*4+1] = tt + M.offLow - 4; B[k*4+1] = tt - ts - dz;   // 원본 바닥은 복제 숲 지면보다 4 m 아래(빈틈으로 바닥이 덜 보이게)
+      const d = inPoly(x, y, P) ? dPoly(x, y, P) : 0, eb = ebAt(x, y);
+      if(isFinite(eb)){ const W = Math.min(40, 10 + 1.5*Math.max(0, Math.abs(eb - (tt + M.offLow + can)) - 3)); let w = Math.max(0, 1 - d/W); w = w*w*(3-2*w); B[k*4+2] = eb; B[k*4+3] = w; } } }
+    M.N = N; M.box = new C.Cartesian4(x0, y0, x1, y1); M.texA = A; M.texB = B; M.dz = dz;
+  }
+  const texU = (arr, N)=>new C.TextureUniform({ typedArray:arr, width:N, height:N, pixelFormat:C.PixelFormat.RGBA, pixelDatatype:C.PixelDatatype.FLOAT, minificationFilter:C.TextureMinificationFilter.NEAREST, magnificationFilter:C.TextureMagnificationFilter.NEAREST });
+  const I4 = ()=>C.Matrix4.clone(C.Matrix4.IDENTITY);
+
+  // ---------- 셰이더 ----------
+  function mkSh1(){ const ms = SM.masks.filter(m=>m.texA); if(!ms.length) return null;
+    const U = { u_smE2L:{ type:C.UniformType.MAT4, value:I4() }, u_smL2E:{ type:C.UniformType.MAT4, value:I4() } }; let body = '';
+    ms.forEach((m, i)=>{ U['u_smT'+i] = { type:C.UniformType.SAMPLER_2D, value:texU(m.texA, m.N) }; U['u_smB'+i] = { type:C.UniformType.VEC4, value:m.box }; U['u_smC'+i] = { type:C.UniformType.VEC3, value:new C.Cartesian3(m.col[0], m.col[1], m.col[2]) };
+      body += `{ vec2 uv = (l.xy - u_smB${i}.xy) / (u_smB${i}.zw - u_smB${i}.xy); if(uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0){ vec4 t = textureLod(u_smT${i}, uv, 0.0); if(t.r > m){ m = t.r; g = t.g; c = u_smC${i}; } } }\n`; });
+    const VS = `void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput){
+      v_smM = 0.0; v_smC = vec3(0.0);
+      vec4 l = u_smE2L * (czm_modelView * vec4(vsOutput.positionMC, 1.0));
+      float m = 0.0; float g = 0.0; vec3 c = vec3(0.0);
+      ${body}
+      v_smM = m; v_smC = c; if(m < 0.004) return;
+      l.z = mix(l.z, g + (l.z - g) * ${KEEP.toFixed(4)}, m);
+      vsOutput.positionMC = (czm_inverseModelView * (u_smL2E * l)).xyz;
+    }`;
+    const FS = `void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material){
+      if(v_smM < 0.01) return;
+      if(v_smM < 0.99){ vec3 p = fsInput.attributes.positionEC; vec3 n = normalize(cross(dFdx(p), dFdy(p))); vec3 up = normalize((u_smL2E * vec4(0.0, 0.0, 1.0, 0.0)).xyz); if(abs(dot(n, up)) < 0.6) discard; }
+      float lum = dot(material.diffuse, vec3(0.299, 0.587, 0.114));
+      material.diffuse = mix(material.diffuse, v_smC * (0.75 + 0.5 * lum), clamp(v_smM * 1.2, 0.0, 1.0));
+    }`;
+    return new C.CustomShader({ uniforms:U, varyings:{ v_smM:C.VaryingType.FLOAT, v_smC:C.VaryingType.VEC3 }, vertexShaderText:VS, fragmentShaderText:FS }); }
+  const VS2 = `void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput){
+      v_smUv = vec2(-1.0);
+      vec4 l = u_smE2L * (czm_modelView * vec4(vsOutput.positionMC, 1.0));
+      vec2 uv = (l.xy - u_smB.xy) / (u_smB.zw - u_smB.xy); v_smUv = uv;
+      if(uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return;
+      vec4 t = textureLod(u_smT, uv, 0.0); if(t.r < 0.004) return;
+      float z = l.z + t.g;
+      l.z = mix(z, t.b, t.a);
+      vsOutput.positionMC = (czm_inverseModelView * (u_smL2E * l)).xyz;
+    }`;
+  const FS2 = `void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material){
+      vec2 uv = v_smUv; if(uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
+      vec4 t = texture(u_smT, uv); if(t.r < 0.5) discard;
+    }`;
+  const mkSh2 = M=>new C.CustomShader({ uniforms:{ u_smT:{ type:C.UniformType.SAMPLER_2D, value:texU(M.texB, M.N) }, u_smB:{ type:C.UniformType.VEC4, value:M.box }, u_smE2L:{ type:C.UniformType.MAT4, value:I4() }, u_smL2E:{ type:C.UniformType.MAT4, value:I4() } },
+    varyings:{ v_smUv:C.VaryingType.VEC2 }, vertexShaderText:VS2, fragmentShaderText:FS2 });
+  const m4a = new C.Matrix4(), m4b = new C.Matrix4();
+  function updMats(){ if(!SM.E) return; C.Matrix4.multiply(SM.Einv, camera.inverseViewMatrix, m4a); C.Matrix4.multiply(camera.viewMatrix, SM.E, m4b);
+    const all = [SM.sh1].concat(SM.masks.map(m=>m.sh2)); for(const sh of all) if(sh){ sh.setUniform('u_smE2L', C.Matrix4.clone(m4a)); sh.setUniform('u_smL2E', C.Matrix4.clone(m4b)); } }
+  function attach1(){ const ts = mainTs(); if(!ts) return; if(!SM.sh1){ detach1(); return; } if(ts.customShader !== SM.sh1){ if(ts.customShader && !ts.__smPrev && !SM.isMine(ts.customShader)) ts.__smPrev = ts.customShader; ts.customShader = SM.sh1; } }
+  SM.isMine = sh=>sh && sh.__sm66 === true;
+  function detach1(){ for(const p of PROJECTS){ const ts = p.ts; if(!ts) continue; try{ if(SM.isMine(ts.customShader)) ts.customShader = ts.__smPrev || undefined; delete ts.__smPrev; }catch(e){} } }
+  function refreshSh1(){ SM.sh1 = mkSh1(); if(SM.sh1) SM.sh1.__sm66 = true; attach1(); updMats(); try{ scene.requestRender(); }catch(e){} }
+
+  // ---------- 복제 레이어(채움) ----------
+  function cloneMatrix(M){ const off = M.cands[M.ci].off; const T = C.Matrix4.fromTranslation(new C.Cartesian3(-off[0], -off[1], M.dz)); return C.Matrix4.multiply(SM.E, C.Matrix4.multiply(T, SM.Einv, new C.Matrix4()), new C.Matrix4()); }
+  async function mountClone(M){
+    M.sh2 = mkSh2(M); updMats();
+    if(!M.clone){ const ts0 = mainTs(); const url = ts0 && ts0.resource ? ts0.resource.url : 'https://3dview.sistech3d.com/api/tileset/project/incheon_01/tileset.json';
+      const cl = await C.Cesium3DTileset.fromUrl(url, { maximumScreenSpaceError: ts0 ? ts0.maximumScreenSpaceError : 6, skipLevelOfDetail:true, dynamicScreenSpaceError:true, cacheBytes:256*1024*1024, foveatedScreenSpaceError:true });
+      if(!SM.on || SM.masks.indexOf(M) < 0){ try{ cl.destroy(); }catch(e){} return; }
+      try{ const ring = M.loc.map(p=>{ const ll = toLL(p[0], p[1]); return C.Cartesian3.fromDegrees(ll[0], ll[1]); }); cl.clippingPolygons = new C.ClippingPolygonCollection({ polygons:[ new C.ClippingPolygon({ positions:ring }) ], inverse:true }); }catch(e){ console.warn('clip', e); }
+      scene.primitives.add(cl); M.clone = cl; }
+    M.clone.modelMatrix = cloneMatrix(M); M.clone.customShader = M.sh2; scene.requestRender();
+  }
+  function unmount(M){ if(M.clone){ try{ scene.primitives.remove(M.clone); }catch(e){} M.clone = null; } M.sh2 = null; }
+
+  // ---------- 저장 ----------
+  function save(){ try{ localStorage.setItem(LS, JSON.stringify({ E0:SM.E0, masks:SM.masks.filter(m=>m.cands).map(m=>({ poly:m.poly, cands:m.cands, ci:m.ci, ring:m.ring, offLow:m.offLow, canRing:m.canRing, col:m.col })) })); }catch(e){ console.warn('save', e); } }
+  function load(){ try{ return JSON.parse(localStorage.getItem(LS) || 'null'); }catch(e){ return null; } }
+
+  // ---------- 영역 그리기 ----------
+  const DR = { h:null, pts:[], ents:[], resolve:null, key:null, bar:null };
+  function pickLL(pos){ let c = null; try{ if(scene.pickPositionSupported) c = scene.pickPosition(pos); }catch(e){} if(!c){ try{ c = scene.globe.pick(camera.getPickRay(pos), scene); }catch(e){} } if(!c) return null; const g = C.Cartographic.fromCartesian(c); if(!isFinite(g.longitude)) return null; return [g.longitude/D2R, g.latitude/D2R]; }
+  function drawEnts(){ for(const e of DR.ents){ try{ viewer.entities.remove(e); }catch(_){} } DR.ents = []; if(!DR.pts.length) return;
+    const pos = (DR.pts.length > 2 ? DR.pts.concat([DR.pts[0]]) : DR.pts).flatMap(p=>[p[0], p[1]]);
+    if(DR.pts.length > 1) DR.ents.push(viewer.entities.add({ polyline:{ positions:C.Cartesian3.fromDegreesArray(pos), width:3, clampToGround:true, material:C.Color.fromCssColorString('#ff5a5a') } }));
+    for(const p of DR.pts) DR.ents.push(viewer.entities.add({ position:C.Cartesian3.fromDegrees(p[0], p[1]), point:{ pixelSize:7, color:C.Color.fromCssColorString('#ff5a5a'), outlineColor:C.Color.BLACK, outlineWidth:1, heightReference:C.HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance:Number.POSITIVE_INFINITY } })); }
+  function endDraw(res){ if(DR.h){ try{ DR.h.destroy(); }catch(e){} DR.h = null; } if(DR.key){ window.removeEventListener('keydown', DR.key, true); DR.key = null; } if(DR.bar){ DR.bar.remove(); DR.bar = null; }
+    for(const e of DR.ents){ try{ viewer.entities.remove(e); }catch(_){} } DR.ents = []; const r = DR.resolve; DR.resolve = null; DR.pts = []; try{ viewer.container.style.cursor = ''; }catch(e){} if(r) r(res); }
+  function finish(){ if(DR.pts.length < 3){ tst('꼭짓점을 3개 이상 찍어 주세요', 1800); return; }
+    const kx = 111320*Math.cos(DR.pts[0][1]*D2R), xs = DR.pts.map(p=>p[0]*kx), ys = DR.pts.map(p=>p[1]*110950);
+    if(Math.max(Math.max(...xs)-Math.min(...xs), Math.max(...ys)-Math.min(...ys)) > MAXE){ tst('영역이 너무 큽니다 (최대 ' + MAXE + ' m) · 다시 그려 주세요', 2500); return; } endDraw(DR.pts.slice()); }
+  function startDraw(){ return new Promise(res=>{ endDraw(null); DR.resolve = res; DR.pts = []; viewer.container.style.cursor = 'crosshair';
+    const bar = document.createElement('div'); bar.style.cssText = 'position:absolute;left:50%;top:84px;transform:translateX(-50%);z-index:61;background:rgba(10,20,40,.9);color:#fff;padding:8px 14px;border-radius:10px;font-size:13px;pointer-events:none;border:1px solid rgba(255,90,90,.6)';
+    bar.textContent = '보안 처리 영역: 클릭으로 꼭짓점 · 더블클릭/오른쪽 클릭/Enter 완료 · Backspace 되돌리기 · Esc 취소'; viewer.container.appendChild(bar); DR.bar = bar;
+    const h = new C.ScreenSpaceEventHandler(scene.canvas); DR.h = h; let lastT = 0;
+    h.setInputAction(e=>{ const now = Date.now(); if(now - lastT < 300) return; lastT = now; const ll = pickLL(e.position); if(ll){ DR.pts.push(ll); drawEnts(); } }, C.ScreenSpaceEventType.LEFT_CLICK);
+    h.setInputAction(()=>{ if(DR.pts.length > 3) DR.pts.pop(); finish(); }, C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+    h.setInputAction(()=>finish(), C.ScreenSpaceEventType.RIGHT_CLICK);
+    DR.key = ev=>{ if(ev.key === 'Escape'){ ev.preventDefault(); endDraw(null); } else if(ev.key === 'Enter'){ ev.preventDefault(); finish(); } else if(ev.key === 'Backspace'){ ev.preventDefault(); DR.pts.pop(); drawEnts(); } };
+    window.addEventListener('keydown', DR.key, true); }); }
+
+  // ---------- 조작 막대 ----------
+  function bar(){ if(!SM.on){ if(SM.bar){ SM.bar.remove(); SM.bar = null; } return; }
+    if(!SM.bar){ const b = document.createElement('div'); b.id = 'sm66bar'; b.style.cssText = 'position:absolute;left:50%;bottom:118px;transform:translateX(-50%);z-index:60;background:rgba(10,20,40,.92);color:#fff;padding:8px 10px;border-radius:12px;font-size:13px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border:1px solid rgba(255,90,90,.5);box-shadow:0 4px 18px rgba(0,0,0,.35)'; viewer.container.appendChild(b); SM.bar = b;
+      b.addEventListener('click', ev=>{ const t = ev.target.closest('[data-a]'); if(!t) return; ev.stopPropagation(); act(t.dataset.a, t.dataset.i); }); }
+    const btn = (a, label, i, hi)=>`<button data-a="${a}"${i !== undefined ? ` data-i="${i}"` : ''} style="cursor:pointer;border:1px solid ${hi ? '#ff5a5a' : 'rgba(255,255,255,.25)'};background:${hi ? 'rgba(255,90,90,.25)' : 'rgba(255,255,255,.06)'};color:#fff;border-radius:8px;padding:5px 9px;font-size:12.5px">${label}</button>`;
+    const M = SM.masks[SM.sel];
+    SM.bar.innerHTML = `<b style="color:#ff8a8a;margin-right:4px">보안 처리</b>` + SM.masks.map((m, i)=>btn('sel', '영역 ' + (i+1), i, i === SM.sel)).join('') +
+      btn('add', '+ 영역 추가') + (M && M.cands ? btn('next', '다른 채움 후보 (' + (M.ci+1) + '/' + M.cands.length + ')') + btn('del', '선택 영역 삭제') : '') +
+      (SM.masks.length ? btn('clear', '전체 삭제') + btn('geo', 'GeoJSON 저장') : '') + btn('close', '끄기');
+  }
+  async function act(a, i){
+    if(SM.busy && a !== 'close'){ tst('처리 중입니다 · 잠시만 기다려 주세요', 1600); return; }
+    if(a === 'sel'){ SM.sel = +i; bar(); const M = SM.masks[SM.sel]; if(M) flyTo(M); }
+    else if(a === 'add') await addMask();
+    else if(a === 'next'){ const M = SM.masks[SM.sel]; if(!M || !M.cands || M.cands.length < 2) return; SM.busy = true; try{ M.ci = (M.ci+1) % M.cands.length; await buildTex(M); refreshSh1(); await mountClone(M); save(); tst('채움 후보 ' + (M.ci+1) + '번으로 바꿨습니다', 1800); }catch(e){ console.warn(e); tst('후보 변경 실패: ' + e.message, 3000); } finally{ SM.busy = false; bar(); } }
+    else if(a === 'del'){ const M = SM.masks[SM.sel]; if(!M) return; unmount(M); SM.masks.splice(SM.sel, 1); SM.sel = SM.masks.length - 1; refreshSh1(); save(); bar(); }
+    else if(a === 'clear'){ if(!confirm('보안 처리 영역을 모두 지울까요?')) return; for(const M of SM.masks) unmount(M); SM.masks = []; SM.sel = -1; refreshSh1(); save(); bar(); }
+    else if(a === 'geo') exportGeo();
+    else if(a === 'close'){ STATE.on.delete(ID); off(); try{ renderCats(); renderSub(); updateSrc(); }catch(e){} }
+  }
+  function exportGeo(){ const fc = { type:'FeatureCollection', name:'SISTECH 보안 처리 영역', features:SM.masks.map((m, i)=>{ const off = m.cands[m.ci].off, src = m.loc.map(p=>toLL(p[0]+off[0], p[1]+off[1]));
+      return { type:'Feature', properties:{ id:i+1, role:'보안 처리 영역', fill_source_offset_m:off, fill_source_polygon:src.concat([src[0]]) }, geometry:{ type:'Polygon', coordinates:[ m.poly.concat([m.poly[0]]) ] } }; }) };
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(fc, null, 1)], { type:'application/geo+json' })); a.download = 'sistech-secure-mask-' + new Date().toISOString().slice(0, 10) + '.geojson'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
+  function flyTo(M){ const ll = M.poly.reduce((s, p)=>[s[0]+p[0]/M.poly.length, s[1]+p[1]/M.poly.length], [0, 0]); const bb = bboxOf(M.loc), r = Math.max(bb[2]-bb[0], bb[3]-bb[1]);
+    camera.flyTo({ destination:C.Cartesian3.fromDegrees(ll[0], ll[1] - r*1.1/110950, 120 + r*1.3), orientation:{ heading:0, pitch:-48*D2R, roll:0 }, duration:1.6 }); }
+
+  // ---------- 영역 추가 / 복원 ----------
+  async function addMask(given){
+    if(SM.masks.length >= MAXM){ tst('보안 처리 영역은 최대 ' + MAXM + '곳입니다 · 하나를 지우고 다시 그려 주세요', 3000); return; }
+    const pts = given || await startDraw(); if(!pts || !SM.on) return;
+    SM.busy = true; const M = { poly:pts.map(p=>[+p[0].toFixed(7), +p[1].toFixed(7)]) };
+    try{ if(!SM.E){ const c = M.poly.reduce((s, p)=>[s[0]+p[0]/M.poly.length, s[1]+p[1]/M.poly.length], [0, 0]); setFrame(c[0], c[1]); }
+      M.loc = M.poly.map(p=>toXY(p[0], p[1])); SM.masks.push(M); SM.sel = SM.masks.length - 1; bar();
+      await analyze(M, msg=>tst('보안 처리: ' + msg, 4000)); if(!SM.on) return;
+      tst('보안 처리: 채우는 중…', 3000); await buildTex(M); refreshSh1(); await mountClone(M); save();
+      tst('보안 처리 완료 · 영역 ' + SM.masks.length + ' · 마음에 들지 않으면 "다른 채움 후보"를 눌러 보세요', 4000); }
+    catch(e){ console.warn(e); const k = SM.masks.indexOf(M); if(k >= 0){ unmount(M); SM.masks.splice(k, 1); } SM.sel = SM.masks.length - 1; refreshSh1(); tst('보안 처리 실패: ' + e.message, 4000); }
+    finally{ SM.busy = false; bar(); }
+  }
+  async function restore(saved){
+    setFrame(saved.E0[0], saved.E0[1]);
+    for(const s of saved.masks){ if(!SM.on) return; const M = { poly:s.poly, cands:s.cands, ci:s.ci || 0, ring:s.ring, offLow:s.offLow, canRing:s.canRing, col:s.col }; M.loc = M.poly.map(p=>toXY(p[0], p[1]));
+      try{ await buildTex(M); SM.masks.push(M); refreshSh1(); await mountClone(M); }catch(e){ console.warn('restore', e); } }
+    SM.sel = SM.masks.length - 1;
+  }
+
+  function clearAll(){ endDraw(null); if(SM.rm){ try{ SM.rm(); }catch(e){} SM.rm = null; } for(const M of SM.masks) unmount(M); SM.masks = []; SM.sel = -1; SM.sh1 = null; detach1(); SM.E = null; SM.Einv = null; SM.E0 = null; try{ scene.requestRender(); }catch(e){} }
+  async function on(){ SM.on = true; SM.busy = true;
+    try{ for(const o of OTHERS) if(STATE.on.has(o)){ try{ await toggleLayer(o, false); }catch(e){} }
+      if(!mainTs()){ try{ await ensureTileset(PROJECTS.find(p=>p.id==='incheon1')); }catch(e){} }
+      SM.rm = scene.preRender.addEventListener(updMats); bar();
+      const saved = load();
+      if(saved && saved.E0 && saved.masks && saved.masks.length){ tst('보안 처리: 저장된 영역 ' + saved.masks.length + '곳 복원 중…', 3000); await restore(saved); if(SM.on) tst('보안 처리 켬 · 저장된 영역 ' + SM.masks.length + '곳 적용 · "+ 영역 추가"로 더 그릴 수 있습니다', 3500); SM.busy = false; bar(); }
+      else { SM.busy = false; bar(); tst('보안 처리: 가릴 구역을 다각형으로 그려 주세요', 3000); await addMask(); } }
+    catch(e){ console.warn(e); SM.on = false; STATE.on.delete(ID); clearAll(); bar(); tst('보안 처리 실패: ' + e.message, 3500); try{ renderCats(); renderSub(); updateSrc(); }catch(_){} }
+    finally{ SM.busy = false; if(SM.on) bar(); } }
+  function off(){ SM.on = false; clearAll(); bar(); }
+
+  try{ const _ens66 = ensureTileset; ensureTileset = async function(p){ const ts = await _ens66.apply(this, arguments); if(SM.on && SM.sh1) attach1(); return ts; }; }catch(e){}
+  const _t66 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(id === ID){ const want = force !== undefined ? force : !STATE.on.has(id);
+      if(want && STATE.mode !== 'site'){ tst('보안 처리는 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ if(SM.on){ return; } STATE.on.add(id); try{ renderCats(); renderSub(); }catch(e){} await on(); }
+      else { STATE.on.delete(id); off(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
+    // 같은 3D 모델 셰이더를 쓰는 기능을 켜면 보안 처리는 끔(영역은 저장되어 있어 다시 켜면 복원)
+    if(OTHERS.includes(id) && force !== false && !STATE.on.has(id) && SM.on){ STATE.on.delete(ID); off(); try{ renderCats(); renderSub(); }catch(e){} }
+    return _t66.apply(this, arguments);
+  };
+  try{ const _sm66 = setMode; setMode = function(m){ if(m !== 'site' && SM.on){ STATE.on.delete(ID); off(); } return _sm66.apply(this, arguments); }; }catch(e){}
+  try{ scene.renderError.addEventListener(()=>{ if(!SM.on) return; STATE.on.delete(ID); off(); setTimeout(()=>{ try{ document.querySelectorAll('.cesium-widget-errorPanel').forEach(e=>e.remove()); viewer.useDefaultRenderLoop = true; scene.requestRender(); renderCats(); renderSub(); }catch(e){} tst('보안 처리를 이 기기에서 그리지 못해 껐습니다', 3500); }, 0); }); }catch(e){}
+  const boot = STATE.on.has(ID); STATE.on.delete(ID);
+  if(boot) setTimeout(()=>{ try{ if(STATE.mode === 'site' && load()) toggleLayer(ID, true); }catch(e){} }, 4500);
+  window.__SM66 = { version:'66.0', SM, capture, imagery, feat, rgbAt, band, gridIn, bc, terrainGrid, dsm, updMats, analyze, buildTex, addMask, restore, clearAll, on, off, save, load, act, setFrame, toXY, toLL };
+})();
+</script>
+
 </body>
 </html>
