@@ -10067,5 +10067,162 @@ if(!window.__CVB) window.__CVB = (function(){
   window.__TF64 = { version:'64.0', TF, PRESET, apply, clearAll, on, off, startDraw, endDraw };
 })();
 </script>
+<script>
+/* ---------- 65. SITE › 3D 모델 › 인터체인지 램프 → 숲 복원 (별도 레이어 · 2026-10-13) ----------
+   - 대상: 미추홀대로 · 청능대로 인터체인지(문학터널 북쪽 입구) 램프 전체(루프 · 북쪽 연결로 · 동쪽 연결로 · 남쪽 연결로)와 램프 사이 땅
+           미추홀대로 본선 두 방향(교량)은 그대로 둠
+   - 원본 3D 타일 파일은 바꾸지 않음. 켜면 렌더할 때만:
+     ① 원본 모델: 램프 영역 정점을 원래 지면 높이(드론 DSM 하위 10 % → 평활)로 내려 도로·가드레일·가로등을 없애고 바닥을 숲 그늘 색으로 칠함
+     ② 숲 심기: 같은 3D 타일을 한 번 더 불러와(복제 레이어) 서쪽 문학산 숲(위성 영상으로 숲 비율 99.6 %인 자리 자동 선택 · 380 m 서쪽)을
+        램프 자리로 옮겨 놓음. 나무 높이는 그대로 유지(숲 정점 높이 − 숲 지형 높이) + 램프 자리 지면 높이 → 원래 땅 높이를 유지한 채 산의 나무를 심은 모양
+        경계 8 m는 나무 높이를 지면 쪽으로 점점 낮춰 숲 가장자리처럼 이어지게 함
+   - 숲 지형 높이: 지형(Esri World Elevation)에 드론 모델과의 차이(중앙값)를 보정해서 사용
+   - 끄면 복제 레이어 해제(메모리 반환) · 원본 그대로
+   - 한계: 복제 숲은 실제 산 숲을 그대로 옮긴 것이라 같은 무늬가 보일 수 있음 · 본선 교량 바로 옆 1~2 m는 원래 모델이 남음
+---------------------------------------------------------------------------------------------- */
+(function(){
+  if(window.__IC65) return;
+  const C = Cesium, D2R = Math.PI/180, KEEP = 0.003;
+  const tst = (m, t)=>{ try{ toast(m, t||2400); }catch(e){} };
+  const ID = 'icforest';
+  const PRE = {
+    lon0:126.6670214826087, lat0:37.41864161304347, off:[-380, 20], grid:{ x0:-148, y0:-184, step:5, nx:66, ny:78 }, GL:'OgIrAhsC+wHkAdoB0AHOAcwB0AHLAbgBoQGIAWwBWAFTAVIBUgFSAVUBVgFQAUUBOAEpARsBFAEKAQIB+gDyAOkA5wDmAOQA4gDhAOAA4wDmAOgA5gDjANwA1QDPAM4AygDGAMMAwQC+AL4AvwC/AL4AvAC6ALgAtQCyALEAsACvAK8AOgIsAhsC/QHmAdsB0AHNAcwBzwHNAboBogGKAW4BWAFSAVEBUQFRAVMBUgFLAT8BMwEkARkBFAEKAQIB+gDyAOkA5wDmAOQA4gDiAOIA5QDoAOkA5gDiANsA0wDOAM0AyQDFAMMAwAC+AL4AvgC+AL0AuwC4ALYAswCwAK8ArgCtAK0AOQIqAhkC/AHkAdkBzwHMAcsBzQHJAbcBoAGIAW0BWAFRAVABUAFQAVABTQFFAToBLQEhARgBEwELAQIB+gDyAOkA5wDmAOQA4wDiAOIA5ADmAOYA4gDeANgA0QDNAMsAyADFAMIAwAC9AL0AvQC8ALsAuQC2ALQAsQCuAK0ArACrAKsAMQIiAhMC9wHhAdYBzQHJAcYBxQHBAbABmwGEAW0BWAFQAU8BTgFOAUwBRQE8ATEBJAEbARUBEwELAQMB+wDyAOkA5wDlAOQA4gDhAOEA4gDjAOIA3gDaANUA0ADLAMoAxwDEAMIAvwC9ALwAuwC6ALkAtwC0ALEArgCsAKoAqQCoAKgAHgISAgYC8QHdAdMByQHAAbgBsQGpAZkBiAF2AWUBVQFPAU0BTAFMAUgBPwE0ASkBHQEVARMBFAEPAQcB/wD3AOwA5wDkAOIA4ADfAN8A3wDfAN0A2QDVANEAzQDKAMgAxgDDAMEAvgC8ALsAugC4ALYAtACyAK8ArACpAKgApgClAKUACQIAAvgB6QHZAc8BwwG0AacBmwGQAYEBdAFoAVwBUgFNAUwBSwFKAUYBPAExASUBGgESARABDwELAQQB/QD2AOwA5gDjAOAA3gDdANwA3ADaANgA1QDRAM4AywDJAMcAxQDCAMAAvgC7ALoAuAC2ALQAsgCvAKwAqgCnAKUAowCiAKEA9AHuAeoB4AHUAcoBvQGpAZcBhQF2AWgBYAFZAVMBTwFLAUoBSQFJAUQBOgEuASIBFgENAQoBCQEGAQAB+wD0AOsA5QDhAN4A3ADaANgA1wDVANMA0ADOAMwAygDIAMcAxADCAMAAvQC7ALkAtwC1ALMAsQCvAKwAqQCmAKMAoQChAKAA3wHdAdwB2AHQAcYBuAGfAYcBcgFgAVMBTwFMAUsBSgFJAUgBSAFHAUQBOgEvASIBFAEJAQQBAgEBAfwA+ADyAOoA5ADgANwA2QDXANUA1ADSANEAzwDOAMwAywDJAMgAxgDDAMAAvgC7ALkAtwC2ALQAsgCvAKwAqQCmAKQAogChAKAAzwHRAdMB1AHNAcQBtAGXAXoBZAFRAUQBQwFEAUUBRQFGAUYBRgFFAUMBPAEvASEBEwEFAf0A/AD7APgA9QDwAOoA4wDfANsA2QDXANUA1ADSANEA0ADPAM4AzQDMAMoAyQDFAMIAvgC7ALkAtwC2ALQAsgCwAK0AqgCnAKUAogCiAKEAyQHMAc8B0QHMAcMBswGXAXoBZAFSAUQBQgFCAUIBQwFEAUQBRAFDAUIBPQEwASEBEgECAfcA8wDyAO8A7QDqAOYA4gDeANsA2QDYANYA1QDVANUA1QDVANQA0gDQAM0AywDHAMIAvwC7ALkAtwC2ALUAswCxAK4AqwCoAKUAowCiAKIAxQHIAcoBzQHJAcIBswGbAX4BZwFUAUYBQAE/AUABQAFBAUEBQgFCAUEBPgEzASMBEwEDAfUA8ADwAO4A7ADpAOUA4QDfANwA2wDbANoA2wDeAN4A3gDdANoA1QDTAM8AzADIAMMAvwC8ALkAtwC2ALUAswCxAK4AqwCoAKYAowCjAKIAvwHBAcMBxgHDAb0BsAGbAX8BaAFUAUYBPwE+AT0BPgE+AT8BPwFAAUABPwE1ASYBFgEGAfcA8ADvAO0A6wDoAOQA4QDfAN4A3QDeAN4A3wDiAOEA4QDfANwA1wDUANAAzQDJAMQAwAC8ALkAtwC2ALYAtACxAK8ArACpAKYApACkAKMAuAG5AbsBvQG7AbcBqgGYAX8BaAFUAUYBPgE8ATsBOwE8ATwBPQE9AT4BPQE3ASoBGwELAfwA8gDvAO0A6gDnAOQA4gDgAN8A3wDgAOAA4QDkAOMA4gDgAN0A1wDVANAAzQDJAMQAwAC9ALoAtwC2ALUAtACxAK8ArACpAKcApQCkAKMAsgGxAbEBsgGwAawBoQGRAXsBZgFTAUYBPQE7ATkBOQE5AToBOwE7ATwBPAE4AS4BIQESAQMB9wDxAOwA6gDnAOQA4gDhAOEA4QDiAOIA4wDmAOQA4wDhAN0A1wDTAM4AywDHAMMAwAC8ALoAtwC2ALUAtACxAK8ArACpAKcApQCkAKMAqgGoAacBpAGiAZ4BlAGGAXQBYQFQAUUBPQE6ATgBNwE3ATgBOAE5ATkBOQE4ATEBJgEaAQsB/QD1AO4A6gDnAOUA4wDjAOIA4wDjAOMA5ADlAOIA4ADdANkA0wDQAM0AygDHAMQAwAC9ALoAtwC1ALUAtACxAK8ArACpAKYAowCiAKEAoQGfAZ0BmQGWAZEBhgF5AWoBWgFLAUIBPAE4ATYBNQE1ATUBNgE2ATcBNwE2ATEBKQEeARIBBQH7APMA7QDpAOYA5ADkAOMA4wDjAOIA4ADeANsA2QDWANQA0gDPAM0AygDIAMUAwQC9ALoAtwC1ALQAswCwAKwAqgCmAKMAoACfAJ0AmwGYAZYBkAGLAYQBegFuAWIBVgFKAUEBOwE3ATQBMwEzATMBMwE0ATUBNQE0ATIBKwEjARgBDQECAfkA8gDtAOgA5gDlAOQA4wDiAOAA3gDcANoA2ADWANQA0gDQAM4AzADIAMUAwQC9ALkAtgCzALEArwCsAKkApgCiAJ8AnACbAJkAlQGTAZABiAGBAXkBcAFlAVwBUwFIAUABOgE1ATIBMQEwATEBMQEyATIBMwEyATABLAElARwBEgEJAf8A9wDyAO0A6gDnAOYA5ADiAOAA3gDcANoA2ADWANUA0wDRAM8AzQDJAMUAwAC7ALYAswCwAK4AqwCoAKUAoQCeAJoAmACXAJUAkAGPAYsBgwF7AXIBaQFgAVgBUQFIAT8BOQEzATABLwEuAS4BLwEvATABMQEwAS4BKgElAR0BFQENAQUB/QD3APEA7gDqAOcA5QDjAOEA3wDdANsA2QDXANYA1ADSAM8AzADHAMIAvQC4ALMArwCsAKoApwCkAKEAnQCaAJYAlACTAJEAjgGMAYcBfwF1AWwBYwFcAVYBTwFHAT4BOAEyAS4BLQEsASwBLQEtAS4BLwEvASwBKQEkAR4BFwEQAQkBAwH8APYA8QDtAOkA5gDjAOEA3gDcANkA1wDVANMA0QDPAMwAyADDAL4AuQC0ALAArACpAKYAowCgAJ0AmQCXAJQAkgCSAJEAjQGJAYMBegFwAWcBXwFaAVUBTwFHAT8BNwExAS4BLAErASoBKwErASwBLAEtASsBKQElASABGQETAQ0BBgEAAfoA9QDvAOsA5wDjAOAA3QDaANcA1QDTANAAzgDLAMcAxAC/ALoAtQCxAKwAqQCmAKMAoACdAJsAmACWAJQAkwCSAJEAiwGHAYABdgFsAWMBXQFZAVUBTwFIAUABOAEyAS0BKwEpASkBKQEpASkBKgErASoBKQEmASIBHAEVAQ8BCAEBAfsA9wDxAOwA5wDjAN8A3ADYANUA0gDPAMwAygDGAMMAvwC6ALYAsQCuAKoApwCkAKIAoACdAJsAmQCWAJUAkwCSAJIAiQGDAXwBcgFpAWEBXAFaAVYBUQFLAUMBOgE0AS4BKgEoASgBJwEnAScBKAEpASkBKAEnASQBHgEWAQ4BBQH8APYA8wDuAOkA5QDhANwA2ADVANEAzgDLAMgAxQDBAL0AuQC2ALIArwCsAKkApwClAKIAoACeAJwAmQCXAJUAlACTAJMAhQF/AXgBbwFmAV8BXAFaAVgBVQFQAUoBQgE6ATMBLQEpAScBJgElASUBJgEmAScBJwEnASYBHwEVAQwBAQH2APEA7gDpAOUA4ADcANcA1ADQAM0AygDGAMMAwAC8ALkAtgC0ALEArwCsAKoApwClAKMAoQCeAJwAmgCXAJUAkwCSAJIAggF8AXYBbAFkAV8BXAFdAVwBWwFYAVQBTQFDAToBMgErASYBJQEkASQBJAEkASUBJgEmASYBHgEUAQgB+wDuAOkA5gDiAN4A2wDXANMA0ADNAMoAxwDEAMEAvgC8ALkAtgC0ALEArwCtAKoAqAClAKMAoQCeAJwAmQCVAJMAkQCQAI8AfwF6AXQBagFjAWABXQFfAWABYAFfAV0BVQFKAT8BNQErASYBJAEiASIBIgEiASMBIwEkASMBGQENAQAB8gDlAOEA3gDbANkA1gDSANAAzQDLAMgAxgDDAMAAvgC7ALkAtwC0ALIAsACtAKsAqAClAKIAnwCbAJgAlQCSAJAAjgCNAIwAfQF4AXMBaAFkAWMBYwFlAWYBZAFiAV4BVQFLAUABNQErASUBIgEhASABHwEgASABIQEhAR0BEgEEAfYA5wDcANkA1wDVANMA0QDPAM0AywDJAMcAxQDCAMAAvgC8ALoAtwC1ALMAsACsAKkApQChAJ0AmgCWAJMAkACNAIsAigCIAIgAegF2AXIBaQFnAWcBaAFqAWgBZAFgAVsBUwFJAT4BNAEpASEBHgEbARsBGwEcAR0BHgEcARUBCAH6AOwA3wDYANYA1ADSANAAzgDMAMsAygDIAMYAxADCAMAAvgC8ALsAuAC2ALMArgCqAKUAnwCbAJcAkwCQAI0AigCIAIYAhQCEAIMAegF3AXQBbgFtAW4BbgFtAWgBYgFaAVIBSgFAATcBLAEiARkBFAEPAQ4BEAETARcBGwEXAQ0BAAHyAOMA2QDUANIA0QDQAM8AzgDMAMsAyQDIAMYAxADCAMAAvwC9ALwAugC3ALEAqwClAJ4AmACTAI8AjACJAIcAhQCDAIIAgQCBAIEAeQF3AXQBcAFxAXEBcAFtAWQBWwFRAUcBPQE0ASkBHgETAQsBBQEBAQEBAwEJAQ8BFQERAQYB+ADqANwA1QDTANIA0QDQAM8AzgDMAMsAyQDHAMUAwwDCAMAAvwC+AL0AuwC3ALAAqACfAJYAkACLAIgAhQCDAIIAgQCAAIAAgAB/AH8AeQF3AXUBcwFzAXIBcAFpAV4BUgFGATkBLgEjARgBDQEEAf0A9wD0APMA9gD+AAYBDgEMAQMB9QDoANoA0wDTANIA0QDQAM8AzgDMAMsAyQDHAMQAwwDBAMAAvwC/AL4AvQC3AK4ApACZAI4AhwCEAIIAgACAAH8AfwB/AH8AfgB+AH4AeAF3AXUBdAFyAW8BagFgAVMBRgE4ASsBHwETAQcB/QD1AO4A6gDmAOYA6QDzAP0ABwEIAQEB9ADnANkA1ADTANIA0QDQANAAzwDNAMsAyQDGAMQAwwDCAMEAwADCAMMAwgC6AK8AoQCUAIgAggCAAH8AfgB+AH4AfgB+AH4AfgB+AH4AegF4AXYBcwFwAWoBYgFVAUYBNwEoARoBDQECAfgA7wDoAOMA3wDdANwA3wDpAPQAAAEFAQMB+ADrAN4A1gDTANIA0gDRANAAzwDNAMsAyADGAMQAwwDDAMMAwwDGAMcAxgC8AK8AngCPAIMAfwB+AH4AfgB+AH4AfwCBAIQAiACKAIwAegF4AXQBbwFqAWIBVgFHATYBJgEVAQgB/QDzAOoA5ADfANwA2wDaANoA2wDkAO8A+gADAQUB/gDyAOYA3ADXANQA0wDSANAAzwDNAMsAyQDHAMYAxQDFAMUAxQDIAMkAxgC6AKwAmwCMAIEAfwB+AH8AgACEAIgAjQCQAJcAmgCcAJ8AewF4AXQBbAFkAVgBSQE3ASQBEwEDAfYA7QDmAOEA3gDcANsA2wDaANoA2gDhAOwA9wABAQcBAwH6APAA5QDeANgA1QDSANAAzwDOAM0AywDKAMkAyADIAMkAyADKAMoAxQC4AKsAmwCNAIQAgwCFAIkAjgCUAJoAnwCjAKkArQCvALEAewF3AXIBaAFdAU0BOgEmARIBAAHyAOgA4wDfAN0A3ADbANsA2wDaANoA2gDgAOsA9QD/AAcBBwEAAfgA7wDlAN0A2ADTANAAzwDPAM8AzgDNAMwAzADNAMwAygDLAMkAwQC1AKkAmwCOAIkAjACRAJgAnwCnAK0AsQC1ALsAvwDBAMMAfAF3AXABZAFVAUEBLAEWAQMB8gDoAOIA3wDdANwA3ADbANsA2wDbANsA2wDgAOoA9AD+AAcBCQEFAQAB+ADsAOIA2wDUANAA0ADQANAA0ADRANAA0QDRAM8AywDJAMQAuwCwAKcAnACSAJEAlgCeAKYAsAC5AL8AxADIAM4A0QDTANYAfAF2AW4BXwFLATQBHQEHAfYA6gDjAOAA3gDdANwA3ADcANsA2wDbANsA3ADiAOsA9QD+AAYBCgEIAQUB/wD0AOgA3wDWANAA0ADSANMA1ADVANcA2QDXANMAzQDGAL0AtgCtAKYAnwCZAJoAoQCrALYAwQDMANIA1QDYANoA2gDaANoAewFzAWoBWAFAAScBDwH7AO0A5QDhAN8A3gDdANwA3ADcANwA3ADcANwA3gDkAO0A9gD+AAYBCAEIAQgBBAH5AO0A4gDXANAA0QDTANUA1gDYAN0A3QDZANQAzQDCALoAtACvAKsApwCiAKQAqwC2AMIAzwDXANsA2wDaANoA2gDaANoAegFwAWYBUAE1ARsBBgHzAOgA4wDhAN8A3gDeAN0A3QDdAN0A3QDdAN4A4QDnAO8A9wD+AAQBBgEGAQYBBAH5AO8A5ADZANEA0gDUANYA2ADcAOMA4gDcANUAzAC+ALgAtACxAK4AqwCoAKkAsAC4AMQAzwDXANoA3ADbANsA2wDbANsAeQFsAWIBSAEsARMB/wDuAOYA4wDhAOAA3wDfAN4A3gDdAN0A3QDgAOIA5gDsAPQA+gD/AAMBBAEEAQQBAwH5AO8A5QDbANIA0wDVANgA2gDgAOgA5QDdANUAygC7ALUAtACzALEArwCsAKsArQCxALwAyADSANkA3gDZANQA0ADNAMkAdgFoAVwBQAEjAQsB+QDqAOUA4wDiAOEA4ADfAN8A3gDeAN4A3gDhAOQA6ADuAPQA+QD9AAEBAgECAQIBAgH6APEA6ADeANUA1QDXANkA3ADjAOkA4wDbANMAxQC4ALUAtQC0ALQAsgCuAKoAqACpALAAugDCAMgAzQDHAMIAvgC7ALYAdAFkAVgBOQEcAQYB9QDoAOUA4wDiAOIA4QDhAOAA3wDfAN4A3wDiAOUA6QDuAPMA9wD7AP0A/wABAQABAAH7APIA6gDhANkA1wDZANwA3wDnAOkA4ADXAMwAvQC0ALQAtQC1ALUAtACuAKkApACgAKQArACyALcAuwC1AK8AqwCoAKQAcgFiAVQBNAEYAQIB8wDnAOUA5ADjAOMA4gDhAOAA4ADfAN8A3wDjAOYA6gDuAPIA9QD4APoA/QD/AP4A/gD6APMA7ADkAN0A2gDcAN4A4wDoAOUA2wDRAMQAtwCyALMAtAC1ALUAtACtAKcAoACZAJkAnwCiAKYAqQCjAJ0AmQCWAJEAcgFhAVIBMgEWAQEB8gDoAOYA5ADkAOMA4wDiAOEA4ADfAN8A4ADjAOYA6gDtAPAA8wD2APgA+wD9APwA/AD6APQA7gDoAOEA3gDfAOMA6QDqAOIA1wDJALkAsACwALIAswC1ALUAtACsAKQAnACUAJAAlACVAJYAlwCQAIoAhgCDAH4AcwFhAVEBMQEVAQAB8gDoAOYA5QDkAOQA4wDiAOEA4ADgAOAA4QDjAOUA5wDpAOsA7wDyAPYA+QD7APsA+gD6APUA8ADrAOYA4QDiAOYA7QDpAN0A0QDBAK8AqwCtALAAsgC1ALUAtQCtAKUAnQCVAI0AjACJAIYAgwCAAH4AfwB/AH8AdQFjAVMBMgEXAQEB8wDpAOcA5gDlAOUA5ADjAOIA4QDhAOEA4gDkAOUA5wDpAOsA7gDxAPQA9wD5APkA+QD4APQA8ADsAOgA5ADlAOkA8ADnANsAzQC8AKgAqACrAK4AsACzALIAsQCqAKIAnACVAI4AjACKAIcAhQCCAIEAgQCBAIIAeQFoAVgBOAEbAQQB9QDrAOgA5wDmAOUA5ADkAOMA4gDiAOIA4wDkAOYA6ADpAOsA7gDxAPQA9gD3APcA9wD2APMA7wDsAOkA5gDmAOwA8gDlANgAywC5AKYAqQCsAK4ArwCwAK4ArACmAKAAmgCUAI4AjQCLAIkAhwCFAIQAhACEAIQAgQFvAV8BPwEhAQkB+QDtAOkA6ADnAOYA5QDkAOQA4wDjAOMA5ADmAOcA6QDqAOwA7wDxAPQA9QD2APUA9QD0APEA7wDsAOkA5wDoAO4A8gDmANkAzAC5AKkAqwCtAK4ArgCuAKsAqACjAJ8AnACXAJIAkACNAIoAiQCHAIcAhwCHAIcAkwGAAW8BSgErAREB/gDxAOsA6QDoAOcA5gDlAOUA5ADkAOUA5gDnAOkA6gDsAO0A8ADyAPMA9AD0APMA8wDyAPAA7gDsAOoA6ADpAO0A7QDiANYAyQC5AK0ArgCvAK8ArgCrAKcApACfAJ4AnQCbAJkAlwCTAI8AjACLAIsAjACMAI0AsAGZAYUBXQE3ARsBBQH2AO0A6gDpAOgA5wDnAOYA5gDmAOcA6ADpAOsA7ADtAO8A8QDzAPMA8wDzAPIA8QDwAO4A7ADrAOkA6ADrAPAA7QDiANcAyQC5ALEAsQCxALAArQCpAKUAogCfAKAAogCiAKEAnwCbAJcAlACSAJIAkQCRAJEAzgG0AZ4BcgFHASgBDwH9APEA7ADqAOkA6ADoAOcA5wDoAOgA6QDqAOwA7QDvAPAA8gDzAPQA8wDyAPAA7wDuAOwA6wDqAOkA6ADtAPMA7gDkANkAygC6ALUAtQC0ALIArwCsAKgApgCkAKYAqACpAKkApwCjAJ8AnQCaAJkAmACXAJcA8QHUAbsBjAFcATgBGwEGAfcA7wDrAOoA6gDpAOkA6QDpAOoA6wDsAO0A7gDwAPEA8wD0APMA8gDxAO8A7QDsAOoA6QDoAOcA5wDuAPUA7QDjANkAyAC4ALUAtQC0ALMAsQCvAKwAqwCqAKwArwCwALAArwCrAKcApQCiAKIAoACfAJ8AEgLyAdcBpQFzAUoBLAETAQAB9ADuAOwA6wDqAOoA6gDrAOsA7ADtAO4A7wDwAPEA8gDyAPIA8QDvAO0A6wDqAOgA5wDnAOYA5QDsAPQA6gDhANcAxgC1ALUAtQC1ALQAswCxALAArwCvALEAsgC0ALQAtACyAK8ArQCrAKoAqACnAKcAJwIGAusBvQGKAV4BPwEkAQ4B/wD1APAA7QDsAOwA7ADsAO0A7QDuAO4A7wDvAPAA8ADwAPAA7wDtAOsA6QDoAOYA5QDlAOQA5ADqAPMA6gDhANgAxwC1ALUAtQC1ALUAtAC0ALMAtAC0ALUAtgC2ALYAtQC1ALQAswCyALEArwCuAK0AMAIRAvgBzgGfAXMBVQE5ASIBEAECAfkA9ADwAO4A7QDtAO4A7gDuAO4A7gDuAO4A7gDuAO0A7ADrAOkA5wDlAOQA4wDjAOIA4gDmAPAA6ADfANYAyQC2ALUAtQC1ALYAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAtQC1ALUAswCzALIANgIYAgEC3AGyAYgBbAFSAToBJwEWAQoBAQH5APQA8QDvAO8A7wDvAO4A7gDtAOwA6wDrAOoA6QDoAOYA5QDjAOIA4QDgAOAA3wDiAO0A5wDfANYAywC4ALUAtQC1ALYAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAtQC1ALUANQIYAgQC4wG+AZoBhAFtAVcBQwExASIBFgEMAQQBAAH9APoA9wD0APEA7QDsAOoA6QDnAOYA5QDkAOMA4gDhAOAA3wDeAN4A3QDdAOoA5wDgANgAzwC7ALUAtQC1ALUAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYANAIYAgUC5wHIAakBmQGIAXUBYwFSAUEBMwEnAR8BGgEaARkBFgEQAQcB/ADyAOsA5wDlAOMA4gDhAOAA3wDeAN4A3QDcANsA2wDbAOgA6QDiANsA0wC+ALUAtQC1ALUAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAMwIaAggC7AHQAbcBqwGhAZgBjQF/AW8BXwFPAUUBQQFDAUQBQAE1ASYBEwEBAfMA6gDlAOEA3wDeAN0A3ADcANsA2gDaANkA2QDZAOQA6ADkAN0A1gDDALgAtQC1ALUAtQC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYALgIaAgkC7wHXAcIBugG7AbsBugGzAagBlwGGAXoBdAF2AXcBcAFgAUoBMAEWAQAB8gDqAOIA3QDcANsA2gDZANkA2ADXANcA1gDWAN4A5gDlAN8A2ADJALsAtQC1ALUAtQC1ALYAtgC2ALYAtgC1ALUAtgC2ALYAtgC2ALYAtgC2ALYALQIcAg0C9wHjAdIBzwHXAeAB5QHmAd8B0QHBAbYBsAGwAa8BpwGRAXUBUwExARMBAAHyAOYA3gDaANkA2ADXANYA1gDVANUA1ADTANkA4gDlAN8A2QDNAL4AtQC1ALUAtQC1ALYAtgC2ALYAtgC1ALUAtgC2ALYAtgC2ALYAtQC1ALUAKwIdAhEC/wHvAeIB5AHyAQICDwIWAhICBgL4Ae0B5wHnAecB3wHJAa0BhgFbATUBGQEEAfQA5wDfANoA1gDUANQA0wDTANIA0gDRANQA3gDlAOIA3QDUAMUAuAC1ALUAtQC1ALYAtgC2ALYAtgC1ALUAtgC2ALYAtgC2ALUAtQC0ALQAKAIfAhUCCAL7AfUB/QERAiYCOAJBAj8CNQIpAh4CGAIUAg8CBQLwAdUBsQGIAV8BPwEjAQwB9wDqAOAA1wDSANEA0QDQANAAzwDOAM4A1wDiAOQA3wDaAMwAvAC1ALUAtQC2ALYAtgC2ALYAtgC2ALUAtgC2ALYAtgC1ALQAswCzALIAKgIjAhwCEwIOAg8CHwI1AkoCWQJhAl4CVgJPAkUCPQI1Ai0CIAINAvQB0wGvAYgBZwFKAS8BEQH7AOkA2QDQAM8AzgDOAM0AzADMAMsA0gDfAOUA4QDcANEAwAC1ALUAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALYAtQC0ALQAsgCyALEARQI/AjsCNQIzAjgCSAJXAmQCbAJvAmoCZgJkAl4CVwJOAkMCNgIlAg0C7wHQAa0BjgFyAVUBMgESAfYA3wDRAM0AzADLAMoAygDJAMkAzQDcAOcA5ADgANcAxQC2ALUAtgC2ALYAtgC2ALYAtgC2ALYAtgC2ALUAtQC0ALMAsQCwAK8AZAJfAlsCVwJWAl0CbAJ2AnwCfQJ5AnICcgJyAm8CagJhAlQCQwI0Ah4CAgLiAcMBpAGIAWoBRwEkAQEB5QDSAMoAyQDIAMgAxwDHAMYAyADUAOUA5QDiANwAzAC4ALUAtgC2ALYAtgC2ALYAtgC2ALYAtQC1ALUAtACzALIAsACvAK8AiAKEAoECfgJ+AoYCkAKTApMCjgKDAnwCfAJ8AnkCdgJrAlwCSAI1AhsCAALhAccBrAGSAXUBVAEvAQoB7ADWAMoAxgDGAMUAxQDEAMQAwwDNAOAA5ADhAN4A0gC8ALUAtQC2ALYAtgC2ALYAtgC1ALUAtQC1ALQAsgCvAK0AqwCqAKkArQKpAqcCpAKmAqoCrgKsAqYCnAKPAocChQKEAn8CegJtAlwCQgIpAgoC7AHOAbgBpQGPAXUBWAE0AQ0B7wDYAMoAxADDAMIAwgDCAMEAwQDHANsA5ADiAOAA1wDAALUAtQC1ALUAtQC1ALUAtQC1ALQAsgCxAK4AqwCpAKcApQCkAKMAzwLNAssCyQLHAsYCwwK7Aq4CogKVAo0CigKHAoECewJsAlgCOQIaAvcB1gG2AaUBlgGBAWkBUwEyAQwB8QDbAMoAwgDAAMAAvwC/AL4AvgDBANYA4wDhAOAA2gDEALUAtQC0ALMAsgCxAK8ArwCuAK0AqwCqAKgApQCjAKEAnwCfAJ4A4wLgAt8C3QLaAtgC0wLKArsCrgKfApYCkAKJAoECeQJpAlICLgIKAuUBwQGgAZIBhgFwAVoBRgErAQcB7wDbAMkAvwC+AL0AvQC8ALwAuwC7AMsA2wDaANgA1gDEALIAsACvAK0AqwCpAKgAqACnAKYApQCkAKEAnwCdAJsAmgCZAJkA9QL0AvIC8ALsAucC4ALWAsYCuAKpApwCkQKIAn0CcwJjAksCIwL7AdQBrwGSAYoBhAFvAVoBRQEpAQMB7gDaAMkAvQC8ALsAugC6ALkAuQC4AMQA0QDQAM8AzAC+AK0AqwCpAKYApACjAKEAoQChAKAAngCdAJsAmACXAJUAlACUAJQABQMDAwID/wL5AvMC6wLfAswCvQKuAp4CkQKGAnoCbgJdAkQCGQLvAcYBogGJAYcBhgFxAVwBRgEmAQAB6wDYAMcAuwC6ALgAuAC3ALYAtgC1AL0AxgDFAMMAwQC2AKkApQCiAKAAngCcAJsAmwCaAJkAmACXAJUAlACUAJQAlACUAJQAEwMRAw8DDQMFA/0C8gLjAs4CvQKsApwCjgKEAncCagJZAkECGQLyAc8BsAGaAZkBlAF7AWIBRwEjAf0A6QDWAMUAugC4ALYAtQC1ALQAswCzALYAuwC6ALgAtQCuAKQAoACcAJkAlwCVAJQAlACUAJQAlACUAJQAlACUAJQAlACUAJQAIQMfAx0DGQMPAwUD9wLmAtACwAKuApwCjwKEAngCagJaAkICHwL8Ad4BxAGyAa8BpgGIAWkBSQEhAfsA6ADVAMQAugC2ALQAswCzALIAsgCxALAAsQCwAK0AqgCmAJ8AmwCXAJUAkwCTAJMAkwCUAJQAlACUAJQAlACUAJQAlACUAJQAKQMmAyMDHgMSAwUD9wLkAtACvwKtApwCjwKFAnkCagJaAkMCJAIEAuwB1gHIAcQBtAGRAW4BSAEdAfkA5wDUAMMAugC1ALMAsgCxALEAsACvAK4ArQCrAKkApgCiAJ0AmgCXAJQAkwCTAJMAkwCUAJQAlACUAJQAlACUAJQAlACUAJQALAMpAyYDIAMUAwYD9gLiAs4CvQKtApwCkAKFAnoCawJbAkUCKAILAvYB4wHYAdEBvQGXAXEBSAEaAfgA5gDTAMMAuQC1ALIAsQCwALAArwCuAK0ArACqAKgApQCiAJ0AmgCXAJQAkwCTAJMAkwCUAJQAlACUAJQAlACUAJQAlACUAJQALQMqAyYDHwMTAwMD8wLfAssCugKqApoCjwKGAnsCbAJcAkcCLwIWAgcC+QHxAeYBywGgAXUBRwEYAfgA5gDTAMMAugC1ALIAsACwAK8ArwCuAK0AqwCqAKcApQCiAJ0AmgCXAJQAkwCTAJMAkwCUAJQAlACUAJQAlACUAJQAlACUAJQA',
+    poly:[[126.6673984,37.4204606],[126.6672335,37.4202648],[126.6670942,37.4200054],[126.6669279,37.4198207],[126.6667276,37.419705],[126.6664148,37.4196358],[126.6660138,37.4196148],[126.6656912,37.4194811],[126.6655024,37.4192696],[126.6654156,37.419013],[126.6654237,37.4187027],[126.6655817,37.418494],[126.6658769,37.418363],[126.6663339,37.4182703],[126.6665942,37.4182019],[126.6666281,37.4179633],[126.6664644,37.4175695],[126.6663667,37.4170976],[126.6665694,37.4171381],[126.6669614,37.4177047],[126.6674602,37.4179372],[126.6681268,37.4179367],[126.668779,37.4178934],[126.6688485,37.4180574],[126.6682382,37.418334],[126.667795,37.4186808],[126.6676026,37.4192493],[126.6675734,37.4199887],[126.6675416,37.4203222],[126.667491,37.4204614]],
+    mainR:[[126.6675161,37.4206296],[126.6671298,37.4194392],[126.6667934,37.4184947],[126.66653,37.4177005],[126.6662688,37.4168106]],
+    mainL:[[126.6674337,37.4206296],[126.6669945,37.4195167],[126.6666921,37.4187629],[126.6664591,37.4182278],[126.6661303,37.4175666],[126.6659343,37.4172788]],
+    mainW:16, view:{ lon:126.6668, lat:37.4148, h:300, heading:0, pitch:-38 } };
+
+  const item = { id:ID, q:'인터체인지 램프를 없애고 산의 나무를 심은 모습을 보려면', name:'램프 → 숲 복원 · 미추홀대로 인터체인지', src:'별도 레이어 · 원본 3D 타일은 그대로 · 램프 도로를 지우고 원래 땅 높이를 유지한 채 옆 문학산 숲(3D)을 옮겨 심음 · 본선 교량은 유지 · 3D 모델을 한 번 더 불러와 메모리 증가', type:'layer' };
+  const mc = MENUS.site.find(c=>c.id==='model'); if(mc && !mc.items.some(i=>i.id===ID)) mc.items.push(item);
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  const IC = { on:false, busy:false, tex:null, sh1:null, sh2:null, clone:null, rm:null, E:null, Einv:null, box:null, dz:0, ts1:null };
+  const mainTs = ()=>{ const p = PROJECTS.find(p=>p.id==='incheon1'); return p && p.ts; };
+
+  function decodeGL(){ const s = atob(PRE.GL); const b = new Uint8Array(s.length); for(let i=0;i<s.length;i++) b[i] = s.charCodeAt(i); const u = new Uint16Array(b.buffer); const f = new Float32Array(u.length); for(let i=0;i<u.length;i++) f[i] = u[i]/10; return f; }
+  function bil(A, g, x, y){ const fx = Math.max(0, Math.min(g.nx-1.001, (x-g.x0)/g.step)), fy = Math.max(0, Math.min(g.ny-1.001, (y-g.y0)/g.step)); const i = Math.floor(fx), j = Math.floor(fy), a = fx-i, b = fy-j;
+    return A[j*g.nx+i]*(1-a)*(1-b) + A[j*g.nx+i+1]*a*(1-b) + A[(j+1)*g.nx+i]*(1-a)*b + A[(j+1)*g.nx+i+1]*a*b; }
+
+  async function buildTex(){
+    const g = PRE.grid, kx = 111320*Math.cos(PRE.lat0*D2R), ky = 110950, f = (lon, lat)=>[(lon-PRE.lon0)*kx, (lat-PRE.lat0)*ky];
+    const Gl = decodeGL();
+    // 숲(원본 위치) 지형 높이 + 드론 모델 보정값
+    const tp = scene.terrainProvider, tc = [], sc = [];
+    for(let j=0;j<g.ny;j++) for(let i=0;i<g.nx;i++){ const x = g.x0+i*g.step, y = g.y0+j*g.step; tc.push(C.Cartographic.fromDegrees(PRE.lon0+x/kx, PRE.lat0+y/ky)); sc.push(C.Cartographic.fromDegrees(PRE.lon0+(x+PRE.off[0])/kx, PRE.lat0+(y+PRE.off[1])/ky)); }
+    await C.sampleTerrainMostDetailed(tp, tc); await C.sampleTerrainMostDetailed(tp, sc);
+    const df = []; for(let k=0;k<Gl.length;k++) if(isFinite(tc[k].height)) df.push(Gl[k]-tc[k].height); df.sort((a, b)=>a-b); const offZ = df.length ? df[Math.floor(df.length/2)] : 0;
+    const Gs = new Float32Array(Gl.length); for(let k=0;k<Gl.length;k++) Gs[k] = (isFinite(sc[k].height) ? sc[k].height : 0) + offZ;
+    let sGl = 0, sGs = 0; for(let k=0;k<Gl.length;k++){ sGl += Gl[k]; sGs += Gs[k]; } IC.dz = (sGl - sGs)/Gl.length;
+    // 마스크(램프 영역 − 본선) · 가장자리 흐림
+    const x0 = g.x0, y0 = g.y0, x1 = g.x0+(g.nx-1)*g.step, y1 = g.y0+(g.ny-1)*g.step, N = 512, sx = N/(x1-x0), sy = N/(y1-y0);
+    const loc = PRE.poly.map(p=>f(p[0], p[1])), mR = PRE.mainR.map(p=>f(p[0], p[1])), mL = PRE.mainL.map(p=>f(p[0], p[1]));
+    const base = document.createElement('canvas'); base.width = N; base.height = N; const bg = base.getContext('2d');
+    bg.fillStyle = '#000'; bg.fillRect(0, 0, N, N); bg.fillStyle = '#fff'; bg.beginPath(); loc.forEach((p, i)=>{ const X = (p[0]-x0)*sx, Y = (p[1]-y0)*sy; i ? bg.lineTo(X, Y) : bg.moveTo(X, Y); }); bg.closePath(); bg.fill();
+    bg.strokeStyle = '#000'; bg.lineCap = 'round'; bg.lineJoin = 'round'; bg.lineWidth = PRE.mainW*sx; for(const L of [mR, mL]){ bg.beginPath(); L.forEach((p, i)=>{ const X = (p[0]-x0)*sx, Y = (p[1]-y0)*sy; i ? bg.lineTo(X, Y) : bg.moveTo(X, Y); }); bg.stroke(); }
+    const blurred = s=>{ const c = document.createElement('canvas'); c.width = N; c.height = N; const cg = c.getContext('2d', { willReadFrequently:true }); cg.filter = 'blur(' + Math.max(.6, s*sx).toFixed(1) + 'px)'; cg.drawImage(base, 0, 0); return cg.getImageData(0, 0, N, N).data; };
+    const m1 = blurred(.8), m4 = blurred(4);
+    const arr = new Float32Array(N*N*4);
+    for(let j=0;j<N;j++){ const y = y0 + (j+.5)/sy; for(let i=0;i<N;i++){ const x = x0 + (i+.5)/sx, k = j*N+i;
+      arr[k*4] = m1[k*4]/255; arr[k*4+1] = bil(Gl, g, x, y); arr[k*4+2] = bil(Gs, g, x, y); arr[k*4+3] = Math.max(0, Math.min(1, (m4[k*4]/255 - .5)*2.2)); } }
+    IC.box = new C.Cartesian4(x0, y0, x1, y1);
+    IC.tex = { arr, N, offZ, loc };
+  }
+  const texU = ()=>new C.TextureUniform({ typedArray:IC.tex.arr, width:IC.tex.N, height:IC.tex.N, pixelFormat:C.PixelFormat.RGBA, pixelDatatype:C.PixelDatatype.FLOAT, minificationFilter:C.TextureMinificationFilter.NEAREST, magnificationFilter:C.TextureMagnificationFilter.NEAREST });
+  const commonU = ()=>({ u_icOn:{ type:C.UniformType.FLOAT, value:1 }, u_icBox:{ type:C.UniformType.VEC4, value:IC.box }, u_icTex:{ type:C.UniformType.SAMPLER_2D, value:texU() },
+    u_icE2L:{ type:C.UniformType.MAT4, value:C.Matrix4.clone(C.Matrix4.IDENTITY) }, u_icL2E:{ type:C.UniformType.MAT4, value:C.Matrix4.clone(C.Matrix4.IDENTITY) } });
+  const UVF = `vec2 icUV(vec2 xy){ vec2 uv = (xy - u_icBox.xy) / (u_icBox.zw - u_icBox.xy); return uv; }   // Float 텍스처는 행 뒤집기 없음(행 0 = 남쪽)
+    bool icIn(vec2 uv){ return !(uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0); }`;
+  // ① 원본: 램프 영역을 지면 높이로 내리고 숲 그늘 색
+  const VS1 = UVF + `
+    void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput){
+      v_icM = 0.0; if(u_icOn < 0.5) return;
+      vec4 l = u_icE2L * (czm_modelView * vec4(vsOutput.positionMC, 1.0));
+      vec2 uv = icUV(l.xy); if(!icIn(uv)) return;
+      vec4 t = textureLod(u_icTex, uv, 0.0); v_icM = t.r; if(t.r < 0.004) return;
+      l.z = mix(l.z, t.g + (l.z - t.g) * ${KEEP.toFixed(4)}, t.r);
+      vsOutput.positionMC = (czm_inverseModelView * (u_icL2E * l)).xyz;
+    }`;
+  const FS1 = `
+    void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material){
+      if(u_icOn < 0.5 || v_icM < 0.01) return;
+      if(v_icM < 0.99){ vec3 p = fsInput.attributes.positionEC; vec3 n = normalize(cross(dFdx(p), dFdy(p))); vec3 up = normalize((u_icL2E * vec4(0.0, 0.0, 1.0, 0.0)).xyz); if(abs(dot(n, up)) < 0.6) discard; }
+      float lum = dot(material.diffuse, vec3(0.299, 0.587, 0.114));
+      vec3 floorC = vec3(0.12, 0.17, 0.08) * (0.75 + 0.5 * lum);
+      material.diffuse = mix(material.diffuse, floorC, clamp(v_icM * 1.2, 0.0, 1.0));
+    }`;
+  // ② 복제 숲: 서쪽 숲을 옮겨 놓고 높이 = 램프 자리 지면 + (나무 높이 − 숲 지형) × 가장자리 가중
+  const VS2 = UVF + `
+    void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput){
+      v_icUv = vec2(-1.0);
+      vec4 l = u_icE2L * (czm_modelView * vec4(vsOutput.positionMC, 1.0));
+      vec2 uv = icUV(l.xy); v_icUv = uv; if(!icIn(uv)) return;
+      vec4 t = textureLod(u_icTex, uv, 0.0); if(t.r < 0.004) return;
+      float zs = l.z - u_icDz;
+      l.z = t.g + t.a * max(zs - t.b, -1.0);
+      vsOutput.positionMC = (czm_inverseModelView * (u_icL2E * l)).xyz;
+    }`;
+  const FS2 = UVF + `
+    void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material){
+      if(!icIn(v_icUv)) discard;
+      vec4 t = texture(u_icTex, v_icUv); if(t.r < 0.5) discard;
+    }`;
+  const m4a = new C.Matrix4(), m4b = new C.Matrix4();
+  function updMats(){ if(!IC.E) return; C.Matrix4.multiply(IC.Einv, camera.inverseViewMatrix, m4a); C.Matrix4.multiply(camera.viewMatrix, IC.E, m4b);
+    for(const sh of [IC.sh1, IC.sh2]) if(sh){ sh.setUniform('u_icE2L', C.Matrix4.clone(m4a)); sh.setUniform('u_icL2E', C.Matrix4.clone(m4b)); } }
+  function attach1(){ const ts = mainTs(); if(!ts || !IC.sh1) return; if(ts.customShader !== IC.sh1){ if(ts.customShader && !ts.__icPrev) ts.__icPrev = ts.customShader; ts.customShader = IC.sh1; } IC.ts1 = ts; }
+  function detach1(){ for(const p of PROJECTS){ const ts = p.ts; if(!ts) continue; try{ if(ts.customShader === IC.sh1) ts.customShader = ts.__icPrev || undefined; delete ts.__icPrev; }catch(e){} } }
+
+  async function build(){
+    if(!IC.tex){ tst('램프 → 숲: 지형 높이 읽는 중…', 2500); await buildTex(); }
+    IC.E = C.Transforms.eastNorthUpToFixedFrame(C.Cartesian3.fromDegrees(PRE.lon0, PRE.lat0, 0)); IC.Einv = C.Matrix4.inverseTransformation(IC.E, new C.Matrix4());
+    const U1 = commonU(); IC.sh1 = new C.CustomShader({ uniforms:U1, varyings:{ v_icM:C.VaryingType.FLOAT }, vertexShaderText:VS1, fragmentShaderText:FS1 });
+    const U2 = commonU(); U2.u_icDz = { type:C.UniformType.FLOAT, value:IC.dz };
+    IC.sh2 = new C.CustomShader({ uniforms:U2, varyings:{ v_icUv:C.VaryingType.VEC2 }, vertexShaderText:VS2, fragmentShaderText:FS2 });
+    updMats(); IC.rm = scene.preRender.addEventListener(updMats); attach1();
+    // 복제 레이어: 같은 3D 타일 · 숲 자리(서쪽 380 m)를 램프 자리로 이동 + 평균 높이차만큼 내림(타일 선택·컬링 정확도)
+    const ts0 = mainTs(); const url = ts0 && ts0.resource ? ts0.resource.url : 'https://3dview.sistech3d.com/api/tileset/project/incheon_01/tileset.json';
+    const clone = await C.Cesium3DTileset.fromUrl(url, { maximumScreenSpaceError: ts0 ? ts0.maximumScreenSpaceError : 6, skipLevelOfDetail:true, dynamicScreenSpaceError:true, cacheBytes:384*1024*1024, foveatedScreenSpaceError:true });
+    if(!IC.on){ try{ clone.destroy(); }catch(e){} return; }
+    const T = C.Matrix4.fromTranslation(new C.Cartesian3(-PRE.off[0], -PRE.off[1], IC.dz));
+    clone.modelMatrix = C.Matrix4.multiply(IC.E, C.Matrix4.multiply(T, IC.Einv, new C.Matrix4()), new C.Matrix4());
+    clone.customShader = IC.sh2;
+    try{ const kx = 111320*Math.cos(PRE.lat0*D2R), ky = 110950; const ring = IC.tex.loc.map(p=>C.Cartesian3.fromDegrees(PRE.lon0 + p[0]/kx, PRE.lat0 + p[1]/ky));
+      clone.clippingPolygons = new C.ClippingPolygonCollection({ polygons:[ new C.ClippingPolygon({ positions:ring }) ], inverse:true }); }catch(e){ console.warn('clip', e); }
+    try{ clone.style = new C.Cesium3DTileStyle({ color:"color('white', 1.0)" }); }catch(e){}
+    scene.primitives.add(clone); IC.clone = clone; scene.requestRender();
+  }
+  function clearAll(){ if(IC.rm){ try{ IC.rm(); }catch(e){} IC.rm = null; } detach1(); if(IC.clone){ try{ scene.primitives.remove(IC.clone); }catch(e){} IC.clone = null; } IC.sh1 = IC.sh2 = null; IC.E = null; try{ scene.requestRender(); }catch(e){} }
+  function near(){ try{ const c = camera.positionCartographic; const kx = 111320*Math.cos(PRE.lat0*D2R); return Math.hypot((c.longitude/D2R-PRE.lon0)*kx, (c.latitude/D2R-PRE.lat0)*110950) < 1500 && c.height < 2500; }catch(e){ return false; } }
+  function fly(){ return new Promise(res=>{ const v = PRE.view; camera.flyTo({ destination:C.Cartesian3.fromDegrees(v.lon, v.lat, v.h), orientation:{ heading:v.heading*D2R, pitch:v.pitch*D2R, roll:0 }, duration:2, complete:res, cancel:res }); }); }
+
+  async function on(){ IC.on = true; IC.busy = true;
+    try{ for(const o of ['treeflat','treeflatPoly','vremove','vremovePoly','vrsplit','osmroad']) if(STATE.on.has(o)){ try{ await toggleLayer(o, false); }catch(e){} }
+      if(!near()) await fly(); if(!mainTs()){ try{ await ensureTileset(PROJECTS.find(p=>p.id==='incheon1')); }catch(e){} }
+      await build(); if(IC.on) tst('램프 → 숲 복원 켬 · 램프를 지우고 문학산 숲을 원래 땅 높이에 옮겨 심었습니다 (원본 3D 타일은 그대로)', 3500); }
+    catch(e){ console.warn(e); IC.on = false; STATE.on.delete(ID); clearAll(); tst('램프 → 숲 복원 실패: ' + e.message, 3500); try{ renderCats(); renderSub(); updateSrc(); }catch(_){} }
+    finally{ IC.busy = false; } }
+  function off(){ IC.on = false; clearAll(); }
+
+  try{ const _ens65 = ensureTileset; ensureTileset = async function(p){ const ts = await _ens65.apply(this, arguments); if(IC.on && IC.sh1) attach1(); return ts; }; }catch(e){}
+  const _t65 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(id === ID){ const want = force !== undefined ? force : !STATE.on.has(id);
+      if(want && STATE.mode !== 'site'){ tst('램프 → 숲 복원은 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ if(IC.busy){ tst('처리 중입니다 · 잠시만 기다려 주세요', 1800); return; } STATE.on.add(id); try{ renderCats(); renderSub(); }catch(e){} off(); await on(); }
+      else { STATE.on.delete(id); off(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
+    // 같은 3D 모델 셰이더를 쓰는 기능(수목 평면화·차량 지우기·도로만 보기)을 켜면 이 레이어는 끔
+    if(['treeflat','treeflatPoly','vremove','vremovePoly','vrsplit','osmroad'].includes(id) && force !== false && !STATE.on.has(id) && IC.on){ STATE.on.delete(ID); off(); try{ renderCats(); renderSub(); }catch(e){} }
+    return _t65.apply(this, arguments);
+  };
+  try{ const _sm65 = setMode; setMode = function(m){ if(m !== 'site' && IC.on){ STATE.on.delete(ID); off(); } return _sm65.apply(this, arguments); }; }catch(e){}
+  // 셰이더 오류로 렌더링이 멈추면 이 레이어를 끄고 렌더링 재개(다른 기능 보호)
+  try{ scene.renderError.addEventListener(()=>{ if(!IC.on && !IC.clone) return; STATE.on.delete(ID); off(); setTimeout(()=>{ try{ document.querySelectorAll('.cesium-widget-errorPanel').forEach(e=>e.remove()); viewer.useDefaultRenderLoop = true; scene.requestRender(); renderCats(); renderSub(); }catch(e){} tst('램프 → 숲 복원을 이 기기에서 그리지 못해 껐습니다', 3500); }, 0); }); }catch(e){}
+  const boot = STATE.on.has(ID); STATE.on.delete(ID);
+  if(boot) setTimeout(()=>{ try{ if(STATE.mode === 'site') toggleLayer(ID, true); }catch(e){} }, 4500);
+  window.__IC65 = { version:'65.0', IC, PRE, build, clearAll, on, off };
+})();
+</script>
+
 </body>
 </html>
