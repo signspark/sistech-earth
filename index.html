@@ -10600,5 +10600,511 @@ if(!window.__CVB) window.__CVB = (function(){
 })();
 </script>
 
+<script>
+/* ---------- 67. SITE › 내보내기 › 건물 외곽선 추출 (SHP · 2026-10-13) ----------
+   - 2D 보기(3D 모델 연직 정사)에서 다각형을 그리면 그 안 건물의 지붕선(위에서 본 외곽)을 3D 모델 높이로 찾아 SHP로 저장
+   - 방식(하이브리드):
+     ① 3D 높이: 영역을 연직 직교 투영으로 촬영하면서 셰이더로 각 화소의 높이를 색으로 기록 → 한 번에 높이 지도(DSM, 0.2~0.3 m 격자)
+        (Cesium 직교 투영의 카메라 보정 때문에 생기는 일정한 높이 차는 pickPosition 표본으로 자동 보정)
+     ② 지면: 높이 지도의 최솟값 → 열림 연산(50 m 창) + 지형(Esri) 보정 범위 안으로 제한 → 건물 높이 = 표면 − 지면
+     ③ 나무 제외: 표면 거칠기(2차 미분, 큰 단차 제외) + 녹색도(ExG) → 평평한 초록 옥상은 건물로 유지
+     ④ 건물 덩어리: 높이 ≥ 2.5 m · 나무 아님 → 열기/닫기 정리 → 높이 단차(2 m)로 붙은 건물 분리 → 10 m² 미만 제외
+     ⑤ 공공 데이터: 브이월드 건축물정보(LT_C_BLDGINFO) 외곽선과 겹치면 건물명·용도·지상층수 연결, 한 덩어리에 공공 건물이 여럿이면 그 경계로 나눔
+        공공 데이터에 없으면 '3D(미등록)' 표시 · 인천은 도로명주소 건물 이름도 보충
+     ⑥ 외곽선 정리: 화소 경계 추적 → 단순화 → 직각 정리(주 방향 맞춤) · 선택(원형/단순화/직각)
+   - 미리보기: 노란 선 = 공공 데이터와 연결, 하늘색 = 미등록, 빨강 = 제외 · 클릭 = 제외/포함 · Shift+클릭 = 합치기 선택
+   - 저장: ZIP(건물외곽선.shp/.shx/.dbf/.prj/.cpg + 정보.txt) · 좌표계 EPSG:5186(기본) / 5179 / 4326 · 한글 속성 UTF-8
+   - 다각형 안에 중심이 있는 건물만 · 경계에 걸친 건물은 잘라내지 않고 전체 외곽선 · 보안 처리(66) 영역 안의 건물은 내보내지 않음
+---------------------------------------------------------------------------------------------- */
+(function(){
+  if(window.__BO67) return;
+  const C = Cesium, D2R = Math.PI/180, ID = 'bldgOutline', MAXE = 600, MARGIN = 25, RE = 6371000;
+  const VW_KEY = '57C7018D-1A36-4873-99CD-A2272BD3040E', VW_DOMAIN = 'https://signspark.github.io';
+  const tst = (m, t)=>{ try{ toast(m, t||2400); }catch(e){} };
+  const item = { id:ID, q:'선택한 구역의 건물 외곽선을 SHP로 받으려면', name:'건물 외곽선 추출 (SHP)', src:'2D 보기에서 다각형을 그리면 3D 모델 높이로 건물 지붕선을 찾음(나무 제외) · 직각 정리 · 브이월드 건축물정보로 건물명·용도·층수 연결 · 미리보기에서 클릭으로 빼기 / Shift+클릭 합치기 · EPSG:5186 SHP ZIP', type:'layer' };
+  const ex = MENUS.site.find(c=>c.id==='export'); if(ex && !ex.items.some(i=>i.id===ID)) ex.items.unshift(item);
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  const BO = { on:false, busy:false, E:null, Einv:null, poly:null, loc:null, R:null, pub:[], bld:[], ents:[], bar:null, h:null, sel:new Set(), opt:{ minA:10, minH:2.5, simp:'ortho', crs:5186 } };
+  const tsets = ()=>PROJECTS.map(p=>p.ts).filter(t=>t && t.show !== false);
+
+  // ---------- 좌표 ----------
+  function setFrame(lon, lat){ BO.lon0 = lon; BO.lat0 = lat; BO.E = C.Transforms.eastNorthUpToFixedFrame(C.Cartesian3.fromDegrees(lon, lat, 0)); BO.Einv = C.Matrix4.inverseTransformation(BO.E, new C.Matrix4()); }
+  const sc3 = new C.Cartesian3();
+  function toXY(lon, lat){ C.Cartesian3.fromDegrees(lon, lat, 0, undefined, sc3); const q = C.Matrix4.multiplyByPoint(BO.Einv, sc3, new C.Cartesian3()); return [q.x, q.y]; }
+  function toLL(x, y){ const p = C.Matrix4.multiplyByPoint(BO.E, new C.Cartesian3(x, y, 0), new C.Cartesian3()); const g = C.Cartographic.fromCartesian(p); return [g.longitude/D2R, g.latitude/D2R]; }
+  const zl = (h, x, y)=>h - (x*x + y*y)/(2*RE);
+  const hEll = (z, x, y)=>z + (x*x + y*y)/(2*RE);
+  function inPoly(x, y, P){ let c = false; for(let i=0, j=P.length-1; i<P.length; j=i++){ const a = P[i], b = P[j]; if(((a[1] > y) !== (b[1] > y)) && (x < (b[0]-a[0])*(y-a[1])/(b[1]-a[1]) + a[0])) c = !c; } return c; }
+  function dPoly(x, y, P){ let best = 1e18; for(let i=0;i<P.length;i++){ const a = P[i], b = P[(i+1)%P.length], vx = b[0]-a[0], vy = b[1]-a[1], L = vx*vx + vy*vy; let t = L ? ((x-a[0])*vx + (y-a[1])*vy)/L : 0; t = Math.max(0, Math.min(1, t)); const dx = a[0] + t*vx - x, dy = a[1] + t*vy - y, d = dx*dx + dy*dy; if(d < best) best = d; } return Math.sqrt(best); }
+  const bboxOf = P=>{ const xs = P.map(p=>p[0]), ys = P.map(p=>p[1]); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
+  const pct = (a, q)=>{ const v = a.filter(x=>isFinite(x)).sort((p, r)=>p-r); return v.length ? v[Math.min(v.length-1, Math.floor(v.length*q))] : NaN; };
+
+  // 한국 TM (GRS80) · 5186 중부원점 / 5179 UTM-K
+  const A_ = 6378137.0, F_ = 1/298.257222101, E2 = F_*(2-F_), EP2 = E2/(1-E2), rad = d=>d*D2R;
+  const Mf = phi => A_*((1-E2/4-3*E2*E2/64-5*E2**3/256)*phi - (3*E2/8+3*E2*E2/32+45*E2**3/1024)*Math.sin(2*phi) + (15*E2*E2/256+45*E2**3/1024)*Math.sin(4*phi) - (35*E2**3/3072)*Math.sin(6*phi));
+  const CRSP = { 5186:{ lon0:127, k0:1, FE:200000, FN:600000, name:'Korea_2000_Korea_Central_Belt_2010' }, 5179:{ lon0:127.5, k0:0.9996, FE:1000000, FN:2000000, name:'Korea_2000_Korea_Unified_Coordinate_System' } };
+  function tmFwd(lon, lat, P){ const l0 = rad(P.lon0), p = rad(lat), s = Math.sin(p), c = Math.cos(p), t = Math.tan(p), M0 = Mf(rad(38));
+    const N = A_/Math.sqrt(1-E2*s*s), T = t*t, Cc = EP2*c*c, A = (rad(lon)-l0)*c;
+    const x = P.FE + P.k0*N*(A + (1-T+Cc)*A**3/6 + (5-18*T+T*T+72*Cc-58*EP2)*A**5/120);
+    const y = P.FN + P.k0*(Mf(p) - M0 + N*t*(A*A/2 + (5-T+9*Cc+4*Cc*Cc)*A**4/24 + (61-58*T+T*T+600*Cc-330*EP2)*A**6/720));
+    return [x, y]; }
+  const proj = (lon, lat, code)=>code === 4326 ? [lon, lat] : tmFwd(lon, lat, CRSP[code]);
+  const prjWkt = code=>code === 4326 ? 'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]'
+    : 'PROJCS["'+CRSP[code].name+'",GEOGCS["GCS_Korea_2000",DATUM["D_Korea_2000",SPHEROID["GRS_1980",6378137.0,298.257222101]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["False_Easting",'+CRSP[code].FE+'.0],PARAMETER["False_Northing",'+CRSP[code].FN+'.0],PARAMETER["Central_Meridian",'+CRSP[code].lon0+'],PARAMETER["Scale_Factor",'+CRSP[code].k0+'],PARAMETER["Latitude_Of_Origin",38.0],UNIT["Meter",1.0]]';
+
+  // ---------- ① 촬영: 색 + 높이(셰이더 인코딩) ----------
+  const wait = ms=>new Promise(r=>setTimeout(r, ms));
+  async function waitTiles(ms){ const t0 = Date.now(); let st = 0; while(Date.now() - t0 < ms){ scene.requestRender(); await wait(220); if(tsets().every(t=>t.tilesLoaded)){ if(++st >= 3) return; } else st = 0; } }
+  function mkEncShader(E2L, zb){ return new C.CustomShader({ lightingModel:C.LightingModel.UNLIT, uniforms:{ u_boE2L:{ type:C.UniformType.MAT4, value:E2L } },
+    fragmentShaderText:`void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material){
+      float z = (u_boE2L * vec4(fsInput.attributes.positionEC, 1.0)).z;
+      float v = clamp(floor((z - (${zb.toFixed(2)})) * 100.0 + 0.5), 0.0, 16777000.0) + 1.0;
+      float r = floor(v / 65536.0); float g = floor((v - r*65536.0) / 256.0); float b = v - r*65536.0 - g*256.0;
+      material.diffuse = vec3(r, g, b) / 255.0; material.alpha = 1.0; }` }); }
+  function grab(){ const W = scene.canvas.width, H = scene.canvas.height, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d', { willReadFrequently:true }); g.drawImage(scene.canvas, 0, 0); return g.getImageData(0, 0, W, H).data; }
+  async function capture(R, prog){
+    const sv = { p:C.Cartesian3.clone(camera.positionWC), h:camera.heading, pt:camera.pitch, r:camera.roll, ortho:camera.frustum instanceof C.OrthographicFrustum, fw:camera.frustum.width };
+    const TS = tsets(), prevSh = TS.map(t=>t.customShader);
+    const prev = { globe:scene.globe.show, sky:scene.skyAtmosphere && scene.skyAtmosphere.show, box:scene.skyBox && scene.skyBox.show, sun:scene.sun && scene.sun.show, moon:scene.moon && scene.moon.show, bg:scene.backgroundColor.clone(), fxaa:scene.postProcessStages.fxaa.enabled, fog:scene.fog.enabled, ents:viewer.entities.show };
+    const hid = []; for(let i=0;i<scene.primitives.length;i++){ const p = scene.primitives.get(i); if(TS.indexOf(p) < 0 && p.show !== false){ hid.push(p); p.show = false; } }
+    const stages = []; for(let i=0;i<scene.postProcessStages.length;i++){ const s = scene.postProcessStages.get(i); if(s.enabled){ stages.push(s); s.enabled = false; } }
+    const restore = ()=>{ TS.forEach((t, i)=>{ try{ t.customShader = prevSh[i]; }catch(e){} }); scene.globe.show = prev.globe; if(scene.skyAtmosphere) scene.skyAtmosphere.show = prev.sky; if(scene.skyBox) scene.skyBox.show = prev.box; if(scene.sun) scene.sun.show = prev.sun; if(scene.moon) scene.moon.show = prev.moon;
+      scene.backgroundColor = prev.bg; scene.postProcessStages.fxaa.enabled = prev.fxaa; scene.fog.enabled = prev.fog; viewer.entities.show = prev.ents; for(const p of hid) p.show = true; for(const s of stages) s.enabled = true;
+      try{ if(!sv.ortho) camera.switchToPerspectiveFrustum(); else if(sv.fw) camera.frustum.width = sv.fw; camera.setView({ destination:sv.p, orientation:{ heading:sv.h, pitch:sv.pt, roll:sv.r } }); }catch(e){} scene.requestRender(); };
+    try{
+      scene.globe.show = false; if(scene.skyAtmosphere) scene.skyAtmosphere.show = false; if(scene.skyBox) scene.skyBox.show = false; if(scene.sun) scene.sun.show = false; if(scene.moon) scene.moon.show = false;
+      scene.backgroundColor = new C.Color(0, 0, 0, 1); scene.postProcessStages.fxaa.enabled = false; scene.fog.enabled = false; viewer.entities.show = false;
+      camera.switchToOrthographicFrustum();
+      const W = scene.canvas.width, H = scene.canvas.height, cw = scene.canvas.clientWidth, k = W/cw, g = R.g;
+      const tw = W*g - 6, th = H*g - 6, nTx = Math.ceil(R.nx*g/tw), nTy = Math.ceil(R.ny*g/th);
+      const xL = R.x0, yT = R.yN, xR = R.x0 + R.nx*g, yB = R.yN - R.ny*g; let done = 0;
+      for(let ty=0; ty<nTy; ty++) for(let tx=0; tx<nTx; tx++){
+        const cx = Math.min(xR - tw/2, xL + tw/2 + tx*tw), cy = Math.max(yB + th/2, yT - th/2 - ty*th), ll = toLL(cx, cy);
+        prog('3D 모델 촬영 ' + (++done) + '/' + (nTx*nTy) + '…');
+        camera.setView({ destination:C.Cartesian3.fromDegrees(ll[0], ll[1], 1500), orientation:{ heading:0, pitch:-Math.PI/2, roll:0 } });
+        camera.frustum.width = W*g;
+        TS.forEach(t=>{ t.customShader = undefined; });
+        await waitTiles(15000); viewer.render(); viewer.render(); const col = grab();
+        // 화면 화소 ↔ 기준 좌표(동·북 m): 연직 직교라 높이와 무관한 1차 변환
+        const pxOf = (x, y)=>{ const l2 = toLL(x, y); const s = scene.cartesianToCanvasCoordinates(C.Cartesian3.fromDegrees(l2[0], l2[1], 0)); return s ? [s.x*k, s.y*k] : null; };
+        const a0 = pxOf(cx, cy), ax = pxOf(cx+50, cy), ay = pxOf(cx, cy+50); if(!a0 || !ax || !ay) continue;
+        const A6 = [a0[0], a0[1], (ax[0]-a0[0])/50, (ax[1]-a0[1])/50, (ay[0]-a0[0])/50, (ay[1]-a0[1])/50];
+        const zb = -200, E2L = C.Matrix4.multiply(BO.Einv, camera.inverseViewMatrix, new C.Matrix4()), sh = mkEncShader(E2L, zb);
+        TS.forEach(t=>{ t.customShader = sh; }); for(let i=0;i<5;i++){ viewer.render(); await wait(80); } viewer.render();
+        const hd = grab();
+        // 높이 보정: pickPosition(깊이 버퍼) 표본과의 중앙값 차
+        const dec = o=>{ const v = hd[o]*65536 + hd[o+1]*256 + hd[o+2]; return v ? (v-1)/100 + zb : NaN; }, diffs = [];
+        for(let i=1;i<9;i++) for(let j=1;j<7;j++){ const X = Math.round(W*i/9), Y = Math.round(H*j/7), z = dec((Y*W+X)*4); if(!isFinite(z)) continue; let c = null; try{ c = scene.pickPosition(new C.Cartesian2(X/k, Y/k)); }catch(e){} if(!c) continue; diffs.push(z - C.Matrix4.multiplyByPoint(BO.Einv, c, new C.Cartesian3()).z); }
+        const corr = diffs.length >= 5 ? pct(diffs, 0.5) : 0;
+        // 전체 격자에 채우기
+        const gx0 = Math.max(0, Math.floor((cx - tw/2 - 3 - R.x0)/g)), gx1 = Math.min(R.nx-1, Math.ceil((cx + tw/2 + 3 - R.x0)/g)), gy0 = Math.max(0, Math.floor((R.yN - (cy + th/2 + 3))/g)), gy1 = Math.min(R.ny-1, Math.ceil((R.yN - (cy - th/2 - 3))/g));
+        for(let j=gy0; j<=gy1; j++){ const y = R.yN - (j+.5)*g; for(let i=gx0; i<=gx1; i++){ const x = R.x0 + (i+.5)*g, dx = x - cx, dy = y - cy;
+          const X = Math.round(A6[0] + A6[2]*dx + A6[4]*dy), Y = Math.round(A6[1] + A6[3]*dx + A6[5]*dy); if(X < 1 || Y < 1 || X >= W-1 || Y >= H-1) continue;
+          const o = (Y*W + X)*4, z = dec(o), q = j*R.nx + i; if(!isFinite(z)) continue; R.Z[q] = z - corr; R.RGB[q*3] = col[o]; R.RGB[q*3+1] = col[o+1]; R.RGB[q*3+2] = col[o+2]; } }
+      }
+    } finally { restore(); }
+  }
+
+  // ---------- 지형 ----------
+  async function terrainGrid(x0, y0, x1, y1, step){
+    const nx = Math.max(2, Math.ceil((x1-x0)/step)+1), ny = Math.max(2, Math.ceil((y1-y0)/step)+1), cs = [];
+    for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){ const ll = toLL(x0+i*step, y0+j*step); cs.push(C.Cartographic.fromDegrees(ll[0], ll[1])); }
+    try{ await C.sampleTerrainMostDetailed(scene.terrainProvider, cs); }catch(e){ console.warn('terrain', e); }
+    const A = new Float32Array(nx*ny); for(let k=0;k<A.length;k++){ const i = k % nx, j = (k - i)/nx; const h = cs[k].height; A[k] = zl(isFinite(h) ? h : 0, x0+i*step, y0+j*step); }
+    return { x0, y0, step, nx, ny, A };
+  }
+  function bil(G, x, y){ const fx = Math.max(0, Math.min(G.nx-1.001, (x-G.x0)/G.step)), fy = Math.max(0, Math.min(G.ny-1.001, (y-G.y0)/G.step)); const i = Math.floor(fx), j = Math.floor(fy), a = fx-i, b = fy-j, A = G.A, n = G.nx;
+    return A[j*n+i]*(1-a)*(1-b) + A[j*n+i+1]*a*(1-b) + A[(j+1)*n+i]*(1-a)*b + A[(j+1)*n+i+1]*a*b; }
+
+  // ---------- 격자 형태 연산 ----------
+  function minmax2D(A, nx, ny, r, isMin){ const T = new Float32Array(A.length), O = new Float32Array(A.length); const f = isMin ? Math.min : Math.max, init = isMin ? Infinity : -Infinity;
+    for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){ let m = init; for(let k=Math.max(0, i-r); k<=Math.min(nx-1, i+r); k++){ const v = A[j*nx+k]; if(v === v) m = f(m, v); } T[j*nx+i] = m; }
+    for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){ let m = init; for(let k=Math.max(0, j-r); k<=Math.min(ny-1, j+r); k++){ const v = T[k*nx+i]; if(isFinite(v)) m = f(m, v); } O[j*nx+i] = isFinite(m) ? m : NaN; }
+    return O; }
+  function boxMean(A, nx, ny, r){ const T = new Float32Array(A.length), O = new Float32Array(A.length);
+    for(let j=0;j<ny;j++){ let s = 0, n = 0; for(let i=-r;i<nx;i++){ const a = i+r, b = i-r-1; if(a < nx){ const v = A[j*nx+a]; if(v === v){ s += v; n++; } } if(b >= 0){ const v = A[j*nx+b]; if(v === v){ s -= v; n--; } } if(i >= 0) T[j*nx+i] = n ? s/n : NaN; } }
+    for(let i=0;i<nx;i++){ let s = 0, n = 0; for(let j=-r;j<ny;j++){ const a = j+r, b = j-r-1; if(a < ny){ const v = T[a*nx+i]; if(v === v){ s += v; n++; } } if(b >= 0){ const v = T[b*nx+i]; if(v === v){ s -= v; n--; } } if(j >= 0) O[j*nx+i] = n ? s/n : NaN; } }
+    return O; }
+  function morph(M, nx, ny, r, dil){ // 이진 팽창/침식 (정사각 창)
+    const T = new Uint8Array(M.length), O = new Uint8Array(M.length);
+    for(let j=0;j<ny;j++){ let c = 0; for(let i=-r;i<nx;i++){ const a = i+r, b = i-r-1; if(a < nx && M[j*nx+a]) c++; if(b >= 0 && M[j*nx+b]) c--; if(i >= 0){ const w = Math.min(nx-1, i+r) - Math.max(0, i-r) + 1; T[j*nx+i] = dil ? (c > 0 ? 1 : 0) : (c === w ? 1 : 0); } } }
+    for(let i=0;i<nx;i++){ let c = 0; for(let j=-r;j<ny;j++){ const a = j+r, b = j-r-1; if(a < ny && T[a*nx+i]) c++; if(b >= 0 && T[b*nx+i]) c--; if(j >= 0){ const w = Math.min(ny-1, j+r) - Math.max(0, j-r) + 1; O[j*nx+i] = dil ? (c > 0 ? 1 : 0) : (c === w ? 1 : 0); } } }
+    return O; }
+
+  // ---------- ②③ 지면 · 건물 높이 · 나무 ----------
+  async function analyzeRaster(R, prog){
+    const { nx, ny, g, Z } = R, N = nx*ny;
+    prog('지면 높이 계산 중…');
+    const TG = await terrainGrid(R.x0, R.yN - ny*g, R.x0 + nx*g, R.yN, 5); R.TG = TG;
+    const d = []; for(let q=0;q<N;q+=7){ const z = Z[q]; if(!isFinite(z)) continue; const i = q % nx, j = (q - i)/nx; d.push(z - bil(TG, R.x0 + (i+.5)*g, R.yN - (j+.5)*g)); }
+    const off = isFinite(pct(d, 0.03)) ? pct(d, 0.03) : 0; R.off = off;
+    // 2 m 칸 최솟값 → 열림(50 m 창) → 지형 ± 범위로 제한 → 평활
+    const cs = 2, f = Math.max(1, Math.round(cs/g)), cnx = Math.ceil(nx/f), cny = Math.ceil(ny/f), CM = new Float32Array(cnx*cny).fill(NaN);
+    for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){ const z = Z[j*nx+i]; if(!isFinite(z)) continue; const c = ((j/f)|0)*cnx + ((i/f)|0); if(!(CM[c] <= z)) CM[c] = z; }
+    // 점진 형태 필터(PMF): 창을 4→64 m로 키우며 열기, 경사를 감안한 허용 단차보다 크게 깎이면 지면 아님
+    const cell = f*g, NG = new Uint8Array(cnx*cny); let S = CM, wPrev = 0;
+    for(const w of [4, 8, 16, 32, 64]){ const r = Math.max(1, Math.round(w/2/cell)); const O2 = minmax2D(minmax2D(S, cnx, cny, r, true), cnx, cny, r, false); const dh = Math.min(4, 0.6 + 0.35*(w - wPrev));
+      for(let c=0;c<S.length;c++){ if(isFinite(S[c]) && isFinite(O2[c]) && S[c] - O2[c] > dh) NG[c] = 1; } S = O2; wPrev = w; }
+    let G = new Float32Array(cnx*cny).fill(NaN);
+    for(let j=0;j<cny;j++) for(let i=0;i<cnx;i++){ const c = j*cnx+i; if(NG[c] || !isFinite(CM[c])) continue; const t = bil(TG, R.x0 + (i+.5)*cell, R.yN - (j+.5)*cell) + off; if(CM[c] > t + 8) continue; G[c] = CM[c]; }
+    // 빈 곳(건물 아래) 채우기: 창을 키우며 주변 지면 평균
+    const G0 = G.slice(); for(const r of [2, 4, 8, 16, 32, 64]){ const B = boxMean(G0, cnx, cny, r); let left = 0; for(let c=0;c<G.length;c++){ if(!isFinite(G[c])){ if(isFinite(B[c])) G[c] = B[c]; else left++; } } if(!left) break; }
+    for(let j=0;j<cny;j++) for(let i=0;i<cnx;i++){ const c = j*cnx+i; if(!isFinite(G[c])) G[c] = bil(TG, R.x0 + (i+.5)*cell, R.yN - (j+.5)*cell) + off; }
+    G = boxMean(G, cnx, cny, 1); R.NG = NG;
+    const gAt = (i, j)=>{ const fx = Math.max(0, Math.min(cnx-1.001, (i+.5)/f - .5)), fy = Math.max(0, Math.min(cny-1.001, (j+.5)/f - .5)), a = Math.floor(fx), b = Math.floor(fy), u = fx-a, v = fy-b; return G[b*cnx+a]*(1-u)*(1-v) + G[b*cnx+a+1]*u*(1-v) + G[(b+1)*cnx+a]*(1-u)*v + G[(b+1)*cnx+a+1]*u*v; };
+    const HN = new Float32Array(N).fill(NaN), GR = new Float32Array(N); for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){ const q = j*nx+i, gz = gAt(i, j); GR[q] = gz; if(isFinite(Z[q])) HN[q] = Z[q] - gz; }
+    // 거칠기: 2차 차분(큰 단차 1 m 이상은 제외) → 1 m 창 평균
+    prog('나무 · 건물 구분 중…');
+    const LP = new Float32Array(N).fill(NaN), J = 1.0;
+    for(let j=1;j<ny-1;j++) for(let i=1;i<nx-1;i++){ const q = j*nx+i, z = Z[q]; if(!isFinite(z)) continue; const e = Z[q+1]-z, w = z-Z[q-1], n = Z[q-nx]-z, s = z-Z[q+nx];
+      let l = 0, c = 0; if(Math.abs(e) < J && Math.abs(w) < J){ l += Math.abs(e - w); c++; } if(Math.abs(n) < J && Math.abs(s) < J){ l += Math.abs(n - s); c++; } if(c) LP[q] = l/c; }
+    const RG = boxMean(LP, nx, ny, Math.max(1, Math.round(0.5/g)));
+    const EXG = new Float32Array(N); for(let q=0;q<N;q++){ const r = R.RGB[q*3], gg = R.RGB[q*3+1], b = R.RGB[q*3+2]; EXG[q] = (2*gg - r - b)/(r + gg + b + 1); }
+    Object.assign(R, { HN, GR, RG, EXG });
+  }
+
+  // ---------- ④⑤⑥ 건물 덩어리 → 외곽선 ----------
+  function classify(R){
+    const { nx, ny, g, HN, RG, EXG, Z } = R, N = nx*ny, O = BO.opt, rT = R.rT || 0.10, rT2 = R.rT2 || 0.22;
+    let M = new Uint8Array(N);
+    const PM = R.PUBM;
+    for(let q=0;q<N;q++){ const h = HN[q]; if(!(h >= O.minH) || R.BAN[q]) continue; const rg = RG[q], ex = EXG[q];
+      // 공공 건물 바닥면(여유 1.5 m) 안: 색칠한 초록 옥상이 많아 거칠기 위주로만 나무 판정
+      const veg = PM && PM[q] ? (rg > rT2 && ex > 0.1) || (ex > 0.4 && rg > 0.06)
+        : rg > rT2 || (ex > 0.35 && rg > 0.035) || (ex > 0.12 && rg > 0.07) || (ex > 0.05 && rg > rT + 0.04);
+      if(!veg) M[q] = 1; }
+    const r1 = Math.max(1, Math.round(0.6/g)); M = morph(morph(M, nx, ny, r1, false), nx, ny, r1, true);   // 열기: 담장·전선·가는 지물 제거
+    const r2 = Math.max(1, Math.round(0.4/g)); M = morph(morph(M, nx, ny, r2, true), nx, ny, r2, false);   // 닫기: 옥상 설비 사이 틈 메움(건물 사이 0.8 m 이상 간격은 유지)
+    // 덩어리 번호
+    const L = new Int32Array(N), Q = new Int32Array(N), comps = []; let id = 0;
+    for(let s=0;s<N;s++){ if(!M[s] || L[s]) continue; id++; let h = 0, t = 0; Q[t++] = s; L[s] = id;
+      while(h < t){ const q = Q[h++], i = q % nx; const nb = [i > 0 ? q-1 : -1, i < nx-1 ? q+1 : -1, q >= nx ? q-nx : -1, q < N-nx ? q+nx : -1]; for(const n of nb){ if(n < 0 || !M[n] || L[n]) continue; L[n] = id; Q[t++] = n; } }
+      comps.push({ id, px:Q.slice(0, t) }); }
+    return { L, comps };
+  }
+  function trace(px, nx, g, x0, yN){ // 화소 집합 → 고리(외곽 + 구멍), 기준 좌표 m
+    let i0 = 1e9, j0 = 1e9, i1 = -1, j1 = -1; for(const q of px){ const i = q % nx, j = (q - i)/nx; if(i < i0) i0 = i; if(i > i1) i1 = i; if(j < j0) j0 = j; if(j > j1) j1 = j; }
+    const W = i1 - i0 + 1, H = j1 - j0 + 1, B = new Uint8Array(W*H); for(const q of px){ const i = q % nx, j = (q - i)/nx; B[(j-j0)*W + (i-i0)] = 1; }
+    const VW = W+1, nxt = new Map(), add = (a, b, c, d)=>{ const k = b*VW + a; let r = nxt.get(k); if(!r){ r = []; nxt.set(k, r); } r.push(d*VW + c); };
+    const m = (x, y)=>x >= 0 && y >= 0 && x < W && y < H && B[y*W+x];
+    for(let y=0;y<H;y++) for(let x=0;x<W;x++){ if(!B[y*W+x]) continue; if(!m(x, y-1)) add(x, y, x+1, y); if(!m(x+1, y)) add(x+1, y, x+1, y+1); if(!m(x, y+1)) add(x+1, y+1, x, y+1); if(!m(x-1, y)) add(x, y+1, x, y); }
+    const rings = [];
+    for(const [k0, a0] of nxt){ while(a0.length){ const ring = []; let k = k0, prev = null, guard = 0;
+      while(guard++ < 4e6){ const arr = nxt.get(k); if(!arr || !arr.length) break; let pick = 0;
+        if(arr.length > 1 && prev !== null){ const px_ = prev % VW, py = (prev/VW)|0, cx = k % VW, cy = (k/VW)|0, dx = cx-px_, dy = cy-py; let best = -9; for(let i=0;i<arr.length;i++){ const ex = arr[i] % VW - cx, ey = ((arr[i]/VW)|0) - cy, turn = dx*ey - dy*ex; if(turn > best){ best = turn; pick = i; } } }
+        const n2 = arr.splice(pick, 1)[0]; ring.push(k); prev = k; k = n2; if(k === k0) break; }
+      if(ring.length >= 4) rings.push(ring.map(v=>[x0 + (i0 + v % VW)*g, yN - (j0 + ((v/VW)|0))*g])); } }
+    // 바깥(가장 큰 면적) + 그 안의 구멍
+    const sA = r=>{ let a = 0; for(let i=0;i<r.length;i++){ const p = r[i], o = r[(i+1)%r.length]; a += p[0]*o[1]-o[0]*p[1]; } return a/2; };
+    rings.sort((a, b)=>Math.abs(sA(b)) - Math.abs(sA(a)));
+    if(!rings.length) return null; const outer = rings[0], holes = rings.slice(1).filter(r=>Math.abs(sA(r)) >= 30 && inPoly(r[0][0], r[0][1], outer) && holeLow(r));
+    return { outer, holes };
+  }
+  function holeLow(r){ // 중정: 구멍 안이 대부분 지면 높이일 때만 구멍으로 둠
+    const R = BO.R; if(!R || !R.HN) return true; const b = bboxOf(r); let n = 0, lo = 0;
+    for(let y=b[1]+0.25; y<b[3]; y+=0.5) for(let x=b[0]+0.25; x<b[2]; x+=0.5){ if(!inPoly(x, y, r)) continue; const i = Math.floor((x - R.x0)/R.g), j = Math.floor((R.yN - y)/R.g); if(i < 0 || j < 0 || i >= R.nx || j >= R.ny) continue; const h = R.HN[j*R.nx+i]; if(!isFinite(h)) continue; n++; if(h < BO.opt.minH) lo++; }
+    return n > 0 && lo/n > 0.6; }
+  function regularize(ring, opt){
+    opt = opt || {}; const tolDP = opt.tol || 0.35, snapDeg = opt.snapDeg || 15, minLen = opt.minLen || 0.6, ortho = opt.ortho !== false;
+    const A = r => { let a = 0; for(let i=0;i<r.length;i++){ const p = r[i], q = r[(i+1)%r.length]; a += p[0]*q[1]-q[0]*p[1]; } return a/2; };
+    function dpOpen(pts, tol){ if(pts.length<3) return pts; const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length-1] = 1; const st = [[0, pts.length-1]];
+      while(st.length){ const [a,b] = st.pop(); const [ax,ay] = pts[a], [bx,by] = pts[b]; const L = Math.hypot(bx-ax, by-ay)||1e-9; let md = -1, mi = -1;
+        for(let i=a+1;i<b;i++){ const d = Math.abs((bx-ax)*(ay-pts[i][1]) - (ax-pts[i][0])*(by-ay))/L; if(d>md){ md = d; mi = i; } } if(md>tol){ keep[mi] = 1; st.push([a,mi],[mi,b]); } }
+      return pts.filter((_,i)=>keep[i]); }
+    function dpClosed(r, tol){ let far = 0, fd = -1; for(let i=1;i<r.length;i++){ const d = Math.hypot(r[i][0]-r[0][0], r[i][1]-r[0][1]); if(d>fd){ fd = d; far = i; } } const a = dpOpen(r.slice(0,far+1), tol), b = dpOpen(r.slice(far).concat([r[0]]), tol); return a.concat(b.slice(1,-1)); }
+    let pts = ring.slice(); if(pts.length>2 && Math.hypot(pts[0][0]-pts[pts.length-1][0], pts[0][1]-pts[pts.length-1][1])<1e-6) pts.pop();
+    const a0 = Math.abs(A(pts)); const src = pts.slice();
+    pts = dpClosed(pts, tolDP); if(pts.length<4 || !ortho) return pts;
+    let Cs = 0, Sn = 0; for(let i=0;i<pts.length;i++){ const p = pts[i], q = pts[(i+1)%pts.length]; const dx = q[0]-p[0], dy = q[1]-p[1], L = Math.hypot(dx,dy); const al = Math.atan2(dy,dx); Cs += L*Math.cos(4*al); Sn += L*Math.sin(4*al); }
+    const th = Math.atan2(Sn, Cs)/4;
+    let lines = [];
+    for(let i=0;i<pts.length;i++){ const p = pts[i], q = pts[(i+1)%pts.length]; const dx = q[0]-p[0], dy = q[1]-p[1], L = Math.hypot(dx,dy); if(L<1e-6) continue; let al = Math.atan2(dy,dx);
+      const k = Math.round((al-th)/(Math.PI/2)); const sn = th + k*Math.PI/2; if(Math.abs(al-sn) < snapDeg*Math.PI/180) al = sn;
+      lines.push({ m:[(p[0]+q[0])/2, (p[1]+q[1])/2], d:[Math.cos(al), Math.sin(al)], L }); }
+    const off = (ln, p) => (p[0]-ln.m[0])*(-ln.d[1]) + (p[1]-ln.m[1])*ln.d[0];
+    let changed = true, guard = 0;
+    while(changed && guard++ < 60 && lines.length>3){ changed = false;
+      for(let i=0;i<lines.length && lines.length>3;i++){ const a = lines[i], j = (i+1)%lines.length, b = lines[j];
+        const par = Math.abs(a.d[0]*b.d[1]-a.d[1]*b.d[0]) < 1e-6 && (a.d[0]*b.d[0]+a.d[1]*b.d[1]) > 0;
+        if(par && Math.abs(off(a, b.m)) < minLen){ const w = a.L+b.L; a.m = [(a.m[0]*a.L+b.m[0]*b.L)/w, (a.m[1]*a.L+b.m[1]*b.L)/w]; a.L = w; lines.splice(j,1); changed = true; } } }
+    function build(){ const out = []; for(let i=0;i<lines.length;i++){ const a = lines[i], b = lines[(i+1)%lines.length]; const den = a.d[0]*b.d[1]-a.d[1]*b.d[0];
+        if(Math.abs(den)<1e-9){ const t = (b.m[0]-a.m[0])*a.d[0]+(b.m[1]-a.m[1])*a.d[1]; const pa = [a.m[0]+a.d[0]*t*0.5, a.m[1]+a.d[1]*t*0.5]; const s2 = off(a, b.m); out.push(pa, [pa[0]-a.d[1]*s2, pa[1]+a.d[0]*s2]); continue; }
+        const t = ((b.m[0]-a.m[0])*b.d[1]-(b.m[1]-a.m[1])*b.d[0])/den; out.push([a.m[0]+a.d[0]*t, a.m[1]+a.d[1]*t]); }
+      return out; }
+    let res = build();
+    for(let it=0; it<60 && lines.length>4; it++){ let mi = -1, ml = 1e9; for(let i=0;i<res.length;i++){ const p = res[i], q = res[(i+1)%res.length]; const L = Math.hypot(q[0]-p[0], q[1]-p[1]); if(L<ml){ ml = L; mi = i; } } if(ml>=minLen) break;
+      // res 꼭짓점 i는 lines[i]∩lines[i+1] (평행 연결점은 2개라 인덱스가 어긋날 수 있어 가장 가까운 선 제거)
+      const p = res[mi], q = res[(mi+1)%res.length], mid = [(p[0]+q[0])/2, (p[1]+q[1])/2]; let bi = 0, bd = 1e9; for(let i=0;i<lines.length;i++){ const d = Math.abs(off(lines[i], mid)) + 0.001*lines[i].L; if(d<bd){ bd = d; bi = i; } }
+      lines.splice(bi,1); res = build(); }
+    const a1 = Math.abs(A(res)); let maxJump = 0; for(const p of res){ let md = 1e9; for(let i=0;i<src.length;i++){ const a = src[i], b = src[(i+1)%src.length]; const dx = b[0]-a[0], dy = b[1]-a[1], L2 = dx*dx+dy*dy||1e-9; let t = ((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2; t = Math.max(0,Math.min(1,t)); md = Math.min(md, Math.hypot(a[0]+t*dx-p[0], a[1]+t*dy-p[1])); } maxJump = Math.max(maxJump, md); }
+    if(!(a1>0) || Math.abs(a1-a0)/a0 > 0.10 || maxJump > 2.5) return pts;
+    return res;
+  }
+
+
+  function cleanRing(r, mode, g){ if(mode === 'raw') return r; const t = Math.max(0.45, 2.2*g); if(mode === 'simp') return regularize(r, { tol:t, ortho:false }); return regularize(r, { tol:Math.max(0.55, 2.6*g), snapDeg:20, minLen:Math.max(0.9, 4*g), ortho:true }); }
+
+  // ---------- 공공 데이터 ----------
+  function jsonp(url, ms){ return new Promise((res, rej)=>{ const cb = '__vw67_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); const s = document.createElement('script'); let done = false;
+    const fin = ()=>{ done = true; clearTimeout(t); try{ delete window[cb]; }catch(e){ window[cb] = undefined; } s.remove(); };
+    const t = setTimeout(()=>{ if(!done){ fin(); window[cb] = ()=>{}; rej(new Error('응답 시간 초과')); } }, ms || 12000);
+    window[cb] = d=>{ if(done) return; fin(); res(d); }; s.onerror = ()=>{ if(done) return; fin(); rej(new Error('네트워크 오류')); };
+    s.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cb; document.head.appendChild(s); }); }
+  const USE = { '01':'단독주택','02':'공동주택','03':'제1종 근린생활시설','04':'제2종 근린생활시설','05':'문화 및 집회시설','06':'종교시설','07':'판매시설','08':'운수시설','09':'의료시설','10':'교육연구시설','11':'노유자시설','12':'수련시설','13':'운동시설','14':'업무시설','15':'숙박시설','16':'위락시설','17':'공장','18':'창고시설','19':'위험물 저장·처리시설','20':'자동차 관련시설','21':'동물·식물 관련시설','22':'자원순환 관련시설','23':'교정 및 군사시설','24':'방송통신시설','25':'발전시설','26':'묘지 관련시설','27':'관광 휴게시설','28':'장례시설','29':'야영장시설','30':'가설건축물' };
+  const SUB = { '01001':'단독주택','01002':'다중주택','01003':'다가구주택','02001':'아파트','02002':'연립주택','02003':'다세대주택','02004':'기숙사' };
+  const useName = c=>{ c = String(c || '').trim(); if(!c) return ''; return SUB[c] || USE[c.slice(0, 2)] || c; };
+  async function publicBuildings(bbLL){
+    const out = [];
+    try{ for(let page=1; page<=5; page++){
+        const d = await jsonp('https://api.vworld.kr/req/data?service=data&request=GetFeature&data=LT_C_BLDGINFO&key=' + VW_KEY + '&domain=' + encodeURIComponent(VW_DOMAIN) + '&geomFilter=BOX(' + bbLL.map(v=>v.toFixed(7)).join(',') + ')&geometry=true&crs=EPSG:4326&format=json&size=1000&page=' + page);
+        const r = d && d.response; if(!r || r.status !== 'OK') break; const fs = (r.result && r.result.featureCollection && r.result.featureCollection.features) || [];
+        for(const f of fs){ const gm = f.geometry; if(!gm) continue; const polys = gm.type === 'Polygon' ? [gm.coordinates] : gm.type === 'MultiPolygon' ? gm.coordinates : []; const p = f.properties || {};
+          for(const pc of polys){ const ring = pc[0].map(c=>toXY(c[0], c[1])); out.push({ ring, bb:bboxOf(ring), name:(p.bld_nm || '').trim(), dong:(p.dong_nm || '').trim(), use:useName(p.usability), flr:+p.grnd_flr || 0, area:+p.archarea || 0, src:'브이월드' }); } }
+        const tot = r.page ? +r.page.total : 1; if(page >= tot || fs.length < 1000) break; } }catch(e){ console.warn('vworld', e); }
+    // 인천: 도로명주소 건물(이름 보충)
+    const inInc = bbLL[0] > 124.5 && bbLL[2] < 126.95 && bbLL[1] > 36.9 && bbLL[3] < 37.85;
+    if(inInc){ try{ const j = await (await fetch('https://imap.incheon.go.kr/MapPrimeServer/map/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=incheon:por_tl_spbd_buld&SRSNAME=EPSG:4326&OUTPUTFORMAT=application/json&COUNT=3000&BBOX=' + bbLL.map(v=>v.toFixed(6)).join(',') + ',EPSG:4326')).json();
+        for(const f of (j.features || [])){ const gm = f.geometry; if(!gm) continue; const rs = gm.type === 'Polygon' ? [gm.coordinates[0]] : gm.coordinates.map(p=>p[0]); const pr = f.properties || {}; const nm = (pr.buld_nm || pr.pos_bul_nm || '').trim();
+          for(const r of rs){ const ring = r.map(c=>toXY(c[0], c[1])); out.push({ ring, bb:bboxOf(ring), name:nm, dong:'', use:'', flr:+pr.gro_flo_co || 0, area:0, src:'인천 도로명주소', aux:true }); } } }catch(e){ console.warn('incheon wfs', e); } }
+    return out;
+  }
+
+  // ---------- 건물 목록 만들기 ----------
+  function cellXY(R, q){ const i = q % R.nx, j = (q - i)/R.nx; return [R.x0 + (i+.5)*R.g, R.yN - (j+.5)*R.g]; }
+  function buildList(prog){
+    const R = BO.R, O = BO.opt; prog && prog('건물 외곽선 정리 중…');
+    const { comps } = classify(R), minPx = O.minA/(R.g*R.g), main = BO.pub.filter(p=>!p.aux), aux = BO.pub.filter(p=>p.aux);
+    const units = [];
+    for(const c of comps){ if(c.px.length < minPx) continue;
+      // 이 덩어리와 겹치는 공공 건물(브이월드)
+      let bb = [1e9, 1e9, -1e9, -1e9]; const pts = []; const st = Math.max(1, Math.floor(c.px.length/1500));
+      for(let k=0;k<c.px.length;k+=st){ const p = cellXY(R, c.px[k]); pts.push(p); if(p[0] < bb[0]) bb[0] = p[0]; if(p[1] < bb[1]) bb[1] = p[1]; if(p[0] > bb[2]) bb[2] = p[0]; if(p[1] > bb[3]) bb[3] = p[1]; }
+      const hits = [];
+      for(const pb of main){ if(pb.bb[0] > bb[2] || pb.bb[2] < bb[0] || pb.bb[1] > bb[3] || pb.bb[3] < bb[1]) continue; let n = 0; for(const p of pts) if(inPoly(p[0], p[1], pb.ring)) n++; const a = n*st*R.g*R.g; if(a >= 8) hits.push({ pb, a }); }
+      // 같은 외곽선(동별 대장) 중복 제거
+      const uniq = []; for(const h of hits){ const d = uniq.find(u=>Math.abs(u.pb.bb[0]-h.pb.bb[0]) < 0.5 && Math.abs(u.pb.bb[1]-h.pb.bb[1]) < 0.5 && Math.abs(u.pb.bb[2]-h.pb.bb[2]) < 0.5 && Math.abs(u.pb.bb[3]-h.pb.bb[3]) < 0.5); if(d){ if(!d.pb.name && h.pb.name) d.pb = h.pb; } else uniq.push(h); }
+      const big = uniq.filter(h=>h.a >= Math.max(15, 0.15*Math.abs(polyArea(h.pb.ring))));
+      if(big.length >= 2){ // 공공 경계로 나눔
+        const parts = big.map(h=>({ pb:h.pb, px:[] }));
+        for(const q of c.px){ const p = cellXY(R, q); let bi = -1; for(let k=0;k<parts.length;k++) if(inPoly(p[0], p[1], parts[k].pb.ring)){ bi = k; break; } if(bi < 0){ let bd = 1e9; for(let k=0;k<parts.length;k++){ const dd = dPoly(p[0], p[1], parts[k].pb.ring); if(dd < bd){ bd = dd; bi = k; } } } parts[bi].px.push(q); }
+        for(const pt of parts) if(pt.px.length >= minPx) units.push({ px:pt.px, pb:pt.pb, split:true });
+      } else units.push({ px:c.px, pb:big[0] ? big[0].pb : (uniq.sort((a, b)=>b.a-a.a)[0] || {}).pb || null });
+    }
+    // 외곽선 · 속성
+    const list = [];
+    for(const u of units){
+      // 덩어리 단위 나무 판정: 평평한 화소 비율이 낮고 초록이면 나무
+      { let pl = 0, nn = 0; const ex = []; const st2 = Math.max(1, Math.floor(u.px.length/600)); for(let k=0;k<u.px.length;k+=st2){ const q = u.px[k], rg = R.RG[q]; if(isFinite(rg)){ nn++; if(rg < 0.03) pl++; } ex.push(R.EXG[q]); }
+        ex.sort((a, b)=>a-b); const pf = nn ? pl/nn : 0, exm = ex[ex.length>>1] || 0; u.pf = pf;
+        if(pf < 0.12 && (exm > 0.1 || !u.pb)) continue; if(pf < 0.2 && exm > 0.3) continue; }
+      const tr = trace(u.px, R.nx, R.g, R.x0, R.yN); if(!tr) continue;
+      let cx = 0, cy = 0; for(const q of u.px){ const p = cellXY(R, q); cx += p[0]; cy += p[1]; } cx /= u.px.length; cy /= u.px.length;
+      if(!inPoly(cx, cy, BO.loc)) continue;
+      const outer = cleanRing(tr.outer, O.simp, R.g), holes = tr.holes.map(h=>cleanRing(h, O.simp, R.g)).filter(h=>h.length >= 3);
+      const hs = u.px.map(q=>R.HN[q]).filter(isFinite).sort((a, b)=>a-b), gz = u.px.map(q=>R.GR[q]), zs = u.px.map(q=>R.Z[q]).filter(isFinite).sort((a, b)=>a-b);
+      const hMax = hs.length ? hs[Math.floor(hs.length*0.95)] : 0, hMean = hs.length ? hs.reduce((s, v)=>s+v, 0)/hs.length : 0, base = gz.reduce((s, v)=>s+v, 0)/gz.length, top = zs.length ? zs[Math.floor(zs.length*0.95)] : base + hMax;
+      let name = u.pb ? u.pb.name : '', a2 = null; if(!name && aux.length){ for(const pb of aux){ if(inPoly(cx, cy, pb.ring)){ a2 = pb; break; } } if(a2) name = a2.name; }
+      // 주변 나무 비율(신뢰도)
+      let vg = 0, ed = 0; const st = Math.max(1, Math.floor(u.px.length/400)); for(let k=0;k<u.px.length;k+=st){ const q = u.px[k]; if(R.EXG[q] > 0.05) vg++; ed++; }
+      const conf = Math.max(0.3, Math.min(0.98, (u.pb ? 0.9 : 0.7) - 0.3*Math.max(0, vg/ed - 0.3) + 0.15*Math.min(1, (u.pf || 0)/0.5) - 0.075));
+      list.push({ px:u.px, outer, holes, cx, cy, area:Math.abs(polyArea(outer)) - holes.reduce((s, h)=>s + Math.abs(polyArea(h)), 0), perim:[outer, ...holes].reduce((s, r)=>s + perim(r), 0),
+        hMax, hMean, base, top, floors:Math.max(1, Math.round((hMax - 0.5)/3.0)), pb:u.pb, name, use:u.pb ? u.pb.use : '', flr:u.pb ? u.pb.flr : (a2 ? a2.flr : 0), src:u.pb ? (u.split ? '3D+공공(분할)' : '3D+공공') : '3D(미등록)', conf, off:false }); }
+    BO.bld = list; BO.sel.clear(); draw(); bar();
+  }
+  const polyArea = r=>{ let a = 0; for(let i=0;i<r.length;i++){ const p = r[i], o = r[(i+1)%r.length]; a += p[0]*o[1]-o[0]*p[1]; } return a/2; };
+  const perim = r=>{ let L = 0; for(let i=0;i<r.length;i++){ const p = r[i], o = r[(i+1)%r.length]; L += Math.hypot(o[0]-p[0], o[1]-p[1]); } return L; };
+
+  // ---------- 미리보기 ----------
+  const COL = { pub:C.Color.fromCssColorString('#FFD400'), raw:C.Color.fromCssColorString('#38D6FF'), off:C.Color.fromCssColorString('#FF4D4D'), sel:C.Color.WHITE, area:C.Color.fromCssColorString('#c6f432') };
+  function clearEnts(){ for(const e of BO.ents){ try{ viewer.entities.remove(e); }catch(_){} } BO.ents = []; }
+  function draw(){ clearEnts(); if(!BO.on) return;
+    const ringPos = (r, z)=>{ const a = r.concat([r[0]]); return a.map(p=>{ const ll = toLL(p[0], p[1]); return C.Cartesian3.fromDegrees(ll[0], ll[1], hEll(z, p[0], p[1])); }); };
+    BO.ents.push(viewer.entities.add({ polyline:{ positions:BO.poly.concat([BO.poly[0]]).map(p=>C.Cartesian3.fromDegrees(p[0], p[1])), clampToGround:true, width:2, material:new C.PolylineDashMaterialProperty({ color:COL.area }) } }));
+    BO.bld.forEach((b, i)=>{ const c = BO.sel.has(i) ? COL.sel : b.off ? COL.off : b.pb ? COL.pub : COL.raw, z = b.top + 0.6;
+      const e = viewer.entities.add({ polygon:{ hierarchy:new C.PolygonHierarchy(ringPos(b.outer, z).slice(0, -1), b.holes.map(h=>new C.PolygonHierarchy(ringPos(h, z).slice(0, -1)))), perPositionHeight:true, material:c.withAlpha(b.off ? 0.12 : 0.22), outline:false } });
+      e.__bo = i; BO.ents.push(e);
+      for(const r of [b.outer, ...b.holes]){ const l = viewer.entities.add({ polyline:{ positions:ringPos(r, z), width:b.off ? 1.5 : 2.5, material:c, depthFailMaterial:c } }); l.__bo = i; BO.ents.push(l); } });
+    scene.requestRender(); }
+  function onClick(e){ if(BO.busy || !BO.bld.length) return; const p = scene.pick(e.position); const i = p && p.id && p.id.__bo; if(i === undefined || i === null) return;
+    if(BO.shift){ if(BO.sel.has(i)) BO.sel.delete(i); else BO.sel.add(i); } else { BO.bld[i].off = !BO.bld[i].off; BO.sel.delete(i); } draw(); bar(); }
+  function mergeSel(){ const ids = [...BO.sel].sort((a, b)=>a-b); if(ids.length < 2) return tst('Shift+클릭으로 합칠 건물을 2개 이상 고르세요', 2200);
+    const R = BO.R, bs = ids.map(i=>BO.bld[i]), px = [].concat(...bs.map(b=>b.px)), main = bs.slice().sort((a, b)=>b.area - a.area)[0];
+    const set = new Uint8Array(R.nx*R.ny); for(const q of px) set[q] = 1; const grow = morph(morph(set, R.nx, R.ny, 2, true), R.nx, R.ny, 2, false); const px2 = []; for(let q=0;q<grow.length;q++) if(grow[q]) px2.push(q);
+    const tr = trace(px2, R.nx, R.g, R.x0, R.yN); if(!tr) return;
+    const outer = cleanRing(tr.outer, BO.opt.simp, R.g), holes = tr.holes.map(h=>cleanRing(h, BO.opt.simp, R.g));
+    const nb = Object.assign({}, main, { px:px2, outer, holes, area:Math.abs(polyArea(outer)) - holes.reduce((s, h)=>s + Math.abs(polyArea(h)), 0), perim:[outer, ...holes].reduce((s, r)=>s + perim(r), 0), hMax:Math.max(...bs.map(b=>b.hMax)), top:Math.max(...bs.map(b=>b.top)), src:main.src + '·합침', off:false });
+    nb.floors = Math.max(1, Math.round((nb.hMax - 0.5)/3.0)); BO.bld = BO.bld.filter((_, i)=>!BO.sel.has(i)); BO.bld.push(nb); BO.sel.clear(); draw(); bar(); tst('건물 ' + ids.length + '개를 하나로 합쳤습니다', 1800); }
+
+  // ---------- 저장 ----------
+  const enc = new TextEncoder();
+  function concat(parts){ const n = parts.reduce((s,p)=>s+p.length,0); const o = new Uint8Array(n); let k = 0; for(const p of parts){ o.set(p,k); k += p.length; } return o; }
+  const CRC_T = (()=>{ const t = new Uint32Array(256); for(let n=0;n<256;n++){ let c = n; for(let k=0;k<8;k++) c = c&1 ? 0xEDB88320^(c>>>1) : c>>>1; t[n] = c>>>0; } return t; })();
+  const crc32 = u8 => { let c = 0xFFFFFFFF; for(let i=0;i<u8.length;i++) c = CRC_T[(c^u8[i])&255]^(c>>>8); return (c^0xFFFFFFFF)>>>0; };
+  async function deflate(u8, fmt){ const cs = new CompressionStream(fmt); const w = cs.writable.getWriter(); w.write(u8); w.close(); return new Uint8Array(await new Response(cs.readable).arrayBuffer()); }
+  async function zip(files){ // [{name, data:Uint8Array}] · deflate(raw) 압축 · UTF-8 이름
+    const locals = [], cents = []; let off = 0; const d = new Date(); const dt = ((d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1)) & 0xFFFF, dd = (((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate()) & 0xFFFF;
+    for(const f of files){ const nm = enc.encode(f.name), crc = crc32(f.data), sz = f.data.length; let body = f.data, meth = 0; try{ const c = await deflate(f.data, 'deflate-raw'); if(c.length < sz){ body = c; meth = 8; } }catch(e){} const csz = body.length;
+      const h = new DataView(new ArrayBuffer(30)); h.setUint32(0,0x04034b50,true); h.setUint16(4,20,true); h.setUint16(6,0x0800,true); h.setUint16(8,meth,true); h.setUint16(10,dt,true); h.setUint16(12,dd,true); h.setUint32(14,crc,true); h.setUint32(18,csz,true); h.setUint32(22,sz,true); h.setUint16(26,nm.length,true); h.setUint16(28,0,true);
+      locals.push(new Uint8Array(h.buffer), nm, body);
+      const c = new DataView(new ArrayBuffer(46)); c.setUint32(0,0x02014b50,true); c.setUint16(4,20,true); c.setUint16(6,20,true); c.setUint16(8,0x0800,true); c.setUint16(10,meth,true); c.setUint16(12,dt,true); c.setUint16(14,dd,true); c.setUint32(16,crc,true); c.setUint32(20,csz,true); c.setUint32(24,sz,true); c.setUint16(28,nm.length,true); c.setUint32(42,off,true);
+      cents.push(new Uint8Array(c.buffer), nm); off += 30 + nm.length + csz; }
+    const cd = concat(cents); const e = new DataView(new ArrayBuffer(22)); e.setUint32(0,0x06054b50,true); e.setUint16(8,files.length,true); e.setUint16(10,files.length,true); e.setUint32(12,cd.length,true); e.setUint32(16,off,true);
+    return concat([...locals, cd, new Uint8Array(e.buffer)]); }
+  // 고리 방향: 바깥(+면적, 반시계) / 구멍(−)
+  const sArea = r => { let a = 0; for(let i=0;i<r.length;i++){ const p = r[i], o = r[(i+1)%r.length]; a += p[0]*o[1]-o[0]*p[1]; } return a/2; };
+  const orient = (r, ccw) => (sArea(r)>0) === ccw ? r : r.slice().reverse();
+  const r2 = v => Math.round(v*100)/100;
+
+  /* ---- SHP / SHX / DBF ---- */
+  function writeShp(polys){
+    const recs = polys.map(p=>{ const rings = [orient(p.outer,false), ...p.holes.map(h=>orient(h,true))].map(r=>r.concat([r[0]])); // SHP: 바깥 시계방향
+      const np = rings.reduce((s,r)=>s+r.length,0); const xs = rings.flat().map(v=>v[0]), ys = rings.flat().map(v=>v[1]);
+      const len = 44 + 4*rings.length + 16*np; const b = new DataView(new ArrayBuffer(len)); b.setInt32(0,5,true); b.setFloat64(4,Math.min(...xs),true); b.setFloat64(12,Math.min(...ys),true); b.setFloat64(20,Math.max(...xs),true); b.setFloat64(28,Math.max(...ys),true); b.setInt32(36,rings.length,true); b.setInt32(40,np,true);
+      let k = 44, idx = 0; for(const r of rings){ b.setInt32(k,idx,true); k += 4; idx += r.length; } for(const r of rings) for(const v of r){ b.setFloat64(k,v[0],true); b.setFloat64(k+8,v[1],true); k += 16; }
+      return { u8: new Uint8Array(b.buffer), bb:[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)] }; });
+    const bb = recs.length ? [Math.min(...recs.map(r=>r.bb[0])), Math.min(...recs.map(r=>r.bb[1])), Math.max(...recs.map(r=>r.bb[2])), Math.max(...recs.map(r=>r.bb[3]))] : [0,0,0,0];
+    const hdr = (lenBytes) => { const h = new DataView(new ArrayBuffer(100)); h.setInt32(0,9994,false); h.setInt32(24,lenBytes/2,false); h.setInt32(28,1000,true); h.setInt32(32,5,true); h.setFloat64(36,bb[0],true); h.setFloat64(44,bb[1],true); h.setFloat64(52,bb[2],true); h.setFloat64(60,bb[3],true); return new Uint8Array(h.buffer); };
+    const shpParts = [], shxParts = []; let off = 100;
+    recs.forEach((r,i)=>{ const rh = new DataView(new ArrayBuffer(8)); rh.setInt32(0,i+1,false); rh.setInt32(4,r.u8.length/2,false); shpParts.push(new Uint8Array(rh.buffer), r.u8);
+      const x = new DataView(new ArrayBuffer(8)); x.setInt32(0,off/2,false); x.setInt32(4,r.u8.length/2,false); shxParts.push(new Uint8Array(x.buffer)); off += 8 + r.u8.length; });
+    const shp = concat([hdr(off), ...shpParts]), shx = concat([hdr(100+8*recs.length), ...shxParts]);
+    return { shp, shx, bb };
+  }
+  function writeShpLines(lrows){
+    const recs = lrows.map(lr=>{ const r = lr.ring.concat([lr.ring[0]]); const xs = r.map(v=>v[0]), ys = r.map(v=>v[1]); const b = new DataView(new ArrayBuffer(44 + 4 + 16*r.length));
+      b.setInt32(0,3,true); b.setFloat64(4,Math.min(...xs),true); b.setFloat64(12,Math.min(...ys),true); b.setFloat64(20,Math.max(...xs),true); b.setFloat64(28,Math.max(...ys),true); b.setInt32(36,1,true); b.setInt32(40,r.length,true); b.setInt32(44,0,true);
+      let k = 48; for(const v of r){ b.setFloat64(k,v[0],true); b.setFloat64(k+8,v[1],true); k += 16; } return { u8: new Uint8Array(b.buffer), bb:[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)] }; });
+    const bb = recs.length ? [Math.min(...recs.map(r=>r.bb[0])), Math.min(...recs.map(r=>r.bb[1])), Math.max(...recs.map(r=>r.bb[2])), Math.max(...recs.map(r=>r.bb[3]))] : [0,0,0,0];
+    const hdr = (lenBytes) => { const h = new DataView(new ArrayBuffer(100)); h.setInt32(0,9994,false); h.setInt32(24,lenBytes/2,false); h.setInt32(28,1000,true); h.setInt32(32,3,true); h.setFloat64(36,bb[0],true); h.setFloat64(44,bb[1],true); h.setFloat64(52,bb[2],true); h.setFloat64(60,bb[3],true); return new Uint8Array(h.buffer); };
+    const sp = [], sx = []; let off = 100;
+    recs.forEach((r,i)=>{ const rh = new DataView(new ArrayBuffer(8)); rh.setInt32(0,i+1,false); rh.setInt32(4,r.u8.length/2,false); sp.push(new Uint8Array(rh.buffer), r.u8); const x = new DataView(new ArrayBuffer(8)); x.setInt32(0,off/2,false); x.setInt32(4,r.u8.length/2,false); sx.push(new Uint8Array(x.buffer)); off += 8 + r.u8.length; });
+    return { shp: concat([hdr(off), ...sp]), shx: concat([hdr(100+8*recs.length), ...sx]) };
+  }
+  const LFIELDS = [ ['id','N',10,0], ['poly_id','N',10,0], ['ring_type','C',12,0], ['len_m','N',12,2], ['n_vert','N',6,0], ['floor','N',4,0], ['cut_z','N',10,2] ];
+  const FIELDS0 = [ ['id','N',10,0], ['floor','N',4,0], ['cut_h','N',10,2], ['cut_z','N',10,2], ['area_m2','N',12,2], ['perim_m','N',12,2], ['bld_nm','C',120,0], ['bld_flr','N',4,0], ['src','C',120,0], ['date','C',10,0] ];
+  function writeDbf(rows, FIELDS_){
+    const FIELDS = FIELDS_ || FIELDS0;
+    const nf = FIELDS.length, hl = 32 + 32*nf + 1, rl = 1 + FIELDS.reduce((s,f)=>s+f[2],0);
+    const b = new Uint8Array(hl + rl*rows.length + 1); const dv = new DataView(b.buffer); const d = new Date();
+    b[0] = 3; b[1] = d.getFullYear()-1900; b[2] = d.getMonth()+1; b[3] = d.getDate(); dv.setUint32(4,rows.length,true); dv.setUint16(8,hl,true); dv.setUint16(10,rl,true);
+    FIELDS.forEach((f,i)=>{ const o = 32+32*i; b.set(enc.encode(f[0].toUpperCase()).slice(0,10), o); b[o+11] = f[1].charCodeAt(0); b[o+16] = f[2]; b[o+17] = f[3]; });
+    b[hl-1] = 0x0D; let k = hl;
+    for(const r of rows){ b[k++] = 0x20; for(const f of FIELDS){ const v = r[f[0]]; let s;
+        if(f[1]==='N'){ s = (v==null || v==='' || isNaN(v)) ? '' : (f[3] ? (+v).toFixed(f[3]) : String(Math.round(+v))); const u = enc.encode(s.padStart(f[2],' ').slice(-f[2])); b.set(u, k); }
+        else { let u = enc.encode(String(v==null?'':v)); if(u.length>f[2]){ let t = String(v); while(enc.encode(t).length>f[2]) t = t.slice(0,-1); u = enc.encode(t); } b.set(u, k); for(let i=u.length;i<f[2];i++) b[k+i] = 0x20; }
+        k += f[2]; } }
+    b[k] = 0x1A; return b;
+  }
+
+
+  const FIELDS = [ ['id','N',8,0], ['area_m2','N',12,2], ['perim_m','N',12,2], ['h_max','N',8,2], ['h_mean','N',8,2], ['gnd_z','N',10,2], ['top_z','N',10,2], ['flr_est','N',4,0], ['bld_nm','C',100,0], ['use_nm','C',40,0], ['grnd_flr','N',4,0], ['src','C',30,0], ['conf','N',5,2], ['date','C',10,0] ];
+  async function exportZip(){
+    const keep = BO.bld.filter(b=>!b.off); if(!keep.length) return tst('내보낼 건물이 없습니다', 2000);
+    const code = BO.opt.crs, P = r=>r.map(p=>{ const ll = toLL(p[0], p[1]); return proj(ll[0], ll[1], code); });
+    const polys = keep.map(b=>({ outer:P(b.outer), holes:b.holes.map(P) }));
+    const today = new Date(), ds = today.toISOString().slice(0, 10), stamp = ds.replace(/-/g, '') + '_' + String(today.getHours()).padStart(2, '0') + String(today.getMinutes()).padStart(2, '0');
+    const rows = keep.map((b, i)=>({ id:i+1, area_m2:b.area, perim_m:b.perim, h_max:b.hMax, h_mean:b.hMean, gnd_z:b.base, top_z:b.top, flr_est:b.floors, bld_nm:b.name || '', use_nm:b.use || '', grnd_flr:b.flr || '', src:b.src, conf:b.conf, date:ds }));
+    const s = writeShp(polys), base = '건물외곽선', lbase = '건물외곽선_라인', dbf = writeDbf(rows, FIELDS);
+    // 라인 레이어: 같은 고리를 PolyLine(유형 3)으로 (CAD·도면 편집용)
+    const ls = s.shp.slice(), lx = s.shx.slice(), dvS = new DataView(ls.buffer), dvX = new DataView(lx.buffer); dvS.setInt32(32, 3, true); dvX.setInt32(32, 3, true);
+    for(let o=100; o<lx.length; o+=8){ const ro = dvX.getInt32(o, false)*2; dvS.setInt32(ro + 8, 3, true); }
+    const files = [ { name:base+'.shp', data:s.shp }, { name:base+'.shx', data:s.shx }, { name:base+'.dbf', data:dbf }, { name:base+'.prj', data:enc.encode(prjWkt(code)) }, { name:base+'.cpg', data:enc.encode('UTF-8') },
+      { name:lbase+'.shp', data:ls }, { name:lbase+'.shx', data:lx }, { name:lbase+'.dbf', data:dbf }, { name:lbase+'.prj', data:enc.encode(prjWkt(code)) }, { name:lbase+'.cpg', data:enc.encode('UTF-8') } ];
+    const nPub = keep.filter(b=>b.pb).length;
+    const info = [ 'SISTECH EARTH 건물 외곽선 추출', '만든 시각: ' + today.toLocaleString('ko-KR'), '좌표계: EPSG:' + code, '파일: 건물외곽선(면, Polygon) · 건물외곽선_라인(선, PolyLine) · 속성 동일', '건물 수: ' + keep.length + ' (공공 데이터 연결 ' + nPub + ' · 미등록 ' + (keep.length - nPub) + ' · 제외 ' + (BO.bld.length - keep.length) + ')',
+      '외곽선 기준: 지붕선(위에서 본 외곽) · 정리: ' + ({ ortho:'직각 정리', simp:'단순화', raw:'원형(화소 경계)' })[BO.opt.simp] + ' · 격자 ' + BO.R.g.toFixed(2) + ' m', '조건: 높이 ' + BO.opt.minH + ' m 이상 · 면적 ' + BO.opt.minA + ' m² 이상 · 나무 제외(거칠기·녹색도)',
+      '높이: h_max = 지면 위 최고 높이(95%) · h_mean = 평균 · gnd_z/top_z = 드론 3D 모델 기준 높이(타원체고, 표고와 약 20~25 m 차이) · flr_est = 추정 층수(3 m/층)',
+      '속성 출처: 브이월드 건축물정보 LT_C_BLDGINFO(건물명·용도·지상층수) · 인천시 도로명주소 건물(이름 보충) · 참고용', '원본: SISTECH 3D-View 드론 3D Tiles', '선택 영역(경위도): ' + JSON.stringify(BO.poly) ].join('\r\n');
+    files.push({ name:'정보.txt', data:enc.encode('\ufeff' + info) });
+    const z = await zip(files), nm = '건물외곽선_' + stamp + '.zip';
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([z], { type:'application/zip' })); a.download = nm; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+    BO.last = { name:nm, size:z.length, n:keep.length, zip:z }; tst('저장 완료 · 건물 ' + keep.length + '개 · ' + nm, 3500);
+  }
+
+  // ---------- 영역 그리기 ----------
+  const DR = { h:null, pts:[], ents:[], resolve:null, key:null, bar:null };
+  function pickLL(pos){ let c = null; try{ if(scene.pickPositionSupported) c = scene.pickPosition(pos); }catch(e){} if(!c){ try{ c = scene.globe.pick(camera.getPickRay(pos), scene); }catch(e){} } if(!c) return null; const g = C.Cartographic.fromCartesian(c); if(!isFinite(g.longitude)) return null; return [g.longitude/D2R, g.latitude/D2R]; }
+  function drawEnts(){ for(const e of DR.ents){ try{ viewer.entities.remove(e); }catch(_){} } DR.ents = []; if(!DR.pts.length) return;
+    const pos = (DR.pts.length > 2 ? DR.pts.concat([DR.pts[0]]) : DR.pts).flatMap(p=>[p[0], p[1]]);
+    if(DR.pts.length > 1) DR.ents.push(viewer.entities.add({ polyline:{ positions:C.Cartesian3.fromDegreesArray(pos), width:3, clampToGround:true, material:COL.area } }));
+    for(const p of DR.pts) DR.ents.push(viewer.entities.add({ position:C.Cartesian3.fromDegrees(p[0], p[1]), point:{ pixelSize:7, color:COL.area, outlineColor:C.Color.BLACK, outlineWidth:1, heightReference:C.HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance:Number.POSITIVE_INFINITY } })); }
+  function endDraw(res){ if(DR.h){ try{ DR.h.destroy(); }catch(e){} DR.h = null; } if(DR.key){ window.removeEventListener('keydown', DR.key, true); DR.key = null; } if(DR.bar){ DR.bar.remove(); DR.bar = null; }
+    for(const e of DR.ents){ try{ viewer.entities.remove(e); }catch(_){} } DR.ents = []; const r = DR.resolve; DR.resolve = null; DR.pts = []; try{ viewer.container.style.cursor = ''; }catch(e){} if(r) r(res); }
+  function finish(){ if(DR.pts.length < 3){ tst('꼭짓점을 3개 이상 찍어 주세요', 1800); return; }
+    const kx = 111320*Math.cos(DR.pts[0][1]*D2R), xs = DR.pts.map(p=>p[0]*kx), ys = DR.pts.map(p=>p[1]*110950);
+    if(Math.max(Math.max(...xs)-Math.min(...xs), Math.max(...ys)-Math.min(...ys)) > MAXE){ tst('영역이 너무 큽니다 (최대 ' + MAXE + ' m) · 다시 그려 주세요', 2500); return; } endDraw(DR.pts.slice()); }
+  function startDraw(){ return new Promise(res=>{ endDraw(null); DR.resolve = res; DR.pts = []; viewer.container.style.cursor = 'crosshair';
+    const bar = document.createElement('div'); bar.style.cssText = 'position:absolute;left:50%;top:84px;transform:translateX(-50%);z-index:61;background:rgba(10,20,40,.9);color:#fff;padding:8px 14px;border-radius:10px;font-size:13px;pointer-events:none;border:1px solid rgba(198,244,50,.6)';
+    bar.textContent = '건물 외곽선 추출 영역: 클릭으로 꼭짓점 · 더블클릭/오른쪽 클릭/Enter 완료 · Backspace 되돌리기 · Esc 취소 (최대 ' + MAXE + ' m)'; viewer.container.appendChild(bar); DR.bar = bar;
+    const h = new C.ScreenSpaceEventHandler(scene.canvas); DR.h = h; let lastT = 0;
+    h.setInputAction(e=>{ const now = Date.now(); if(now - lastT < 300) return; lastT = now; const ll = pickLL(e.position); if(ll){ DR.pts.push(ll); drawEnts(); } }, C.ScreenSpaceEventType.LEFT_CLICK);
+    h.setInputAction(()=>{ if(DR.pts.length > 3) DR.pts.pop(); finish(); }, C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+    h.setInputAction(()=>finish(), C.ScreenSpaceEventType.RIGHT_CLICK);
+    DR.key = ev=>{ if(ev.key === 'Escape'){ ev.preventDefault(); endDraw(null); } else if(ev.key === 'Enter'){ ev.preventDefault(); finish(); } else if(ev.key === 'Backspace'){ ev.preventDefault(); DR.pts.pop(); drawEnts(); } };
+    window.addEventListener('keydown', DR.key, true); }); }
+
+  // ---------- 실행 ----------
+  async function run(poly){
+    BO.busy = true; bar(); const prog = m=>{ BO.msg = m; bar(); };
+    try{
+      BO.poly = poly.map(p=>[+p[0].toFixed(7), +p[1].toFixed(7)]); const c = BO.poly.reduce((s, p)=>[s[0]+p[0]/BO.poly.length, s[1]+p[1]/BO.poly.length], [0, 0]); setFrame(c[0], c[1]);
+      BO.loc = BO.poly.map(p=>toXY(p[0], p[1])); const bb = bboxOf(BO.loc), ext = Math.max(bb[2]-bb[0], bb[3]-bb[1]) + 2*MARGIN, g = Math.max(0.2, Math.min(0.35, ext/2000));
+      const R = { g, x0:bb[0]-MARGIN, yN:bb[3]+MARGIN, nx:Math.ceil((bb[2]-bb[0]+2*MARGIN)/g), ny:Math.ceil((bb[3]-bb[1]+2*MARGIN)/g) }; const N = R.nx*R.ny;
+      R.Z = new Float32Array(N).fill(NaN); R.RGB = new Uint8Array(N*3); R.BAN = new Uint8Array(N);
+      await capture(R, prog);
+      // 보안 처리(66) 영역 안은 제외
+      try{ const S = window.__SM66 && window.__SM66.SM; if(S && S.on) for(const m of S.masks){ const ring = m.poly.map(p=>toXY(p[0], p[1])), mb = bboxOf(ring);
+          for(let j=0;j<R.ny;j++){ const y = R.yN - (j+.5)*g; if(y < mb[1]-1 || y > mb[3]+1) continue; for(let i=0;i<R.nx;i++){ const x = R.x0 + (i+.5)*g; if(x < mb[0]-1 || x > mb[2]+1) continue; if(inPoly(x, y, ring) || dPoly(x, y, ring) < 1) R.BAN[j*R.nx+i] = 1; } } } }catch(e){}
+      BO.R = R; await analyzeRaster(R, prog);
+      prog('공공 건물 데이터 조회 중…'); const l0 = toLL(R.x0, R.yN - R.ny*g), l1 = toLL(R.x0 + R.nx*g, R.yN); BO.pub = await publicBuildings([l0[0], l0[1], l1[0], l1[1]]);
+      { const PM = new Uint8Array(N); for(const pb of BO.pub){ if(pb.aux) continue; const b = pb.bb; const i0 = Math.max(0, Math.floor((b[0] - 1.5 - R.x0)/g)), i1 = Math.min(R.nx-1, Math.ceil((b[2] + 1.5 - R.x0)/g)), j0 = Math.max(0, Math.floor((R.yN - b[3] - 1.5)/g)), j1 = Math.min(R.ny-1, Math.ceil((R.yN - b[1] + 1.5)/g));
+          for(let j=j0;j<=j1;j++){ const y = R.yN - (j+.5)*g; for(let i=i0;i<=i1;i++){ const x = R.x0 + (i+.5)*g; if(inPoly(x, y, pb.ring) || dPoly(x, y, pb.ring) < 1.5) PM[j*R.nx+i] = 1; } } } R.PUBM = PM; }
+      buildList(prog); BO.msg = '';
+      const nPub = BO.bld.filter(b=>b.pb).length; tst('건물 ' + BO.bld.length + '개 찾음 (공공 데이터 연결 ' + nPub + ' · 미등록 ' + (BO.bld.length - nPub) + ') · 클릭 = 제외/포함 · Shift+클릭 = 합치기 선택', 4500);
+    }catch(e){ console.warn(e); BO.msg = ''; tst('건물 외곽선 추출 실패: ' + e.message, 4000); }
+    finally{ BO.busy = false; bar(); }
+  }
+  async function newArea(){ if(BO.busy) return; clearEnts(); BO.bld = []; bar(); const pts = await startDraw(); if(!pts || !BO.on) return; await run(pts); }
+
+  // ---------- 조작 막대 ----------
+  function bar(){ if(!BO.on){ if(BO.bar){ BO.bar.remove(); BO.bar = null; } return; }
+    if(!BO.bar){ const b = document.createElement('div'); b.id = 'bo67bar'; b.style.cssText = 'position:absolute;left:50%;bottom:118px;transform:translateX(-50%);z-index:60;background:rgba(10,20,40,.93);color:#fff;padding:8px 10px;border-radius:12px;font-size:12.5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:min(96vw,1100px);border:1px solid rgba(198,244,50,.45);box-shadow:0 4px 18px rgba(0,0,0,.35)'; viewer.container.appendChild(b); BO.bar = b;
+      b.addEventListener('click', ev=>{ const t = ev.target.closest('[data-a]'); if(!t) return; ev.stopPropagation(); act(t.dataset.a); });
+      b.addEventListener('change', ev=>{ const t = ev.target; if(!t.dataset.o) return; const v = t.value; BO.opt[t.dataset.o] = t.dataset.o === 'simp' ? v : +v; if(t.dataset.o !== 'crs' && BO.R && BO.R.HN && !BO.busy) buildList(); }); }
+    const btn = (a, label, hi)=>`<button data-a="${a}" style="cursor:pointer;border:1px solid ${hi ? '#c6f432' : 'rgba(255,255,255,.25)'};background:${hi ? 'rgba(198,244,50,.22)' : 'rgba(255,255,255,.06)'};color:#fff;border-radius:8px;padding:5px 9px;font-size:12.5px">${label}</button>`;
+    const sel = (o, opts)=>`<select data-o="${o}" style="background:#13233f;color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:7px;padding:4px 5px;font-size:12px">${opts.map(([v, l])=>`<option value="${v}"${String(BO.opt[o]) === String(v) ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+    const n = BO.bld.length, nOff = BO.bld.filter(b=>b.off).length, nPub = BO.bld.filter(b=>b.pb && !b.off).length;
+    BO.bar.innerHTML = `<b style="color:#c6f432;margin-right:2px">건물 외곽선</b>` + (BO.busy ? `<span style="opacity:.9">${BO.msg || '처리 중…'}</span>` :
+      (n ? `<span style="opacity:.9">${n - nOff}개 <span style="color:#FFD400">■</span>공공 ${nPub} <span style="color:#38D6FF">■</span>미등록 ${n - nOff - nPub}${nOff ? ' <span style="color:#FF4D4D">■</span>제외 ' + nOff : ''}</span>` : '') +
+      sel('simp', [['ortho', '직각 정리'], ['simp', '단순화'], ['raw', '원형']]) + sel('minA', [[5, '5 m² 이상'], [10, '10 m² 이상'], [20, '20 m² 이상'], [50, '50 m² 이상']]) + sel('minH', [[2, '높이 2 m+'], [2.5, '높이 2.5 m+'], [4, '높이 4 m+']]) + sel('crs', [[5186, 'EPSG:5186'], [5179, 'EPSG:5179'], [4326, 'EPSG:4326']]) +
+      (BO.sel.size ? btn('merge', '선택 합치기 (' + BO.sel.size + ')', true) : '') + btn('area', n ? '영역 다시 그리기' : '+ 영역 그리기') + (n ? btn('save', 'SHP 저장', true) : '') + btn('close', '끄기'));
+  }
+  async function act(a){ if(BO.busy && a !== 'close') return;
+    if(a === 'area') await newArea(); else if(a === 'save') await exportZip(); else if(a === 'merge') mergeSel(); else if(a === 'close'){ STATE.on.delete(ID); off(); try{ renderCats(); renderSub(); updateSrc(); }catch(e){} } }
+
+  async function on(){ BO.on = true; bar();
+    if(!PROJECTS.find(p=>p.ts)){ try{ await ensureTileset(PROJECTS.find(p=>p.id==='incheon1')); }catch(e){} }
+    try{ if(window.sistech2D && !window.sistech2D.on) window.sistech2D.enter(); }catch(e){}
+    BO.h = new C.ScreenSpaceEventHandler(scene.canvas); BO.h.setInputAction(e=>{ BO.shift = !!BO.shiftDown; onClick(e); }, C.ScreenSpaceEventType.LEFT_CLICK); BO.h.setInputAction(e=>{ BO.shift = true; onClick(e); }, C.ScreenSpaceEventType.LEFT_CLICK, C.KeyboardEventModifier.SHIFT);
+    if(!BO.pd){ BO.pd = ev=>{ BO.shiftDown = ev.shiftKey; }; window.addEventListener('pointerdown', BO.pd, true); window.addEventListener('pointerup', BO.pd, true); }
+    tst('건물 외곽선 추출: 2D 화면에서 영역을 다각형으로 그려 주세요', 3000); await newArea(); }
+  function off(){ BO.on = false; endDraw(null); clearEnts(); if(BO.h){ try{ BO.h.destroy(); }catch(e){} BO.h = null; } BO.bld = []; BO.sel.clear(); bar(); }
+
+  const _t67 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(id === ID){ const want = force !== undefined ? force : !STATE.on.has(id);
+      if(want && STATE.mode !== 'site'){ tst('건물 외곽선 추출은 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ if(BO.on) return; STATE.on.add(id); try{ renderCats(); renderSub(); }catch(e){} on(); }
+      else { STATE.on.delete(id); off(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
+    return _t67.apply(this, arguments);
+  };
+  try{ const _sm67 = setMode; setMode = function(m){ if(m !== 'site' && BO.on){ STATE.on.delete(ID); off(); } return _sm67.apply(this, arguments); }; }catch(e){}
+  STATE.on.delete(ID);
+  window.__BO67 = { version:'67.0', BO, run, buildList, exportZip, on, off, classify, analyzeRaster, capture, publicBuildings, setFrame, toXY, toLL };
+})();
+</script>
+
 </body>
 </html>
