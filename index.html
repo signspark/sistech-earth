@@ -9899,5 +9899,173 @@ if(!window.__CVB) window.__CVB = (function(){
   window.__VR63 = { version:'63.3', RD, DR, SP, splitOn, splitOff, reapply, build, clearAll, screenArea, startDraw, endDraw };
 })();
 </script>
+<script>
+/* ---------- 64. SITE › 3D 모델 › 수목 평면화 (나무 높이 없애고 지면 평면으로 낮추기 · 별도 레이어) (2026-10-13) ----------
+   - 원본 3D 타일 파일·원본 레이어는 그대로 둠: 켜면 렌더할 때만 정점 셰이더(CustomShader)로 대상 영역 안의 나무 정점을 지면 평면 높이로 내림 · 끄면 바로 원래 모양
+   - ① 중앙 숲 (송도2동 · 연못 오른쪽 숲, 약 65 m × 50 m) : 미리 잡아 둔 영역 · 멀리 있으면 그 자리로 이동
+     ② 영역 그리기 : 지도를 클릭해 다각형 → 더블클릭·오른쪽 클릭·Enter로 완료 (Backspace 되돌리기 · Esc 취소 · 최대 400 m)
+   - 지면 높이: 영역 경계와 바깥 3·6 m 띠의 표면 높이(sampleHeight)에서 낮은 값만 골라 평면(z = a + bx + cy)을 맞춤 → 나무 수관은 빠지고 길·잔디 높이만 남음
+   - 평면 위로 원래 높이의 0.3 %만 남김(20 m 나무 → 6 cm): 겹친 면이 깜빡이지 않고 수관 색이 위에 보이게
+   - 경계 약 1.5 m는 부드럽게 이어 붙임(마스크 흐림) · 경계를 가로지르는 삼각형이 세로 벽으로 늘어나는 면은 조각 셰이더에서 버림 · 정밀도: 지구 좌표가 아니라 눈 좌표 기준으로 계산(float32 오차 없음)
+   - 한계: 수관 텍스처가 바닥에 깔린 모양(위에서 본 숲 색)으로 남음 · 나무 아래 숨은 지면 질감은 촬영되지 않아 복원 불가
+---------------------------------------------------------------------------------------------- */
+(function(){
+  if(window.__TF64) return;
+  const C = Cesium, D2R = Math.PI/180, MAXE = 400, KEEP = 0.003;
+  const tst = (m, t)=>{ try{ toast(m, t||2400); }catch(e){} };
+  const IDS = ['treeflat', 'treeflatPoly'];
+  // 미리 잡아 둔 영역: 연못 오른쪽 중앙 숲 (2026-10-13 화면에서 지정) · 평면은 중심(lon0, lat0) 기준 m 좌표
+  const PRESET = { name:'중앙 숲', lon0:126.6405911, lat0:37.3918330, plane:[7.402, 0.023, 0.008],
+    poly:[[126.6402054,37.3918083],[126.640246,37.3918988],[126.6403697,37.391919],[126.6404429,37.3919963],[126.6405123,37.3920797],[126.6406302,37.3920832],[126.6407489,37.3920627],[126.6408379,37.3920369],[126.6408759,37.3919086],[126.6409211,37.3918186],[126.6409037,37.3917433],[126.6408487,37.3916733],[126.6407731,37.3916332],[126.6406753,37.3916293],[126.640575,37.3916403],[126.6404789,37.3916521],[126.6403535,37.3916814],[126.6402416,37.3917283]] };
+
+  const items = [
+    { id:'treeflat', q:'연못 오른쪽 중앙 숲의 나무를 평면으로 낮춰 보려면', name:'수목 평면화 · 중앙 숲', src:'별도 레이어 · 원본 3D 타일은 그대로 · 숲 영역(약 65 × 50 m)의 나무 높이를 없애 지면 평면으로 내림 · 끄면 원래대로', type:'layer' },
+    { id:'treeflatPoly', q:'원하는 구역의 나무를 평면으로 낮추려면', name:'수목 평면화 · 영역 그리기', src:'지도를 클릭해 다각형을 그리고 더블클릭(오른쪽 클릭·Enter)으로 완료 → 그 안의 나무·지물 높이를 지면 평면으로 내림 · 최대 400 m · Backspace 되돌리기 · Esc 취소', type:'layer' } ];
+  const mc = MENUS.site.find(c=>c.id==='model'); if(mc) for(const it of items) if(!mc.items.some(i=>i.id===it.id)) mc.items.push(it);
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  const TF = { on:false, mode:null, shader:null, area:null, E:null, Einv:null, rm:null, ents:[], busy:false };
+  const tilesets = ()=>PROJECTS.map(p=>p.ts).filter(Boolean);
+  const mkProj = (lon0, lat0)=>{ const kx = 111320*Math.cos(lat0*D2R), ky = 110950; return { f:(lon, lat)=>[(lon-lon0)*kx, (lat-lat0)*ky], i:(x, y)=>[lon0 + x/kx, lat0 + y/ky] }; };
+
+  // ---- 지면 평면 맞추기 (경계 + 바깥 띠의 낮은 표면) ----
+  function fitPlane(pts){ const S = [[0,0,0],[0,0,0],[0,0,0]], r = [0,0,0];
+    for(const [x, y, z] of pts){ const v = [1, x, y]; for(let i=0;i<3;i++){ r[i] += v[i]*z; for(let j=0;j<3;j++) S[i][j] += v[i]*v[j]; } }
+    const A = S.map((row, i)=>[...row, r[i]]);
+    for(let i=0;i<3;i++){ let m = i; for(let k=i+1;k<3;k++) if(Math.abs(A[k][i]) > Math.abs(A[m][i])) m = k; [A[i], A[m]] = [A[m], A[i]]; if(Math.abs(A[i][i]) < 1e-9) return null;
+      for(let k=0;k<3;k++) if(k!==i){ const f = A[k][i]/A[i][i]; for(let j=i;j<4;j++) A[k][j] -= f*A[i][j]; } }
+    return [A[0][3]/A[0][0], A[1][3]/A[1][1], A[2][3]/A[2][2]]; }
+  function groundPlane(P, loc){   // P: proj, loc: 영역 꼭짓점 m 좌표
+    const cx = loc.reduce((s, p)=>s+p[0], 0)/loc.length, cy = loc.reduce((s, p)=>s+p[1], 0)/loc.length; const pts = [];
+    for(let i=0;i<loc.length;i++){ const a = loc[i], b = loc[(i+1)%loc.length], L = Math.hypot(b[0]-a[0], b[1]-a[1]);
+      for(let s=0; s<L; s+=Math.max(1.5, L/40)){ const x = a[0] + (b[0]-a[0])*s/L, y = a[1] + (b[1]-a[1])*s/L; const d = Math.hypot(x-cx, y-cy) || 1;
+        for(const off of [0, 3, 6]){ const xx = x + (x-cx)/d*off, yy = y + (y-cy)/d*off; const ll = P.i(xx, yy); let h; try{ h = scene.sampleHeight(C.Cartographic.fromDegrees(ll[0], ll[1])); }catch(e){} if(h !== undefined && isFinite(h)) pts.push([xx, yy, h]); } } }
+    if(pts.length < 12) return null;
+    const hs = pts.map(p=>p[2]).sort((a, b)=>a-b), q20 = hs[Math.floor(hs.length*.2)];
+    let pl = fitPlane(pts.filter(p=>p[2] <= q20 + .5)); if(!pl) return null;
+    for(let it=0; it<5; it++){ const keep = pts.filter(p=>Math.abs(p[2] - (pl[0] + pl[1]*p[0] + pl[2]*p[1])) < .8); if(keep.length < 8) break; const n = fitPlane(keep); if(!n) break; pl = n; }
+    if(Math.hypot(pl[1], pl[2]) > .25) pl = [q20, 0, 0];   // 경사 25 % 넘으면 수평면으로
+    return pl; }
+
+  // ---- 마스크 텍스처 (영역 안 1, 경계 약 1.5 m 흐림) ----
+  function makeMask(loc){ const xs = loc.map(p=>p[0]), ys = loc.map(p=>p[1]); const pad = 4;
+    const x0 = Math.min(...xs)-pad, x1 = Math.max(...xs)+pad, y0 = Math.min(...ys)-pad, y1 = Math.max(...ys)+pad;
+    const N = Math.min(1024, Math.max(256, Math.ceil(Math.max(x1-x0, y1-y0)/0.25))); const W = N, H = N; const sx = W/(x1-x0), sy = H/(y1-y0);
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d', { willReadFrequently:true });
+    const cv2 = document.createElement('canvas'); cv2.width = W; cv2.height = H; const g2 = cv2.getContext('2d');
+    g2.fillStyle = '#fff'; g2.beginPath(); loc.forEach((p, i)=>{ const X = (p[0]-x0)*sx, Y = (p[1]-y0)*sy; i ? g2.lineTo(X, Y) : g2.moveTo(X, Y); }); g2.closePath(); g2.fill();
+    g.filter = 'blur(' + Math.max(1, 1.0*sx).toFixed(1) + 'px)'; g.drawImage(cv2, 0, 0);   // 캔버스 행 j = y 증가 방향(텍스처 v와 같음)
+    const d = g.getImageData(0, 0, W, H).data; const arr = new Uint8Array(W*H*4);
+    for(let k=0;k<W*H;k++){ const v = d[k*4]; arr[k*4] = v; arr[k*4+1] = v; arr[k*4+2] = v; arr[k*4+3] = 255; }
+    return { arr, W, H, box:new C.Cartesian4(x0, y0, x1, y1) }; }
+
+  const VS = `
+    void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput){
+      v_tfM = 0.0;
+      if(u_tfOn < 0.5) return;
+      vec4 e = czm_modelView * vec4(vsOutput.positionMC, 1.0);
+      vec4 l = u_tfEyeToLocal * e;
+      v_tfM = 0.0;
+      vec2 uv = (l.xy - u_tfBox.xy) / (u_tfBox.zw - u_tfBox.xy); uv.y = 1.0 - uv.y;   // 텍스처 행 순서(위→아래) 보정
+      if(uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return;
+      float m = textureLod(u_tfMask, uv, 0.0).r;
+      v_tfM = m;
+      if(m < 0.004) return;
+      float g = u_tfPlane.x + u_tfPlane.y * l.x + u_tfPlane.z * l.y;
+      float z = g + (l.z - g) * u_tfKeep;
+      l.z = mix(l.z, z, m);
+      vsOutput.positionMC = (czm_inverseModelView * (u_tfLocalToEye * l)).xyz;
+    }`;
+  // 경계에서 안쪽(내림)·바깥(그대로) 꼭짓점을 잇는 삼각형은 세로로 길게 늘어난 벽이 됨 → 경계 띠(마스크 중간값)에서 거의 수직인 면만 버림
+  const FS = `
+    void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material){
+      if(u_tfOn < 0.5 || v_tfM < 0.01 || v_tfM > 0.99) return;
+      vec3 p = fsInput.attributes.positionEC;
+      vec3 n = normalize(cross(dFdx(p), dFdy(p)));
+      vec3 up = normalize((u_tfLocalToEye * vec4(0.0, 0.0, 1.0, 0.0)).xyz);
+      if(abs(dot(n, up)) < 0.6) discard;
+    }`;
+  const m4a = new C.Matrix4(), m4b = new C.Matrix4();
+  function updMats(){ const sh = TF.shader; if(!sh || !TF.E) return;
+    C.Matrix4.multiply(TF.Einv, camera.inverseViewMatrix, m4a); C.Matrix4.multiply(camera.viewMatrix, TF.E, m4b);
+    sh.setUniform('u_tfEyeToLocal', C.Matrix4.clone(m4a)); sh.setUniform('u_tfLocalToEye', C.Matrix4.clone(m4b)); }
+  function attach(){ if(!TF.shader) return; for(const t of tilesets()){ try{ if(t.customShader !== TF.shader){ if(t.customShader && !t.__tfPrev) t.__tfPrev = t.customShader; t.customShader = TF.shader; } }catch(e){} } }
+  function detach(){ for(const t of tilesets()){ try{ if(t.customShader === TF.shader){ t.customShader = t.__tfPrev || undefined; } delete t.__tfPrev; }catch(e){} } }
+
+  function apply(polyLL, plane0, lon0, lat0){
+    const P = mkProj(lon0, lat0); const loc = polyLL.map(p=>P.f(p[0], p[1]));
+    let pl = groundPlane(P, loc); if(!pl){ if(plane0) pl = plane0; else throw new Error('영역의 지면 높이를 읽지 못했습니다 · 3D 모델이 화면에 보이게 한 뒤 다시 켜 주세요'); }
+    const mk = makeMask(loc);
+    TF.E = C.Transforms.eastNorthUpToFixedFrame(C.Cartesian3.fromDegrees(lon0, lat0, 0)); TF.Einv = C.Matrix4.inverseTransformation(TF.E, new C.Matrix4());
+    TF.shader = new C.CustomShader({
+      uniforms: {
+        u_tfOn:{ type:C.UniformType.FLOAT, value:1 }, u_tfKeep:{ type:C.UniformType.FLOAT, value:KEEP },
+        u_tfPlane:{ type:C.UniformType.VEC3, value:new C.Cartesian3(pl[0], pl[1], pl[2]) }, u_tfBox:{ type:C.UniformType.VEC4, value:mk.box },
+        u_tfEyeToLocal:{ type:C.UniformType.MAT4, value:C.Matrix4.clone(C.Matrix4.IDENTITY) }, u_tfLocalToEye:{ type:C.UniformType.MAT4, value:C.Matrix4.clone(C.Matrix4.IDENTITY) },
+        u_tfMask:{ type:C.UniformType.SAMPLER_2D, value:new C.TextureUniform({ typedArray:mk.arr, width:mk.W, height:mk.H, minificationFilter:C.TextureMinificationFilter.LINEAR, magnificationFilter:C.TextureMagnificationFilter.LINEAR }) } },
+      varyings:{ v_tfM:C.VaryingType.FLOAT }, vertexShaderText: VS, fragmentShaderText: FS });
+    updMats(); TF.rm = scene.preRender.addEventListener(updMats); attach();
+    // 경계선(얇은 점선) 표시
+    try{ const pos = polyLL.concat([polyLL[0]]).flatMap(p=>[p[0], p[1]]); TF.ents.push(viewer.entities.add({ polyline:{ positions:C.Cartesian3.fromDegreesArray(pos), width:2, clampToGround:true, material:new C.PolylineDashMaterialProperty({ color:C.Color.fromCssColorString('#c6f432').withAlpha(.85), dashLength:12 }) } })); }catch(e){}
+    TF.area = { polyLL, plane:pl, lon0, lat0 }; scene.requestRender();
+    return pl; }
+  function clearAll(){ if(TF.rm){ try{ TF.rm(); }catch(e){} TF.rm = null; } detach(); TF.shader = null; TF.E = null; for(const e of TF.ents){ try{ viewer.entities.remove(e); }catch(_){} } TF.ents = []; TF.area = null; try{ scene.requestRender(); }catch(e){} }
+
+  // ---- 영역 그리기 ----
+  const DR = { h:null, pts:[], ents:[], resolve:null, key:null, bar:null };
+  function pickLL(pos){ let c = null; try{ if(scene.pickPositionSupported) c = scene.pickPosition(pos); }catch(e){} if(!c){ try{ c = scene.globe.pick(camera.getPickRay(pos), scene); }catch(e){} } if(!c) return null; const g = C.Cartographic.fromCartesian(c); if(!isFinite(g.longitude)) return null; return [g.longitude/D2R, g.latitude/D2R]; }
+  function drawEnts(){ for(const e of DR.ents){ try{ viewer.entities.remove(e); }catch(_){} } DR.ents = []; if(!DR.pts.length) return;
+    const pos = (DR.pts.length > 2 ? DR.pts.concat([DR.pts[0]]) : DR.pts).flatMap(p=>[p[0], p[1]]);
+    if(DR.pts.length > 1) DR.ents.push(viewer.entities.add({ polyline:{ positions:C.Cartesian3.fromDegreesArray(pos), width:3, clampToGround:true, material:C.Color.fromCssColorString('#c6f432') } }));
+    for(const p of DR.pts) DR.ents.push(viewer.entities.add({ position:C.Cartesian3.fromDegrees(p[0], p[1]), point:{ pixelSize:7, color:C.Color.fromCssColorString('#c6f432'), outlineColor:C.Color.BLACK, outlineWidth:1, heightReference:C.HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance:Number.POSITIVE_INFINITY } })); }
+  function endDraw(res){ if(DR.h){ try{ DR.h.destroy(); }catch(e){} DR.h = null; } if(DR.key){ window.removeEventListener('keydown', DR.key, true); DR.key = null; } if(DR.bar){ DR.bar.remove(); DR.bar = null; }
+    for(const e of DR.ents){ try{ viewer.entities.remove(e); }catch(_){} } DR.ents = []; const r = DR.resolve; DR.resolve = null; DR.pts = []; try{ viewer.container.style.cursor = ''; }catch(e){} if(r) r(res); }
+  function finish(){ if(DR.pts.length < 3){ tst('꼭짓점을 3개 이상 찍어 주세요', 1800); return; } const P = mkProj(DR.pts[0][0], DR.pts[0][1]); const q = DR.pts.map(p=>P.f(p[0], p[1])); const xs = q.map(p=>p[0]), ys = q.map(p=>p[1]);
+    if(Math.max(Math.max(...xs)-Math.min(...xs), Math.max(...ys)-Math.min(...ys)) > MAXE){ tst('영역이 너무 큽니다 (최대 ' + MAXE + ' m) · 다시 그려 주세요', 2500); return; } endDraw(DR.pts.slice()); }
+  function startDraw(){ return new Promise(res=>{ endDraw(null); DR.resolve = res; DR.pts = []; viewer.container.style.cursor = 'crosshair';
+    const bar = document.createElement('div'); bar.style.cssText = 'position:absolute;left:50%;top:84px;transform:translateX(-50%);z-index:60;background:rgba(10,20,40,.88);color:#fff;padding:8px 14px;border-radius:10px;font-size:13px;pointer-events:none;border:1px solid rgba(198,244,50,.5)';
+    bar.textContent = '수목 평면화 영역: 클릭으로 꼭짓점 · 더블클릭/오른쪽 클릭/Enter 완료 · Backspace 되돌리기 · Esc 취소'; viewer.container.appendChild(bar); DR.bar = bar;
+    const h = new C.ScreenSpaceEventHandler(scene.canvas); DR.h = h; let lastT = 0;
+    h.setInputAction(e=>{ const now = Date.now(); if(now - lastT < 300) return; lastT = now; const ll = pickLL(e.position); if(ll){ DR.pts.push(ll); drawEnts(); } }, C.ScreenSpaceEventType.LEFT_CLICK);
+    h.setInputAction(()=>{ if(DR.pts.length > 3) DR.pts.pop(); finish(); }, C.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+    h.setInputAction(()=>finish(), C.ScreenSpaceEventType.RIGHT_CLICK);
+    DR.key = ev=>{ if(ev.key === 'Escape'){ ev.preventDefault(); endDraw(null); } else if(ev.key === 'Enter'){ ev.preventDefault(); finish(); } else if(ev.key === 'Backspace'){ ev.preventDefault(); DR.pts.pop(); drawEnts(); } };
+    window.addEventListener('keydown', DR.key, true); }); }
+
+  function nearPreset(){ try{ const c = camera.positionCartographic; const P = mkProj(PRESET.lon0, PRESET.lat0); const q = P.f(c.longitude/D2R, c.latitude/D2R); return Math.hypot(q[0], q[1]) < 1500 && c.height < 2500; }catch(e){ return false; } }
+  function flyPreset(){ return new Promise(res=>{ camera.flyTo({ destination:C.Cartesian3.fromDegrees(126.64083, 37.39158, 106), orientation:{ heading:320.6*D2R, pitch:-68.3*D2R, roll:0 }, duration:2, complete:res, cancel:res }); }); }
+  async function waitTiles(ms){ const t0 = Date.now(); while(Date.now() - t0 < ms){ const ts = tilesets(); if(ts.length && ts.every(t=>t.tilesLoaded)) return; await new Promise(r=>setTimeout(r, 250)); } }
+
+  async function on(id){ TF.on = true; TF.mode = id; TF.busy = true;
+    const fail = msg=>{ TF.on = false; TF.mode = null; STATE.on.delete(id); clearAll(); if(msg) tst(msg, 3200); try{ renderCats(); renderSub(); updateSrc(); }catch(_){} };
+    try{
+      if(id === 'treeflat'){ if(!nearPreset()){ await flyPreset(); } if(!tilesets().length){ try{ await ensureTileset(PROJECTS.find(p=>p.id==='incheon1')); }catch(e){} } await waitTiles(8000); if(TF.mode !== id) return;
+        apply(PRESET.poly, PRESET.plane, PRESET.lon0, PRESET.lat0); tst('수목 평면화 켬 · 중앙 숲 나무를 지면 평면으로 내렸습니다 (원본 3D 타일은 그대로)', 3000); }
+      else { const pts = await startDraw(); if(!pts || TF.mode !== id){ if(TF.mode === id) fail(pts ? null : '영역 그리기를 취소했습니다'); return; }
+        const lon0 = pts.reduce((s, p)=>s+p[0], 0)/pts.length, lat0 = pts.reduce((s, p)=>s+p[1], 0)/pts.length; apply(pts, null, lon0, lat0); tst('수목 평면화 켬 · 그린 영역 안을 지면 평면으로 내렸습니다', 2600); }
+    }catch(e){ console.warn(e); fail('수목 평면화 실패: ' + e.message); }
+    finally{ TF.busy = false; } }
+  function off(){ TF.on = false; TF.mode = null; endDraw(null); clearAll(); }
+
+  // 3D 타일을 새로 불러오면(프로젝트 전환 등) 켜져 있을 때 셰이더 다시 붙임
+  try{ const _ens64 = ensureTileset; ensureTileset = async function(p){ const ts = await _ens64.apply(this, arguments); if(TF.on && TF.shader) attach(); return ts; }; }catch(e){}
+  const _t64 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(IDS.includes(id)){ const want = force !== undefined ? force : !STATE.on.has(id);
+      if(want && STATE.mode !== 'site'){ tst('수목 평면화는 SITE 모드에서 사용합니다', 2000); return; }
+      if(want){ if(TF.busy && TF.mode !== 'treeflatPoly'){ tst('처리 중입니다 · 잠시만 기다려 주세요', 1800); return; } for(const o of IDS) STATE.on.delete(o); STATE.on.add(id); try{ renderCats(); renderSub(); }catch(e){} off(); await on(id); }
+      else { STATE.on.delete(id); off(); }
+      try{ renderCats(); renderSub(); updateSrc(); }catch(e){} return; }
+    // 차량 지우기(63)·도로만 보기(61)는 셰이더를 잠시 바꿔 쓰므로 함께 켜지 않음
+    if(['vremove','vremovePoly','vrsplit','osmroad'].includes(id) && force !== false && !STATE.on.has(id) && TF.on){ for(const o of IDS) STATE.on.delete(o); off(); try{ renderCats(); renderSub(); }catch(e){} }
+    return _t64.apply(this, arguments);
+  };
+  try{ const _sm64 = setMode; setMode = function(m){ if(m !== 'site' && TF.on){ for(const o of IDS) STATE.on.delete(o); off(); } return _sm64.apply(this, arguments); }; }catch(e){}
+  // 주소(#on=)에 treeflat가 있으면 3D 타일이 준비된 뒤 다시 켬
+  const wantBoot = STATE.on.has('treeflat'); for(const o of IDS) STATE.on.delete(o);
+  if(wantBoot) setTimeout(()=>{ try{ if(STATE.mode === 'site') toggleLayer('treeflat', true); }catch(e){} }, 4000);
+  window.__TF64 = { version:'64.0', TF, PRESET, apply, clearAll, on, off, startDraw, endDraw };
+})();
+</script>
 </body>
 </html>
