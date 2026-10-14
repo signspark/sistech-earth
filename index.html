@@ -11265,7 +11265,7 @@ if(!window.__CVB) window.__CVB = (function(){
     fpm.style.display = 'none';
     const sp = scene.cartesianToCanvasCoordinates(tgt);
     if(sp && isFinite(sp.x) && C.Cartesian3.dot(C.Cartesian3.subtract(tgt, camera.position, new C.Cartesian3()), camera.direction) > 0){
-      const cw = scene.canvas.clientWidth, px = clamp(o.size / (2*dist*Math.tan(camera.frustum.fov/2)) * cw * 1.25, 26, 420);
+      const cw = scene.canvas.clientWidth, px = clamp(o.size / (2*dist*Math.tan(camera.frustum.fov/2)) * cw * 0.8, 24, 380);
       const rc = scene.canvas.getBoundingClientRect();
       trk.style.display = 'block'; trk.style.left = (rc.left + sp.x - px/2) + 'px'; trk.style.top = (rc.top + sp.y - px/2) + 'px'; trk.style.width = trk.style.height = px + 'px';
       trkTx.textContent = Math.round(dist) + ' m'; } else trk.style.display = 'none';
@@ -11297,7 +11297,7 @@ if(!window.__CVB) window.__CVB = (function(){
     if(m !== VV.lastMode) updButtons();
     if(VV.active){ if(!NV.open) exit(true); else if(!NV.route) exit(false); } });
   updButtons();
-  window.__NVV = { version:'68.1', VV, apply, onCam, setCam, enter, exit };
+  window.__NVV = { version:'68.2', VV, apply, onCam, setCam, enter, exit };
 })();
 </script>
 
