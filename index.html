@@ -2488,7 +2488,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     <input type="range" id="nvProg" min="0" max="1000" value="0">
     <div class="play"><button class="go" id="nvGo">▶ 시뮬레이션 시작</button><button class="stop" id="nvStop">■ 처음</button></div>
     <div class="row"><label>배속</label><select id="nvMul"><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option><option value="5">5×</option><option value="10">10×</option><option value="30">30×</option><option value="60">60×</option></select>
-      <label>시점</label><select id="nvCam"><option value="chase">진행방향 추적</option><option value="top">정북 위에서</option><option value="free">따라가기(자유 회전)</option></select></div>
+      <label>시점</label><select id="nvCam"><option value="chase">진행방향 추적</option><option value="top">정북 위에서</option><option value="free">따라가기(자유 회전)</option><option value="pov">1인칭(운전자·보행자·조종자)</option><option value="obs">관측자</option></select></div>
     <div class="row"><label>시점 높이</label><input type="range" id="nvH" min="20" max="1000" step="10"><label id="nvHv" style="min-width:52px;text-align:right">100 m</label></div>
   </div>
 </div>`;
@@ -2832,7 +2832,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   }
   function camPose(){ const m = MODE[NV.route.mode]; const H = NV.camH; const pitch = NV.cam==='top' ? -89.9 : m.pitch; const range = H / Math.sin(C.Math.toRadians(-pitch));
     if(NV.camHdg==null) NV.camHdg = NV.hdg; return { hd: NV.cam==='top' ? 0 : NV.camHdg, pitch, range }; }
-  function updCamera(dt){ if(!NV.cur || !NV.route) return;
+  function updCamera(dt){ if(!NV.cur || !NV.route) return; if((NV.cam==='pov'||NV.cam==='obs') && window.__NVV){ window.__NVV.apply(dt); return; }
     if(NV.cam==='free'){ if(NV.prevTarget && camera.transform.equals(C.Matrix4.IDENTITY)){ const d = C.Cartesian3.subtract(NV.cur, NV.prevTarget, new C.Cartesian3()); camera.position = C.Cartesian3.add(camera.position, d, new C.Cartesian3()); } NV.prevTarget = C.Cartesian3.clone(NV.cur); return; }
     NV.camHdg = NV.camHdg==null ? NV.hdg : NV.camHdg + angDiff(NV.camHdg, NV.hdg) * Math.min(1, dt*1.6);
     const p = camPose(); camera.lookAt(NV.cur, new C.HeadingPitchRange(C.Math.toRadians(p.hd), C.Math.toRadians(p.pitch), p.range)); camera.lookAtTransform(C.Matrix4.IDENTITY); }
@@ -2870,6 +2870,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
     if(r.mode==='walk'){ prevMul = viewer.clock.multiplier; viewer.clock.multiplier = NV.mul; }
     const tok = ++NV.simTok; const begin = () => { if(tok!==NV.simTok || !NV.route || !NV.open) return; NV.playing = true; NV.last = performance.now(); updPanel(); };
     if(NV.cam==='free'){ begin(); return; }
+    if((NV.cam==='pov'||NV.cam==='obs') && window.__NVV){ begin(); window.__NVV.apply(0, true); return; }
     const p = camPose(); NV.busy = true;
     camera.flyToBoundingSphere(new C.BoundingSphere(NV.cur, 0), { offset: new C.HeadingPitchRange(C.Math.toRadians(p.hd), C.Math.toRadians(p.pitch), p.range), duration: 1.6, complete: ()=>{ NV.busy=false; begin(); }, cancel: ()=>{ NV.busy=false; begin(); } });
   }
@@ -2883,7 +2884,7 @@ document.addEventListener('pointerdown', e=>{ const st = $('#settings'); if(!st.
   q('#nvGo').onclick = () => { if(!NV.route) return; if(NV.playing){ stopSim(); } else startSim(); };
   q('#nvStop').onclick = () => { if(!NV.route) return; stopSim(); NV.t = 0; placeAt(0, true); updPanel(); };
   q('#nvMul').onchange = e => { NV.mul = +e.target.value; if(NV.playing && NV.route.mode==='walk') viewer.clock.multiplier = NV.mul; };
-  q('#nvCam').onchange = e => { NV.cam = e.target.value; NV.prevTarget = null; if(NV.cam==='free') releaseCam(); };
+  q('#nvCam').onchange = e => { NV.cam = e.target.value; NV.prevTarget = null; if(NV.cam==='free') releaseCam(); if(window.__NVV) window.__NVV.onCam(NV.cam); };
   q('#nvH').oninput = e => { NV.camH = +e.target.value; q('#nvHv').textContent = NV.camH+' m'; };
   const prog = q('#nvProg');
   prog.addEventListener('pointerdown', ()=>NV.dragProg=true); prog.addEventListener('pointerup', ()=>NV.dragProg=false);
@@ -11107,6 +11108,196 @@ if(!window.__CVB) window.__CVB = (function(){
   try{ const _sm67 = setMode; setMode = function(m){ if(m !== 'site' && BO.on){ STATE.on.delete(ID); off(); } return _sm67.apply(this, arguments); }; }catch(e){}
   STATE.on.delete(ID);
   window.__BO67 = { version:'67.1', BO, run, buildList, exportZip, on, off, classify, analyzeRaster, capture, publicBuildings, setFrame, toXY, toLL };
+})();
+</script>
+
+<style id="v4-nvpov">
+#navPanel .camwrap{display:flex;flex-direction:column;gap:4px}
+#navPanel .camlbl{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--text-dim)}
+#navPanel .camlbl #nvCamDesc{color:var(--lime-bright);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#navPanel .camseg{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;background:rgba(0,0,0,.25);padding:4px;border-radius:10px}
+#navPanel .camseg button{height:46px;border:0;border-radius:8px;background:none;color:var(--text-dim);font:600 11.5px var(--font);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:0 2px}
+#navPanel .camseg button svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+#navPanel .camseg button.on{background:var(--lime);color:#06224A}
+#navPanel .camseg button:hover:not(.on){color:var(--lime-bright)}
+#navPanel .camseg .sep{display:none}
+#nvPovHud{position:fixed;inset:0;pointer-events:none;z-index:15;display:none}
+#nvPovHud.on{display:block}
+#nvPovHud .pill{position:absolute;left:50%;top:64px;transform:translateX(-50%);background:rgba(3,18,42,.8);border:1px solid rgba(127,178,230,.3);border-radius:12px;padding:6px 14px;color:#fff;font:600 13px var(--font);display:flex;gap:14px;align-items:center;white-space:nowrap;backdrop-filter:blur(8px)}
+#nvPovHud .pill b{color:var(--lime-bright)}
+#nvPovHud .pill span{color:#cfe0f5;font-weight:500}
+#nvPovHud .hint{position:absolute;left:50%;bottom:58px;transform:translateX(-50%);background:rgba(3,18,42,.6);border-radius:10px;padding:4px 12px;color:#cfe0f5;font:12px var(--font);white-space:nowrap}
+#nvPovHud .fpm{position:absolute;left:50%;top:50%;width:64px;height:32px;transform:translate(-50%,-50%);display:none}
+#nvPovHud .fpm svg{width:100%;height:100%;fill:none;stroke:#7CFF6B;stroke-width:2;filter:drop-shadow(0 0 2px rgba(0,0,0,.8))}
+#nvPovHud .trk{position:absolute;display:none;border:0}
+#nvPovHud .trk i{position:absolute;width:12px;height:12px;border-color:#FFD400;border-style:solid;filter:drop-shadow(0 0 2px rgba(0,0,0,.9))}
+#nvPovHud .trk i:nth-child(1){left:0;top:0;border-width:2px 0 0 2px}
+#nvPovHud .trk i:nth-child(2){right:0;top:0;border-width:2px 2px 0 0}
+#nvPovHud .trk i:nth-child(3){left:0;bottom:0;border-width:0 0 2px 2px}
+#nvPovHud .trk i:nth-child(4){right:0;bottom:0;border-width:0 2px 2px 0}
+#nvPovHud .trk em{position:absolute;left:50%;top:-20px;transform:translateX(-50%);font:600 11px var(--font);font-style:normal;color:#FFD400;white-space:nowrap;text-shadow:0 0 3px #000}
+</style>
+<script id="v4-nvpov-js">
+/* 68. 내비 시뮬레이션 시점 버튼: 추적 · 위에서 · 자유 · 1인칭(운전자/보행자/조종자) · 관측자(지상 망원 추적) */
+(function(){
+  const NV = window.sistechNav, C = window.Cesium; if(!NV || !NV.api || !C) return;
+  const A = NV.api, P = document.getElementById('navPanel'); if(!P) return;
+  const sel = P.querySelector('#nvCam'); if(!sel) return;
+  const sscc = scene.screenSpaceCameraController;
+  const rad = C.Math.toRadians, deg = C.Math.toDegrees, clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  const angD = (a,b)=>{ let d = ((b-a)%360+540)%360-180; return d; };
+  [['pov','1인칭'],['obs','관측자']].forEach(([v,t])=>{ if(!sel.querySelector('option[value="'+v+'"]')){ const o=document.createElement('option'); o.value=v; o.textContent=t; sel.appendChild(o); } });
+  const lab = sel.previousElementSibling; if(lab && lab.tagName==='LABEL') lab.style.display='none'; sel.style.display='none';
+
+  const POVNAME = { car:'운전자', walk:'보행자', uam:'조종자' };
+  const DESC = {
+    chase: ()=>'뒤에서 진행방향으로 따라가기', top: ()=>'정북을 위로 두고 내려다보기', free: ()=>'마우스로 돌려 보며 따라가기',
+    pov: m=>({ car:'운전석 눈높이 1인칭', walk:'보행자 눈높이 1인칭', uam:'조종석 1인칭 · 상승/강하 기울기 반영' }[m]||'1인칭'),
+    obs: m=>({ car:'길가 관측자가 지나가는 차량을 망원 추적', walk:'길가 관측자가 보행자를 추적', uam:'지상 관측자가 기체를 올려다보며 추적' }[m]||'지상 관측자 추적') };
+  const ICON = {
+    chase:'<svg viewBox="0 0 24 24"><path d="M12 3l7 15-7-4-7 4z"/></svg>',
+    top:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>',
+    free:'<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg>',
+    pov:'<svg viewBox="0 0 24 24"><path d="M2 12s4-6.5 10-6.5S22 12 22 12s-4 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+    obs:'<svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><path d="M6 7v7M3.5 21L6 14l2.5 7M6 10l4-1.5"/><path d="M11 8l10-4" stroke-dasharray="2 2"/></svg>' };
+  const ORDER = ['chase','top','free','pov','obs'];
+  const LBL = { chase:'추적', top:'위에서', free:'자유', obs:'관측자' };
+  const row = sel.closest('.row');
+  const wrap = document.createElement('div'); wrap.className = 'camwrap';
+  wrap.innerHTML = '<div class="camlbl"><span>시점</span><span id="nvCamDesc"></span></div><div class="camseg" id="nvCamSeg">' +
+    ORDER.map(v=>'<button data-v="'+v+'" title="">'+ICON[v]+'<span>'+(LBL[v]||'운전자')+'</span></button>').join('') + '</div>';
+  row.insertAdjacentElement('afterend', wrap);
+  const seg = wrap.querySelector('#nvCamSeg'), desc = wrap.querySelector('#nvCamDesc');
+
+  const hud = document.createElement('div'); hud.id = 'nvPovHud';
+  hud.innerHTML = '<div class="pill"></div><div class="fpm"><svg viewBox="0 0 64 32"><circle cx="32" cy="16" r="6"/><path d="M4 16h20M40 16h20M32 10V2"/></svg></div><div class="trk"><i></i><i></i><i></i><i></i><em></em></div><div class="hint">드래그: 둘러보기 · 휠: 확대/축소 · 더블클릭: 정면 · Esc: 추적 시점으로</div>';
+  document.body.appendChild(hud);
+  const pill = hud.querySelector('.pill'), fpm = hud.querySelector('.fpm'), trk = hud.querySelector('.trk'), trkTx = trk.querySelector('em');
+
+  const VV = { active:null, yaw:0, pit:0, zoom:1, saved:null, ob:null, fpa:0, lastLL:null, fov:null, dir:null, lastMode:null, drag:null, hudT:0 };
+  const POV = { car:{eye:1.25,fwd:0.4,lat:-0.35,pitch:-4,fov:75}, walk:{eye:1.6,fwd:0.25,lat:0,pitch:-6,fov:70}, uam:{eye:1.2,fwd:2.5,lat:0,pitch:-8,fov:80} };
+  const OBS = { car:{lead:110,side:14,pass:45,eye:1.6,size:4.6,tz:0.8,up:[8,20,40]}, walk:{lead:35,side:6,pass:14,eye:1.6,size:1.8,tz:0.9,up:[6,15,30]}, uam:{lead:700,side:220,pass:380,eye:1.7,size:12,tz:0,up:[30,80,150]} };
+
+  function updButtons(){ const m = NV.mode || (NV.route && NV.route.mode) || 'car';
+    seg.querySelectorAll('button').forEach(b=>{ const v=b.dataset.v; b.classList.toggle('on', v===NV.cam); if(v==='pov') b.querySelector('span').textContent = POVNAME[m]||'1인칭'; b.title = DESC[v](m); });
+    desc.textContent = (DESC[NV.cam]||DESC.chase)(m); VV.lastMode = m; }
+  function setCam(v){ if(NV.cam===v){ updButtons(); return; } sel.value = v; sel.dispatchEvent(new Event('change')); updButtons(); }
+  seg.addEventListener('click', e=>{ const b = e.target.closest('button[data-v]'); if(b) setCam(b.dataset.v); });
+
+  function ring(){ return (NV.ents||[]).find(e=>e && e!==NV.veh && e.billboard && e.position && e.position.isConstant===false); }
+  function showVeh(on, ringOn){ if(NV.veh) NV.veh.show = on; const r = ring(); if(r) r.show = ringOn===undefined ? on : ringOn; }
+
+  function enter(kind){ if(VV.active===kind) return;
+    if(!VV.active){ VV.saved = { pos: C.Cartesian3.clone(camera.position), hd: camera.heading, pt: camera.pitch, rl: camera.roll, fov: camera.frustum.fov, coll: sscc.enableCollisionDetection, inp: sscc.enableInputs }; }
+    try{ if(!camera.transform.equals(C.Matrix4.IDENTITY)) camera.lookAtTransform(C.Matrix4.IDENTITY); }catch(e){}
+    sscc.enableCollisionDetection = false; sscc.enableInputs = false;
+    VV.active = kind; VV.yaw = 0; VV.pit = 0; VV.zoom = 1; VV.ob = null; VV.fov = null; VV.dir = null; VV.lastLL = null; VV.fpa = 0;
+    hud.classList.add('on'); fpm.style.display = 'none'; trk.style.display = 'none'; }
+  function exit(restoreView){ if(!VV.active) return; const s = VV.saved; VV.active = null; VV.drag = null;
+    if(s){ camera.frustum.fov = s.fov; sscc.enableCollisionDetection = s.coll; sscc.enableInputs = s.inp; }
+    showVeh(true); hud.classList.remove('on');
+    if(restoreView && s){ try{ camera.flyTo({ destination: s.pos, orientation:{ heading:s.hd, pitch:s.pt, roll:s.rl }, duration: 1 }); }catch(e){} }
+    VV.saved = null; }
+
+  function ptAtS(S, s){ let i = 0; while(i < S.length-2 && S[i+1].s < s) i++; const a = S[i], b = S[i+1]||a; const f = b.s>a.s ? clamp((s-a.s)/(b.s-a.s),0,1) : 0;
+    const lon = a.lon+(b.lon-a.lon)*f, lat = a.lat+(b.lat-a.lat)*f;
+    const y = Math.sin(rad(b.lon-a.lon))*Math.cos(rad(b.lat)), x = Math.cos(rad(a.lat))*Math.sin(rad(b.lat)) - Math.sin(rad(a.lat))*Math.cos(rad(b.lat))*Math.cos(rad(b.lon-a.lon));
+    const br = (a===b) ? (NV.hdg||0) : (deg(Math.atan2(y,x))+360)%360; return { lon, lat, br }; }
+  function offLL(lon, lat, br, d){ const R = 6378137; return { lon: lon + deg(d*Math.sin(rad(br))/(R*Math.cos(rad(lat)))), lat: lat + deg(d*Math.cos(rad(br))/R) }; }
+  function hAt(lon, lat){ const ct = C.Cartographic.fromDegrees(lon, lat); let h; const ok = v=>v!==undefined && v!==null && isFinite(v) && v>-500 && v<9000;
+    try{ if(scene.sampleHeightSupported) h = scene.sampleHeight(ct, [NV.veh].concat(NV.ents||[]).filter(Boolean)); }catch(e){}
+    if(!ok(h)){ const g = globe.getHeight(ct); h = ok(g) ? g : undefined; } return h; }
+  function losOK(eye, tgt){ try{ if(typeof scene.pickFromRay!=='function') return true; const d = C.Cartesian3.distance(eye, tgt); const dir = C.Cartesian3.normalize(C.Cartesian3.subtract(tgt, eye, new C.Cartesian3()), new C.Cartesian3());
+      const hit = scene.pickFromRay(new C.Ray(eye, dir), [NV.veh].concat(NV.ents||[]).filter(Boolean)); if(!hit || !hit.position) return true; return C.Cartesian3.distance(eye, hit.position) > d - 12; }catch(e){ return true; } }
+  function placeObs(m){ const r = NV.route, S = r.S, o = OBS[m]; const total = S[S.length-1].s||0, cur = NV.curS||0;
+    let s = cur + o.lead; if(total - cur < o.lead*0.6) s = total; s = clamp(s, 0, total);
+    const p = ptAtS(S, s); const ref = hAt(p.lon, p.lat);
+    const tgt = NV.cur ? C.Cartesian3.add(NV.cur, C.Cartesian3.multiplyByScalar(C.Ellipsoid.WGS84.geodeticSurfaceNormal(NV.cur, new C.Cartesian3()), o.tz, new C.Cartesian3()), new C.Cartesian3()) : null;
+    let cands = [o.side, o.side*0.5, -o.side*0.5, -o.side].map(d=>{ const q = offLL(p.lon, p.lat, p.br+90, d); return { lon:q.lon, lat:q.lat, h:hAt(q.lon, q.lat) }; }).filter(c=>c.h!=null);
+    const ground = ref!=null ? cands.filter(c=>c.h <= ref + 3) : cands; if(ground.length) cands = ground.concat(cands.filter(c=>ground.indexOf(c)<0));
+    if(!cands.length) cands = [{ lon:p.lon, lat:p.lat, h: ref!=null ? ref : ((NV.curLL&&NV.curLL.h)||0) }];
+    let pick = null, elev = 0;
+    for(const c of cands.slice(0,3)){ const eye = C.Cartesian3.fromDegrees(c.lon, c.lat, c.h + o.eye); if(!tgt || losOK(eye, tgt)){ pick = c; break; } }
+    if(!pick){ pick = cands[0]; for(const u of o.up){ const eye = C.Cartesian3.fromDegrees(pick.lon, pick.lat, pick.h + o.eye + u); elev = u; if(losOK(eye, tgt)) break; } }
+    VV.ob = { s, lon:pick.lon, lat:pick.lat, h:pick.h, elev, route:r, eye: C.Cartesian3.fromDegrees(pick.lon, pick.lat, pick.h + o.eye + elev) }; VV.dir = null; VV.fov = null; }
+
+  function trackFPA(dt){ const ll = NV.curLL; if(!ll) return; const L = VV.lastLL;
+    if(L){ const dx = (ll.lon-L.lon)*111320*Math.cos(rad(ll.lat)), dy = (ll.lat-L.lat)*110540, ds = Math.hypot(dx,dy), dh = (ll.h||0)-(L.h||0);
+      if(ds + Math.abs(dh) > 0.02){ const f = deg(Math.atan2(dh, ds)); VV.fpa += (f - VV.fpa) * Math.min(1, (dt||0.05)*2.5); } }
+    VV.lastLL = { lon:ll.lon, lat:ll.lat, h:ll.h }; }
+  function hpOf(eye, dir){ const enu = C.Transforms.eastNorthUpToFixedFrame(eye); const inv = C.Matrix4.inverseTransformation(enu, new C.Matrix4());
+    const d = C.Matrix4.multiplyByPointAsVector(inv, dir, new C.Cartesian3()); return { h: (deg(Math.atan2(d.x, d.y))+360)%360, p: deg(Math.asin(clamp(d.z,-1,1))) }; }
+  const COMP = ['북','북동','동','남동','남','남서','서','북서'];
+  const compass = h => COMP[Math.round(((h%360)+360)%360/45)%8] + ' ' + String(Math.round(((h%360)+360)%360)).padStart(3,'0') + '°';
+
+  function apply(dt, snap){ dt = dt||0; const kind = NV.cam; if((kind!=='pov' && kind!=='obs') || !NV.route || !NV.cur) return;
+    if(VV.active && VV.active!==kind){ VV.active = null; } enter(kind);
+    const m = NV.route.mode;
+    NV.camHdg = (NV.camHdg==null || snap) ? NV.hdg : NV.camHdg + angD(NV.camHdg, NV.hdg) * Math.min(1, dt*2.2);
+    trackFPA(dt); showVeh(kind!=='pov', false);
+    const spd = Math.round((NV.curSpd||0)*3.6);
+    if(kind==='pov'){ const c = POV[m]||POV.car; const enu = C.Transforms.eastNorthUpToFixedFrame(NV.cur); const hr = rad(NV.camHdg);
+      const eye = C.Matrix4.multiplyByPoint(enu, new C.Cartesian3(Math.sin(hr)*c.fwd + Math.cos(hr)*c.lat, Math.cos(hr)*c.fwd - Math.sin(hr)*c.lat, c.eye), new C.Cartesian3());
+      let pitch = c.pitch + (m==='uam' ? clamp(VV.fpa*0.6, -25, 12) : 0);
+      camera.setView({ destination: eye, orientation:{ heading: rad(NV.camHdg + VV.yaw), pitch: rad(clamp(pitch + VV.pit, -89, 60)), roll: 0 } });
+      camera.frustum.fov = rad(clamp(c.fov / VV.zoom, 8, 100));
+      trk.style.display = 'none'; fpm.style.display = m==='uam' ? 'block' : 'none';
+      if(m==='uam'){ const fy = deg(camera.frustum.fovy || camera.frustum.fov); const ppd = scene.canvas.clientHeight / Math.max(1, fy); const H2 = scene.canvas.clientHeight/2 - 30, W2 = scene.canvas.clientWidth/2 - 40;
+        const dy = clamp((pitch + VV.pit - clamp(VV.fpa, -80, 80)) * ppd, -H2, H2), dx = clamp(-VV.yaw * ppd, -W2, W2); fpm.style.transform = 'translate(calc(-50% + ' + dx.toFixed(0) + 'px), calc(-50% + ' + dy.toFixed(0) + 'px))'; }
+      const now = performance.now(); if(now - VV.hudT > 200){ VV.hudT = now;
+        let t = '<b>' + (POVNAME[m]||'1인칭') + ' 시점</b><span>' + spd + ' km/h</span><span>' + compass(NV.camHdg + VV.yaw) + '</span>';
+        if(m==='uam'){ const g0 = (NV.route.S[0] && NV.route.S[0].h!=null) ? NV.route.S[0].h : 0; t += '<span>고도 ' + Math.max(0, Math.round((NV.curLL?NV.curLL.h:0) - g0)) + ' m</span><span>' + (VV.fpa > 20 ? '수직 상승' : VV.fpa < -20 ? '수직 강하' : VV.fpa > 2 ? '상승' : VV.fpa < -2 ? '강하' : '수평 비행') + '</span>'; }
+        if(VV.zoom !== 1) t += '<span>×' + VV.zoom.toFixed(1) + '</span>';
+        pill.innerHTML = t; }
+      return; }
+    /* 관측자 */
+    const o = OBS[m]||OBS.car; const cur = NV.curS||0;
+    if(snap || !VV.ob || VV.ob.route!==NV.route || cur > VV.ob.s + o.pass || cur < VV.ob.s - o.lead*1.8) placeObs(m);
+    const ob = VV.ob; const up = C.Ellipsoid.WGS84.geodeticSurfaceNormal(NV.cur, new C.Cartesian3());
+    const tgt = C.Cartesian3.add(NV.cur, C.Cartesian3.multiplyByScalar(up, o.tz, new C.Cartesian3()), new C.Cartesian3());
+    const v = C.Cartesian3.subtract(tgt, ob.eye, new C.Cartesian3()); const dist = C.Cartesian3.magnitude(v); const dir = C.Cartesian3.normalize(v, new C.Cartesian3());
+    if(!VV.dir || snap) VV.dir = dir; else { const k = Math.min(1, dt*6); VV.dir = C.Cartesian3.normalize(C.Cartesian3.lerp(VV.dir, dir, k, new C.Cartesian3()), new C.Cartesian3()); }
+    const hp = hpOf(ob.eye, VV.dir);
+    camera.setView({ destination: ob.eye, orientation:{ heading: rad(hp.h + VV.yaw), pitch: rad(clamp(hp.p + VV.pit, -89, 89)), roll: 0 } });
+    const fovT = clamp(deg(2*Math.atan(o.size*2.5/Math.max(1,dist))), 4, 75);
+    VV.fov = (VV.fov==null || snap) ? fovT : VV.fov + (fovT - VV.fov)*Math.min(1, dt*3);
+    camera.frustum.fov = rad(clamp(VV.fov / VV.zoom, 2, 100));
+    fpm.style.display = 'none';
+    const sp = scene.cartesianToCanvasCoordinates(tgt);
+    if(sp && isFinite(sp.x) && C.Cartesian3.dot(C.Cartesian3.subtract(tgt, camera.position, new C.Cartesian3()), camera.direction) > 0){
+      const cw = scene.canvas.clientWidth, px = clamp(o.size / (2*dist*Math.tan(camera.frustum.fov/2)) * cw * 1.25, 26, 420);
+      const rc = scene.canvas.getBoundingClientRect();
+      trk.style.display = 'block'; trk.style.left = (rc.left + sp.x - px/2) + 'px'; trk.style.top = (rc.top + sp.y - px/2) + 'px'; trk.style.width = trk.style.height = px + 'px';
+      trkTx.textContent = Math.round(dist) + ' m'; } else trk.style.display = 'none';
+    const now = performance.now(); if(now - VV.hudT > 200){ VV.hudT = now;
+      const fullFov = deg(camera.frustum.fov); const mm = Math.round(18 / Math.tan(rad(fullFov)/2));
+      pill.innerHTML = '<b>관측자 시점</b>' + (ob.elev ? '<span>관측 높이 +' + ob.elev + ' m</span>' : '') + '<span>거리 ' + (dist>=1000 ? (dist/1000).toFixed(2)+' km' : Math.round(dist)+' m') + '</span><span>앙각 ' + Math.round(hp.p) + '°</span><span>' + spd + ' km/h</span><span>망원 ' + mm + ' mm</span>'; }
+  }
+  function onCam(v){ updButtons();
+    if(v==='pov' || v==='obs'){ VV.ob = null; if(NV.route && NV.cur) apply(0, true); return; }
+    if(VV.active){ exit(false); if(NV.route && NV.cur){ const keep = NV.cam; if(keep==='free') NV.cam = 'chase'; NV.camHdg = NV.hdg; try{ A.updCamera(1); }catch(e){} NV.cam = keep; NV.prevTarget = null; } } }
+
+  /* 입력: 1인칭/관측자일 때 지도 클릭·드래그를 둘러보기로 사용 */
+  const onCanvas = e => e.target === scene.canvas;
+  const rerender = () => { if(!NV.playing) apply(0); };
+  window.addEventListener('pointerdown', e=>{ if(!VV.active || !onCanvas(e)) return; e.stopPropagation(); e.preventDefault(); if(e.button===0) VV.drag = { x:e.clientX, y:e.clientY }; }, true);
+  window.addEventListener('pointermove', e=>{ if(!VV.active || !VV.drag) return; e.stopPropagation(); const k = deg(camera.frustum.fov) / Math.max(200, scene.canvas.clientWidth);
+    VV.yaw -= (e.clientX - VV.drag.x)*k; VV.pit = clamp(VV.pit + (e.clientY - VV.drag.y)*k, -80, 80); VV.drag = { x:e.clientX, y:e.clientY }; rerender(); }, true);
+  window.addEventListener('pointerup', e=>{ if(!VV.active) return; if(VV.drag || onCanvas(e)){ e.stopPropagation(); } VV.drag = null; }, true);
+  window.addEventListener('wheel', e=>{ if(!VV.active || !onCanvas(e)) return; e.preventDefault(); e.stopImmediatePropagation(); VV.zoom = clamp(VV.zoom * (e.deltaY < 0 ? 1.15 : 1/1.15), 0.5, 8); rerender(); }, { capture:true, passive:false });
+  window.addEventListener('dblclick', e=>{ if(!VV.active || !onCanvas(e)) return; e.stopPropagation(); VV.yaw = 0; VV.pit = 0; VV.zoom = 1; rerender(); }, true);
+  window.addEventListener('keydown', e=>{ if(!VV.active) return; const t = e.target; if(t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable)) return;
+    if(e.key==='Escape'){ e.stopPropagation(); setCam('chase'); return; }
+    const k = { ArrowLeft:[-5,0], ArrowRight:[5,0], ArrowUp:[0,4], ArrowDown:[0,-4] }[e.key]; if(!k) return; e.preventDefault(); e.stopPropagation(); VV.yaw += k[0]; VV.pit = clamp(VV.pit + k[1], -80, 80); rerender(); }, true);
+  const prog = P.querySelector('#nvProg'); if(prog) prog.addEventListener('input', ()=>{ if(VV.active || NV.cam==='pov' || NV.cam==='obs'){ if(!NV.playing) apply(0, true); } });
+  const stopB = P.querySelector('#nvStop'); if(stopB) stopB.addEventListener('click', ()=>{ if(NV.cam==='pov' || NV.cam==='obs') setTimeout(()=>apply(0, true), 0); });
+
+  /* 상태 감시: 창 닫힘·모드 변경 */
+  scene.postRender.addEventListener(()=>{ const m = NV.mode || (NV.route && NV.route.mode);
+    if(m !== VV.lastMode) updButtons();
+    if(VV.active){ if(!NV.open) exit(true); else if(!NV.route) exit(false); } });
+  updButtons();
+  window.__NVV = { version:'68.1', VV, apply, onCam, setCam, enter, exit };
 })();
 </script>
 
