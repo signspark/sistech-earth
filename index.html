@@ -11191,7 +11191,7 @@ if(!window.__CVB) window.__CVB = (function(){
     if(!VV.active){ VV.saved = { pos: C.Cartesian3.clone(camera.position), hd: camera.heading, pt: camera.pitch, rl: camera.roll, fov: camera.frustum.fov, coll: sscc.enableCollisionDetection, inp: sscc.enableInputs }; }
     try{ if(!camera.transform.equals(C.Matrix4.IDENTITY)) camera.lookAtTransform(C.Matrix4.IDENTITY); }catch(e){}
     sscc.enableCollisionDetection = false; sscc.enableInputs = false;
-    VV.active = kind; VV.yaw = 0; VV.pit = 0; VV.zoom = 1; VV.ob = null; VV.fov = null; VV.dir = null; VV.lastLL = null; VV.fpa = 0;
+    VV.active = kind; VV.trk = null; VV.yaw = 0; VV.pit = 0; VV.zoom = 1; VV.ob = null; VV.fov = null; VV.dir = null; VV.lastLL = null; VV.fpa = 0;
     hud.classList.add('on'); fpm.style.display = 'none'; trk.style.display = 'none'; }
   function exit(restoreView){ if(!VV.active) return; const s = VV.saved; VV.active = null; VV.drag = null;
     if(s){ camera.frustum.fov = s.fov; sscc.enableCollisionDetection = s.coll; sscc.enableInputs = s.inp; }
@@ -11263,12 +11263,7 @@ if(!window.__CVB) window.__CVB = (function(){
     VV.fov = (VV.fov==null || snap) ? fovT : VV.fov + (fovT - VV.fov)*Math.min(1, dt*3);
     camera.frustum.fov = rad(clamp(VV.fov / VV.zoom, 2, 100));
     fpm.style.display = 'none';
-    const sp = scene.cartesianToCanvasCoordinates(tgt);
-    if(sp && isFinite(sp.x) && C.Cartesian3.dot(C.Cartesian3.subtract(tgt, camera.position, new C.Cartesian3()), camera.direction) > 0){
-      const cw = scene.canvas.clientWidth, px = clamp(o.size / (2*dist*Math.tan(camera.frustum.fov/2)) * cw * 0.8, 24, 380);
-      const rc = scene.canvas.getBoundingClientRect();
-      trk.style.display = 'block'; trk.style.left = (rc.left + sp.x - px/2) + 'px'; trk.style.top = (rc.top + sp.y - px/2) + 'px'; trk.style.width = trk.style.height = px + 'px';
-      trkTx.textContent = Math.round(dist) + ' m'; } else trk.style.display = 'none';
+    VV.trk = { tgt: C.Cartesian3.clone(tgt), size: o.size, dist };
     const now = performance.now(); if(now - VV.hudT > 200){ VV.hudT = now;
       const fullFov = deg(camera.frustum.fov); const mm = Math.round(18 / Math.tan(rad(fullFov)/2));
       pill.innerHTML = '<b>관측자 시점</b>' + (ob.elev ? '<span>관측 높이 +' + ob.elev + ' m</span>' : '') + '<span>거리 ' + (dist>=1000 ? (dist/1000).toFixed(2)+' km' : Math.round(dist)+' m') + '</span><span>앙각 ' + Math.round(hp.p) + '°</span><span>' + spd + ' km/h</span><span>망원 ' + mm + ' mm</span>'; }
@@ -11292,12 +11287,19 @@ if(!window.__CVB) window.__CVB = (function(){
   const prog = P.querySelector('#nvProg'); if(prog) prog.addEventListener('input', ()=>{ if(VV.active || NV.cam==='pov' || NV.cam==='obs'){ if(!NV.playing) apply(0, true); } });
   const stopB = P.querySelector('#nvStop'); if(stopB) stopB.addEventListener('click', ()=>{ if(NV.cam==='pov' || NV.cam==='obs') setTimeout(()=>apply(0, true), 0); });
 
+  function drawTrk(){ const k = VV.trk; if(VV.active!=='obs' || !k){ trk.style.display = 'none'; return; }
+    const sp = scene.cartesianToCanvasCoordinates(k.tgt);
+    if(sp && isFinite(sp.x) && C.Cartesian3.dot(C.Cartesian3.subtract(k.tgt, camera.position, new C.Cartesian3()), camera.direction) > 0){
+      const cw = scene.canvas.clientWidth, px = clamp(k.size / (2*k.dist*Math.tan(camera.frustum.fov/2)) * cw * 0.8, 24, 380);
+      const rc = scene.canvas.getBoundingClientRect();
+      trk.style.display = 'block'; trk.style.left = (rc.left + sp.x - px/2) + 'px'; trk.style.top = (rc.top + sp.y - px/2) + 'px'; trk.style.width = trk.style.height = px + 'px';
+      trkTx.textContent = Math.round(k.dist) + ' m'; } else trk.style.display = 'none'; }
   /* 상태 감시: 창 닫힘·모드 변경 */
   scene.postRender.addEventListener(()=>{ const m = NV.mode || (NV.route && NV.route.mode);
     if(m !== VV.lastMode) updButtons();
-    if(VV.active){ if(!NV.open) exit(true); else if(!NV.route) exit(false); } });
+    if(VV.active){ if(!NV.open) exit(true); else if(!NV.route) exit(false); } drawTrk(); });
   updButtons();
-  window.__NVV = { version:'68.2', VV, apply, onCam, setCam, enter, exit };
+  window.__NVV = { version:'68.3', VV, apply, onCam, setCam, enter, exit };
 })();
 </script>
 
