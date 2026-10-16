@@ -5403,8 +5403,8 @@ body.nv-rec > :not(#cesium):not(#nvRec){visibility:hidden !important}
     if(!wantParcels() || STATE.measure || CAD.wmsAuto || (window.__GT && window.__GT.picking)) return _cadClick && _cadClick(e);
     const ll = pickLL(e.position); if(!ll) return _cadClick && _cadClick(e);
     let hit = null, hitRing = null;
-    try{ const pk = scene.pick(e.position); const pid = (pk && typeof pk.id === 'string') ? pk.id : ''; const m = pid.match(/^cadf?:(.+)$/); if(m && CAD.feats.has(m[1])){ hit = CAD.feats.get(m[1]); const rs = rings(hit.geometry); hitRing = rs.find(r=>inRing(ll[0], ll[1], r)) || rs[0]; } }catch(err){} // 선·면 프리미티브를 직접 집었으면 그 필지
-    if(!hit) for(const [pnu, f] of CAD.feats){ for(const r of rings(f.geometry)){ if(inRing(ll[0], ll[1], r)){ hit = f; hitRing = r; break; } } if(hit) break; }
+    for(const [pnu, f] of CAD.feats){ for(const r of rings(f.geometry)){ if(inRing(ll[0], ll[1], r)){ hit = f; hitRing = r; break; } } if(hit) break; }
+    if(!hit){ try{ const pk = scene.pick(e.position); const pid = (pk && typeof pk.id === 'string') ? pk.id : ''; const m = pid.match(/^cadf?:(.+)$/); if(m && CAD.feats.has(m[1])){ hit = CAD.feats.get(m[1]); hitRing = rings(hit.geometry)[0]; } }catch(err){} } // 지형 높이 차로 점이 경계 밖에 떨어지면 집은 선·면 프리미티브의 필지로 보완
     if(!hit) return _cadClick && _cadClick(e);
     const p = hit.properties; const jb = p.jibun||''; const jm = jimokOf(jb); const pnu = String(p.pnu||''); const emdCd = pnu.slice(0,8); const emdNm = EMD_NAME.get(emdCd) || ''; const san = pnu.charAt(10)==='2' ? '산 ' : '';
     const area = rings(hit.geometry).reduce((s,r)=>s+geoArea(r),0); const per = geoLen(hitRing);
