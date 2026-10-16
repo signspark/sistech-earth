@@ -11587,16 +11587,23 @@ if(!window.__CVB) window.__CVB = (function(){
    - 방향: 인접 코스(번호 ±1) 경로와 비교해 시점 방향 추정 · HUD "⇄ 방향" 으로 즉시 반전
    - 고도: sampleTerrainMostDetailed(일괄) + 200 m 평활 + 지면 50 m · 3D 타일 표면(scene.sampleHeight)이 더 높으면 그 위로
    - 카메라: 진행점 뒤 약 35 m, 전방 150 m 지점 방위, 피치 -28° · 속도 25 m/s × 1/2/4/8 · 시작/끝 가감속
+   71.4 (2026-10-16) 재작업: ① 지상 경로 = OSM 연결 → 5 m 재표본 → DP 단순화(5 m) → 왕복 스파이크 제거 → 꼭짓점 폴리라인
+     ② 꼭짓점마다 속도 기반 원호 필렛 R = v²/a_lat (접선 길이 ≤ 0.45×인접 변, 꼭짓점 이탈 ≤ 18 m) · 반경이 줄면 코너 속도 v=√(a_lat·R)
+     ③ 속도 프로필: 코너 제한 + 전·후진 가속도 제한(a_lon) → 커브 전후 자연 감속/가속 · s += v·dt (누적거리 이진 탐색, 등간격 가정 없음)
+     ④ 카메라: 궤적(s) 위 고도 = 지형 최대필터(±50 m)+저역통과(±60 m)+50 m · 시선은 s+D(D=alt/tan28°≈94 m) 지면 점을 직접 조준(direction/up) → 올레 선이 화면 중앙
+        시선 벡터 임계감쇠 저역통과(τ≈0.6 s) · 롤 없음 · 3D 타일 바닥은 완만하게(상승 0.8 s·하강 2 s, 3D 타일 없으면 생략)
+     ⑤ 배속 변경·방향 반전 시 궤적 재구성(진행점은 최근접점으로 이어감) · requestRenderMode 해제·SSE 하한 6·형제 타일 선로드(투어 중) · ?debug=olle 또는 __OLLE71.debug=true 면 드론 궤적 가는 선 표시
    - 영상: viewer.canvas.captureStream(30) + MediaRecorder(mp4/avc1 우선, 없으면 webm) 12 Mbps → 자동 다운로드 "제주올레_<코스>_드론투어_YYYYMMDD-HHmm"
    - 종료: ✕ · Esc · 카드 닫기 · 레이어 끄기 · EARTH 전환 → 카메라 조작 복원, 선 제거
 */
 (function(){
   if(window.__OLLE71) return;
   const C = Cesium;
-  const VER = '71.3';
+  const VER = '71.4';
   const deg = r=>r*180/Math.PI, rad = d=>d*Math.PI/180;
-  const CFG = { alt:50, speed:25, back:35, look:150, pitch:-28, step:10, smoothPos:15, smoothH:21, lineW:9, lineA:.55, bitrate:12e6, fps:30 };
-  const T = { active:false, paused:false, c:null, path:null, s:0, mult:1, rec:null, chunks:[], blob:null, url:null, line:null, prevInputs:true, lastT:0, head:null, floor:0, floorT:0, phase:'idle', recOn:false, startedAt:0, ext:'webm', mime:'' };
+  const CFG = { alt:50, speed:25, pitch:-28, step:5, simp:5, aLat:3.5, aLon:2.5, devMax:18, tanCap:0.45, maxWin:30, lpWin:50, tourSSE:6, gndWin:15, slopeMax:0.3, omegaMax:0.52, dirTau:0.6, floorUp:0.8, floorDown:2.0, lineW:9, lineA:.55, bitrate:12e6, fps:30 };
+  const T = { active:false, paused:false, c:null, path:null, s:0, mult:1, rec:null, chunks:[], blob:null, url:null, line:null, dbgLine:null, prevInputs:true, lastT:0, head:null, dir:null, floor:0, floorTgt:0, floorT:0, phase:'idle', recOn:false, startedAt:0, ext:'webm', mime:'', prevRRM:null, prevSSE:null, prevPre:false, v:0, stats:null };
+  const DEBUG = /[?&]debug=olle/.test(location.search);
   const $ = id => document.getElementById(id);
   const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const JJ = () => window.__JJ70;
@@ -11678,34 +11685,94 @@ if(!window.__CVB) window.__CVB = (function(){
     if(next.length){ fwd += Math.sqrt(nearestD2(b, next)); rev += Math.sqrt(nearestD2(a, next)); }
     return rev < fwd * 0.8;
   }
-  async function buildPath(c){
+  /* ---- 71.4 지상 경로 → 꼭짓점 폴리라인 → 속도 기반 필렛 궤적 ---- */
+  function dpSimplify(pts, tol){ if(pts.length < 3) return pts.slice(); const keep = new Uint8Array(pts.length); keep[0]=keep[pts.length-1]=1; const st=[[0,pts.length-1]]; const t2 = tol*tol;
+    while(st.length){ const [i,j]=st.pop(); const a=pts[i], b=pts[j]; const dx=b[0]-a[0], dy=b[1]-a[1]; const L=dx*dx+dy*dy; let mx=-1, mi=-1;
+      for(let k=i+1;k<j;k++){ const p=pts[k]; let t = L>0 ? ((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L : 0; t=Math.max(0,Math.min(1,t)); const ex=p[0]-(a[0]+dx*t), ey=p[1]-(a[1]+dy*t); const d=ex*ex+ey*ey; if(d>mx){ mx=d; mi=k; } }
+      if(mx > t2){ keep[mi]=1; st.push([i,mi],[mi,j]); } }
+    return pts.filter((_,i)=>keep[i]); }
+  function turnAngle(a,b,c){ const v1=[b[0]-a[0], b[1]-a[1]], v2=[c[0]-b[0], c[1]-b[1]]; const l1=Math.hypot(v1[0],v1[1]), l2=Math.hypot(v2[0],v2[1]); if(l1<1e-6||l2<1e-6) return 0; let cs=(v1[0]*v2[0]+v1[1]*v2[1])/(l1*l2); cs=Math.max(-1,Math.min(1,cs)); return Math.acos(cs); }
+  function removeSpikes(V){ // 왕복 스파이크(짧게 갔다가 되돌아오는 조각) 제거 · 2회 반복
+    for(let pass=0; pass<2; pass++){ const out=[V[0]]; let i=1;
+      while(i < V.length-1){ const ang = turnAngle(V[i-1], V[i], V[i+1]);
+        if(ang > rad(150)){ // 급반전: 이후 60 m 안에 되돌아온 점이 있으면 i..j-1 제거
+          let j=i+1, run=0, found=-1; while(j < V.length && run < 60){ run += Math.sqrt(d2(V[j-1], V[j])); if(d2(V[i-1], V[j]) < 12*12 || (j+1<V.length && turnAngle(V[i-1], V[j], V[j+1]) < rad(40) && Math.sqrt(d2(V[i-1],V[j])) < 40)){ found=j; break; } j++; }
+          if(found > 0){ i = found; continue; } }
+        out.push(V[i]); i++; }
+      out.push(V[V.length-1]); V = out; }
+    return V; }
+  function makeTrack(V, vmax, mult){ // 꼭짓점 폴리라인 → 필렛 궤적 점 + 점별 속도 상한
+    const aLat = CFG.aLat*mult; const pts=[], vlim=[]; const push=(p,v)=>{ if(pts.length){ const q=pts[pts.length-1]; const d=Math.sqrt(d2(q,p)); if(d < 0.2) return; if(d > 10){ const k=Math.ceil(d/10); for(let j=1;j<k;j++){ pts.push([q[0]+(p[0]-q[0])*j/k, q[1]+(p[1]-q[1])*j/k]); vlim.push(vmax); } } } pts.push(p); vlim.push(v); }; // 긴 직선은 10 m 간격으로 채워 속도 프로필이 선형 보간으로 뭉개지지 않게
+    push(V[0], vmax);
+    for(let i=1;i<V.length-1;i++){ const a=V[i-1], b=V[i], c=V[i+1]; const th = turnAngle(a,b,c); const lin=Math.sqrt(d2(a,b)), lout=Math.sqrt(d2(b,c));
+      if(th < rad(2) || lin < 1e-3 || lout < 1e-3){ push(b, vmax); continue; }
+      const tanH = Math.tan(th/2); let R = vmax*vmax/aLat;
+      const tCap = Math.max(0.5, Math.min(CFG.tanCap*lout, CFG.tanCap*lin)); // 앞/뒤 변의 45 % (이웃 필렛과 합쳐도 ≤ 90 %)
+      R = Math.min(R, tCap/tanH); const dev = 1/Math.cos(th/2) - 1; if(dev > 1e-6) R = Math.min(R, CFG.devMax/dev); R = Math.max(R, 2);
+      const Tl = R*tanH; const vc = Math.min(vmax, Math.sqrt(aLat*R), R*CFG.omegaMax*Math.sqrt(mult)); // 횡가속·선회각속도 제한
+      const din=[(b[0]-a[0])/lin, (b[1]-a[1])/lin], dout=[(c[0]-b[0])/lout, (c[1]-b[1])/lout];
+      const p1=[b[0]-din[0]*Tl, b[1]-din[1]*Tl], p2=[b[0]+dout[0]*Tl, b[1]+dout[1]*Tl];
+      const cross = din[0]*dout[1]-din[1]*dout[0]; const sgn = cross>0 ? 1 : -1; // 좌회전 +
+      const nrm=[-din[1]*sgn, din[0]*sgn]; const ctr=[p1[0]+nrm[0]*R, p1[1]+nrm[1]*R];
+      const a0 = Math.atan2(p1[1]-ctr[1], p1[0]-ctr[0]); const nSeg = Math.max(4, Math.ceil(R*th/3));
+      push(p1, vc); for(let k=1;k<nSeg;k++){ const an = a0 + sgn*th*k/nSeg; push([ctr[0]+R*Math.cos(an), ctr[1]+R*Math.sin(an)], vc); } push(p2, vc); }
+    push(V[V.length-1], vmax);
+    return { pts, vlim }; }
+  function speedProfile(cum, vlim, mult){ const n=cum.length, a=CFG.aLon*mult; const v=Float64Array.from(vlim);
+    v[0] = Math.min(v[0], 3); v[n-1] = Math.min(v[n-1], 3);
+    for(let i=1;i<n;i++){ const ds=cum[i]-cum[i-1]; v[i]=Math.min(v[i], Math.sqrt(v[i-1]*v[i-1]+2*a*ds)); }
+    for(let i=n-2;i>=0;i--){ const ds=cum[i+1]-cum[i]; v[i]=Math.min(v[i], Math.sqrt(v[i+1]*v[i+1]+2*a*ds)); }
+    return v; }
+  function winFilter(vals, cum, w, fn){ // 거리창(±w m) 필터 · fn: 'max' | 'avg'
+    const n=vals.length, out=new Float64Array(n); let lo=0, hi=0; for(let i=0;i<n;i++){ while(lo<n && cum[lo] < cum[i]-w) lo++; while(hi<n && cum[hi] <= cum[i]+w) hi++;
+      if(fn==='max'){ let m=-Infinity; for(let j=lo;j<hi;j++) if(vals[j]>m) m=vals[j]; out[i]=m; } else { let s=0; for(let j=lo;j<hi;j++) s+=vals[j]; out[i]=s/(hi-lo); } } return out; }
+  function cumOf(pts){ const n=pts.length, cum=new Float64Array(n); for(let i=1;i<n;i++) cum[i]=cum[i-1]+Math.sqrt(d2(pts[i-1],pts[i])); return cum; }
+  function nearestOn(poly, cum, p){ // 폴리라인 위 최근접 s
+    let best=Infinity, bs=0; for(let i=1;i<poly.length;i++){ const a=poly[i-1], b=poly[i]; const dx=b[0]-a[0], dy=b[1]-a[1]; const L=dx*dx+dy*dy; let t=L>0?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L:0; t=Math.max(0,Math.min(1,t)); const ex=p[0]-(a[0]+dx*t), ey=p[1]-(a[1]+dy*t); const d=ex*ex+ey*ey; if(d<best){ best=d; bs=cum[i-1]+Math.sqrt(L)*t; } } return bs; }
+  function assemble(G, mult){ // G: { m, V(꼭짓점), rs(5 m 지상점), rsCum, rsH(지형) } → 궤적 path
+    const vmax = CFG.speed*mult; const tr = makeTrack(G.V, vmax, mult); const pts = tr.pts, n = pts.length; const cum = cumOf(pts);
+    const vprof = speedProfile(cum, tr.vlim, mult);
+    // 지형: 궤적점 → 최근접 지상점(rs)의 표고 (궤적은 지상선에서 ≤18 m)
+    const raw = new Float64Array(n); let j=0; for(let i=0;i<n;i++){ const p=pts[i]; let best=Infinity, bj=j; for(let k=Math.max(0,j-80); k<Math.min(G.rs.length, j+200); k++){ const d=d2(p,G.rs[k]); if(d<best){ best=d; bj=k; } } j=bj; raw[i]=G.rsH[bj]; }
+    const gnd = winFilter(raw, cum, CFG.gndWin, 'avg');
+    const mx = winFilter(raw, cum, CFG.maxWin, 'max'); const lp = winFilter(mx, cum, CFG.lpWin, 'avg');
+    const camH = new Float64Array(n); for(let i=0;i<n;i++) camH[i] = Math.max(lp[i] + CFG.alt, raw[i] + CFG.alt*0.6);
+    const camS = winFilter(camH, cum, 40, 'avg'); for(let i=0;i<n;i++) camH[i] = Math.max(camS[i], raw[i] + CFG.alt*0.6);
+    // 경사 제한(상승·하강 ≤ slopeMax): 산·절벽 앞에서 미리 올라가고 천천히 내려옴 (항상 필요 고도 이상 유지)
+    for(let i=n-2;i>=0;i--){ const ds=cum[i+1]-cum[i]; camH[i] = Math.max(camH[i], camH[i+1] - CFG.slopeMax*ds); }
+    for(let i=1;i<n;i++){ const ds=cum[i]-cum[i-1]; camH[i] = Math.max(camH[i], camH[i-1] - CFG.slopeMax*ds); }
+    const ll = pts.map(p=>G.m.b(p[0],p[1]));
+    return { m:G.m, G, pts, ll, cum, L:cum[n-1], n, raw, gnd, camH, v:vprof, vlim:tr.vlim, mult, vmax }; }
+  async function buildPath(c, mult){
     const lines = c.geom.coordinates.filter(l=>l.length>=2); const p0 = lines[0][0]; const m = toM(p0[0], p0[1]);
     let poly = chain(lines.map(l=>l.map(m.f))); if(poly.length < 2) throw new Error('경로가 너무 짧습니다');
     if(autoDirection(c, poly, m)) poly.reverse();
-    const rs = resample(poly, CFG.step); const n = rs.length;
-    const sx = smooth(rs, CFG.smoothPos, p=>p[0]), sy = smooth(rs, CFG.smoothPos, p=>p[1]);
-    const pts = sx.map((x,i)=>[x, sy[i]]);
-    const cum = new Float64Array(n); for(let i=1;i<n;i++) cum[i] = cum[i-1] + Math.sqrt(d2(pts[i-1], pts[i]));
-    const ll = pts.map(p=>m.b(p[0],p[1]));
+    const rs = resample(poly, CFG.step); const rsCum = cumOf(rs);
+    let V = dpSimplify(rs, CFG.simp); V = removeSpikes(V); if(V.length < 2) V = [rs[0], rs[rs.length-1]];
+    const ll = rs.map(p=>m.b(p[0],p[1]));
     let hs = null; try{ hs = await C.sampleTerrainMostDetailed(globe.terrainProvider, ll.map(p=>C.Cartographic.fromDegrees(p[0], p[1]))); }catch(e){ try{ hs = await C.sampleTerrain(globe.terrainProvider, 13, ll.map(p=>C.Cartographic.fromDegrees(p[0], p[1]))); }catch(err){ hs = null; } }
-    const raw = ll.map((p,i)=>{ let h = hs && hs[i] && isFinite(hs[i].height) ? hs[i].height : NaN; if(!isFinite(h)){ const g = globe.getHeight(C.Cartographic.fromDegrees(p[0], p[1])); h = isFinite(g) ? g : 0; } return Math.max(h, 0); });
-    const sm = smooth(raw, CFG.smoothH, v=>v);
-    const camH = raw.map((h,i)=> Math.max(sm[i] + CFG.alt, h + CFG.alt*0.5));
-    return { m, pts, ll, raw, sm, camH, cum, L: cum[n-1], n };
-  }
-  function at(path, s){ // s(m) → {x,y,lon,lat,ground,camH}
-    s = Math.max(0, Math.min(path.L, s)); let i = Math.floor(s / CFG.step); if(i >= path.n-1) i = path.n-2; if(i<0) i=0;
-    let t = (s - path.cum[i]) / Math.max(1e-6, path.cum[i+1]-path.cum[i]); t = Math.max(0, Math.min(1, t));
+    const rsH = ll.map((p,i)=>{ let h = hs && hs[i] && isFinite(hs[i].height) ? hs[i].height : NaN; if(!isFinite(h)){ const g = globe.getHeight(C.Cartographic.fromDegrees(p[0], p[1])); h = isFinite(g) ? g : 0; } return Math.max(h, 0); });
+    const G = { m, V, rs, rsCum, rsH, nV: V.length, nRs: rs.length };
+    return assemble(G, mult || T.mult || 1); }
+  function at(path, s){ // s(m) → 보간 (누적거리 이진 탐색)
+    s = Math.max(0, Math.min(path.L, s)); const cum = path.cum; let lo=0, hi=path.n-1; while(hi-lo > 1){ const mid=(lo+hi)>>1; if(cum[mid] <= s) lo=mid; else hi=mid; }
+    const i=lo; const seg = Math.max(1e-6, cum[i+1]-cum[i]); let t=(s-cum[i])/seg; t=Math.max(0,Math.min(1,t));
     const a=path.pts[i], b=path.pts[i+1]; const x=a[0]+(b[0]-a[0])*t, y=a[1]+(b[1]-a[1])*t; const ll = path.m.b(x,y);
-    return { x, y, lon:ll[0], lat:ll[1], ground: path.raw[i]+(path.raw[i+1]-path.raw[i])*t, camH: path.camH[i]+(path.camH[i+1]-path.camH[i])*t };
+    const lerp=(arr)=>arr[i]+(arr[i+1]-arr[i])*t;
+    return { x, y, lon:ll[0], lat:ll[1], ground: lerp(path.gnd), raw: lerp(path.raw), camH: lerp(path.camH), v: lerp(path.v), i, t };
   }
+  function rebuildTrack(mult){ const path = T.path; if(!path) return; const cur = at(path, T.s); const np = assemble(path.G, mult); np.G = path.G; T.path = np; T.s = nearestOn(np.pts, np.cum, [cur.x, cur.y]); drawDebug(); }
 
   /* ---- 지면 선 ---- */
   function paleColor(c){ const col = c._col || C.Color.fromCssColorString('#BFE33A'); return C.Color.lerp(col, C.Color.WHITE, 0.6, new C.Color()).withAlpha(CFG.lineA); }
   function drawLine(c){ removeLine(); const col = paleColor(c); const inst = [];
     for(const line of c.geom.coordinates){ if(line.length<2) continue; inst.push(new C.GeometryInstance({ geometry: new C.GroundPolylineGeometry({ positions: C.Cartesian3.fromDegreesArray(line.flat()), width: CFG.lineW }), attributes:{ color: C.ColorGeometryInstanceAttribute.fromColor(col) }, id:'o71line' })); }
     if(inst.length) T.line = scene.groundPrimitives.add(new C.GroundPolylinePrimitive({ geometryInstances: inst, appearance: new C.PolylineColorAppearance(), classificationType: C.ClassificationType.BOTH, asynchronous: true, allowPicking: false })); }
-  function removeLine(){ if(T.line){ try{ scene.groundPrimitives.remove(T.line); }catch(e){} T.line = null; } }
+  function removeLine(){ if(T.line){ try{ scene.groundPrimitives.remove(T.line); }catch(e){} T.line = null; } removeDebug(); }
+  function restoreGlobe(){ if(T.prevSSE !== undefined && T.prevSSE !== null){ try{ globe.maximumScreenSpaceError = T.prevSSE; globe.preloadSiblings = !!T.prevPre; }catch(e){} T.prevSSE = null; } }
+  function removeDebug(){ if(T.dbgLine){ try{ scene.groundPrimitives.remove(T.dbgLine); }catch(e){} T.dbgLine = null; } }
+  function drawDebug(){ removeDebug(); if(!(DEBUG || window.__OLLE71.debug) || !T.path) return; const path = T.path; const pos = C.Cartesian3.fromDegreesArray(path.ll.flat());
+    T.dbgLine = scene.groundPrimitives.add(new C.GroundPolylinePrimitive({ geometryInstances: new C.GeometryInstance({ geometry: new C.GroundPolylineGeometry({ positions: pos, width: 2 }), attributes:{ color: C.ColorGeometryInstanceAttribute.fromColor(C.Color.MAGENTA.withAlpha(.9)) }, id:'o71dbg' }), appearance: new C.PolylineColorAppearance(), classificationType: C.ClassificationType.BOTH, asynchronous: true, allowPicking: false })); }
 
   /* ---- 녹화 ---- */
   function pickMime(){ const list = ['video/mp4;codecs=avc1.42E01E','video/mp4;codecs=avc1','video/mp4','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm']; for(const m of list){ try{ if(MediaRecorder.isTypeSupported(m)) return m; }catch(e){} } return ''; }
@@ -11721,28 +11788,43 @@ if(!window.__CVB) window.__CVB = (function(){
   function recStop(){ const r = T.rec; T.rec = null; H.rec.classList.remove('on'); if(r && r.state !== 'inactive'){ try{ r.stop(); }catch(e){} } else { try{ if(T.stream){ T.stream.getTracks().forEach(t=>t.stop()); T.stream = null; } }catch(e){} } }
   function fileName(){ const d = new Date(), p = n=>String(n).padStart(2,'0'); const no = (T.c && T.c.no || '코스').replace(/\s+/g,''); return '제주올레_'+no+'_드론투어_'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+'.'+T.ext; }
 
-  /* ---- 카메라 ---- */
+  /* ---- 카메라 (71.4: 궤적 위 위치 · s+D 지면 점 직접 조준 · 시선 저역통과 · 롤 없음) ---- */
   const norm = a => { while(a > Math.PI) a -= 2*Math.PI; while(a < -Math.PI) a += 2*Math.PI; return a; };
-  function pose(path, s){ const cp = at(path, s - CFG.back), lp = at(path, s + CFG.look); const fp = at(path, s + 20);
-    let hd = Math.atan2(lp.x - cp.x, lp.y - cp.y); if(!isFinite(hd)) hd = Math.atan2(fp.x - cp.x, fp.y - cp.y); if(!isFinite(hd)) hd = T.head || 0;
-    let camH = cp.camH; if(T.floor > camH) camH = T.floor; return { lon: cp.lon, lat: cp.lat, h: camH, ground: cp.ground, heading: hd }; }
-  function sampleFloor(path, s){ // 3D 타일 표면이 더 높으면 카메라 바닥 올림 (0.3초마다 전방 40 m 지점)
-    try{ const p = at(path, s + 40); const h = scene.sampleHeight(C.Cartographic.fromDegrees(p.lon, p.lat), undefined, 2); if(isFinite(h) && h > p.ground + 2) T.floor = h + CFG.alt*0.8; else T.floor = 0; }catch(e){ T.floor = 0; } }
-  function tick(){ if(!T.active || T.phase !== 'run') return; const now = performance.now(); let dt = (now - T.lastT)/1000; T.lastT = now; if(dt > 0.25) dt = 0.25; if(dt <= 0) return;
+  const lookD = () => CFG.alt / Math.tan(rad(-CFG.pitch)); // ≈ 94 m
+  function pose(path, s){ // HUD·시작용 요약 (heading 포함)
+    const cp = at(path, s), tp = at(path, s + lookD()); let hd = Math.atan2(tp.x - cp.x, tp.y - cp.y); if(!isFinite(hd)) hd = T.head || 0;
+    let camH = cp.camH; if(T.floor > camH) camH = T.floor; return { lon: cp.lon, lat: cp.lat, h: camH, ground: cp.raw, heading: hd, v: cp.v }; }
+  function hasTiles(){ try{ return (typeof PROJECTS!=='undefined') && PROJECTS.some(p=>p.ts && p.ts.show); }catch(e){ return false; } }
+  function sampleFloor(path, s){ // 3D 타일 표면이 더 높으면 바닥 목표치 설정 (0.3초마다 전방 40 m) → tick 에서 완만히 추종 · 3D 타일이 없으면 생략(sampleHeight 40 ms 절약)
+    if(!hasTiles()){ T.floorTgt = 0; return; }
+    try{ const p = at(path, s + 40); const h = scene.sampleHeight(C.Cartographic.fromDegrees(p.lon, p.lat), undefined, 2); T.floorTgt = (isFinite(h) && h > p.raw + 2) ? h + CFG.alt*0.8 : 0; }catch(e){ T.floorTgt = 0; } }
+  const _c3 = { a:new C.Cartesian3(), b:new C.Cartesian3(), up:new C.Cartesian3(), right:new C.Cartesian3(), dir:new C.Cartesian3() };
+  function tick(){ if(!T.active || T.phase !== 'run') return; const now = performance.now(); let dt = (now - T.lastT)/1000; T.lastT = now; if(dt > 0.2) dt = 0.2; if(dt <= 0) return; // 느린 프레임은 0.2 s 로 제한(점프 방지)
     if(STATE.mode !== 'site' || !STATE.on.has('jjOlle')){ stop('mode'); return; }
-    if(scene.screenSpaceCameraController.enableInputs) scene.screenSpaceCameraController.enableInputs = false; // flyTo 완료 콜백이 입력을 다시 켜는 것 방지
-    const path = T.path; if(!T.paused){
+    if(scene.screenSpaceCameraController.enableInputs) scene.screenSpaceCameraController.enableInputs = false;
+    const path = T.path; let vNow = 0;
+    if(!T.paused){
       const el = (now - T.startedAt)/1000; let ramp = Math.min(1, el/2.5); ramp = ramp*ramp*(3-2*ramp); // ease-in
       const rem = path.L - T.s; const out = rem < 120 ? Math.max(0.12, rem/120) : 1; // ease-out
-      T.s += CFG.speed * T.mult * Math.max(ramp, 0.05) * out * dt;
+      vNow = at(path, T.s).v * Math.max(ramp, 0.05) * out; T.s += vNow * dt; T.v = vNow;
       if(now - T.floorT > 300){ T.floorT = now; sampleFloor(path, T.s); } }
-    const P = pose(path, T.s);
-    if(T.head === null) T.head = P.heading; const k = 1 - Math.exp(-dt * 2.2); T.head = T.head + norm(P.heading - T.head) * k;
-    camera.setView({ destination: C.Cartesian3.fromDegrees(P.lon, P.lat, P.h), orientation:{ heading: norm(T.head), pitch: rad(CFG.pitch), roll: 0 } });
-    updHud(P);
+    // 3D 타일 바닥: 상승은 빠르게(τ 0.8 s), 하강은 느리게(τ 2 s)
+    { const tau = T.floorTgt > T.floor ? CFG.floorUp : CFG.floorDown; T.floor += (T.floorTgt - T.floor) * (1 - Math.exp(-dt/tau)); if(T.floor < 0.01) T.floor = 0; }
+    const cp = at(path, T.s), tp = at(path, T.s + lookD());
+    const h = Math.max(cp.camH, T.floor);
+    const camPos = C.Cartesian3.fromDegrees(cp.lon, cp.lat, h, undefined, _c3.a);
+    const tgt = C.Cartesian3.fromDegrees(tp.lon, tp.lat, tp.ground, undefined, _c3.b);
+    const want = C.Cartesian3.normalize(C.Cartesian3.subtract(tgt, camPos, _c3.dir), _c3.dir);
+    if(!T.dir){ T.dir = C.Cartesian3.clone(want); } else { const k = 1 - Math.exp(-dt / CFG.dirTau); T.dir = C.Cartesian3.normalize(C.Cartesian3.lerp(T.dir, want, k, T.dir), T.dir); }
+    const up0 = C.Cartesian3.normalize(camPos, _c3.up); const right = C.Cartesian3.normalize(C.Cartesian3.cross(T.dir, up0, _c3.right), _c3.right); const up = C.Cartesian3.normalize(C.Cartesian3.cross(right, T.dir, _c3.up), _c3.up);
+    camera.setView({ destination: camPos, orientation:{ direction: T.dir, up } });
+    T.head = camera.heading;
+    if(T.stats){ T.stats.push({ t: now, dt, s: T.s, v: vNow, hd: camera.heading, lon: cp.lon, lat: cp.lat, h }); if(T.stats.length > 20000) T.stats.shift(); }
+    updHud({ lon: cp.lon, lat: cp.lat, h, ground: cp.raw, v: vNow });
     if(T.s >= path.L - 0.5 && !T.paused) finish(); }
   function updHud(P){ const path = T.path; const f = T.s/path.L; H.bar.style.width = (f*100).toFixed(1)+'%'; H.km.textContent = (T.s/1000).toFixed(1)+' / '+(path.L/1000).toFixed(1)+' km'; H.pct.textContent = Math.round(f*100)+'%';
-    const v = CFG.speed*T.mult; const rem = Math.max(0, (path.L - T.s)/v); H.eta.textContent = T.paused ? '일시정지' : (Math.floor(rem/60)+':'+String(Math.floor(rem%60)).padStart(2,'0')); H.alt.textContent = '+'+Math.round(P.h - P.ground)+' m'; H.spd.textContent = v+' m/s · '+T.mult+'×'; }
+    const vmax = CFG.speed*T.mult; let rem = 0; { const i0 = at(path, T.s).i; for(let i=i0; i<path.n-1; i++){ const vv = Math.max(1, (path.v[i]+path.v[i+1])/2); rem += (path.cum[i+1]-path.cum[i])/vv; } }
+    H.eta.textContent = T.paused ? '일시정지' : (Math.floor(rem/60)+':'+String(Math.floor(rem%60)).padStart(2,'0')); H.alt.textContent = '+'+Math.round(P.h - P.ground)+' m'; H.spd.textContent = Math.round(P.v !== undefined ? P.v : vmax)+' m/s · '+T.mult+'×'; }
 
   /* ---- 제어 ---- */
   async function start(key, opts){ const jj = JJ(); if(!jj) return toast('제주 레이어(addon 70)가 없습니다'); const J = jj.J;
@@ -11751,13 +11833,16 @@ if(!window.__CVB) window.__CVB = (function(){
     const c = J.olle.courses.find(x=>x.key===key) || J.olle.courses.find(x=>x.no===key); if(!c) return toast('코스를 찾을 수 없습니다: '+key); if(!c.geom) return toast(c.no+'는 경로 자료가 없어 투어할 수 없습니다', 3000);
     if(T.active) stop('restart', true);
     if(opts && typeof opts.rec === 'boolean') T.recOn = opts.rec;
-    T.active = true; T.c = c; T.phase = 'prep'; T.s = 0; T.head = null; T.floor = 0; T.paused = false; T.blob = null; T.mult = (opts && opts.mult) || T.mult || 1; setSpeedUI();
+    T.active = true; T.c = c; T.phase = 'prep'; T.s = 0; T.head = null; T.dir = null; T.floor = 0; T.floorTgt = 0; T.paused = false; T.stats = (DEBUG || window.__OLLE71.collect) ? [] : null; T.blob = null; T.mult = (opts && opts.mult) || T.mult || 1; setSpeedUI();
     H.dot.style.background = c._col ? c._col.toCssColorString() : 'var(--lime-bright)'; H.nm.textContent = c.no+' '+c.name+' · 드론 투어'; H.msg.textContent = '경로·지형 준비 중…'; H.pp.textContent = '⏸ 일시정지'; H.rec.classList.remove('on'); hud.classList.add('open');
     try{ document.getElementById('card').classList.remove('open'); }catch(e){}
     toast(c.no+' 드론 투어 준비 중 (지형 샘플링)…', 2500);
-    let path; try{ path = await buildPath(c); }catch(e){ toast('경로 준비 실패: '+e.message, 4000); stop('error'); return; } if(!T.active || T.c !== c) return;
+    let path; try{ path = await buildPath(c, T.mult); }catch(e){ toast('경로 준비 실패: '+e.message, 4000); stop('error'); return; } if(!T.active || T.c !== c) return;
     if(opts && opts.reverse) reversePath(path);
-    T.path = path; drawLine(c);
+    T.path = path; drawLine(c); drawDebug();
+    if(T.prevRRM === null){ T.prevRRM = !!scene.requestRenderMode; } if(scene.requestRenderMode) scene.requestRenderMode = false;
+    // 투어 중 타일 로딩 부담 완화: 화면 공간 오차 하한 tourSSE · 형제 타일 선로드 (끝나면 복원)
+    if(T.prevSSE === undefined || T.prevSSE === null){ T.prevSSE = globe.maximumScreenSpaceError; T.prevPre = globe.preloadSiblings; } if(globe.maximumScreenSpaceError < CFG.tourSSE) globe.maximumScreenSpaceError = CFG.tourSSE; globe.preloadSiblings = true;
     T.prevInputs = scene.screenSpaceCameraController.enableInputs; scene.screenSpaceCameraController.enableInputs = false;
     H.msg.textContent = '시점으로 이동 중… (OSM 경로 '+(path.L/1000).toFixed(1)+' km · 지면 +'+CFG.alt+' m · Esc 종료)';
     const P0 = pose(path, 0); T.head = P0.heading; T.phase = 'fly';
@@ -11768,18 +11853,18 @@ if(!window.__CVB) window.__CVB = (function(){
     H.msg.textContent = (T.recOn ? '녹화 중 · ' : '')+'시점 → 종점 자동 비행 (지면 +'+CFG.alt+' m, 속도 '+CFG.speed+' m/s)'; recStart(); scene.preUpdate.addEventListener(tick); }
   function pause(){ if(!T.active || T.paused) return; T.paused = true; H.pp.textContent = '▶ 계속'; try{ if(T.rec && T.rec.state==='recording') T.rec.pause(); }catch(e){} updHud(pose(T.path, T.s)); }
   function resume(){ if(!T.active || !T.paused) return; T.paused = false; H.pp.textContent = '⏸ 일시정지'; T.lastT = performance.now(); try{ if(T.rec && T.rec.state==='paused') T.rec.resume(); }catch(e){} }
-  function setSpeed(m){ T.mult = m; setSpeedUI(); if(T.active && T.path) updHud(pose(T.path, T.s)); }
+  function setSpeed(m){ if(T.mult === m) { setSpeedUI(); return; } T.mult = m; setSpeedUI(); if(T.active && T.path){ rebuildTrack(m); updHud(pose(T.path, T.s)); } }
   function setSpeedUI(){ hud.querySelectorAll('.sp button').forEach(b=> b.classList.toggle('on', +b.dataset.m === T.mult)); }
-  function reversePath(path){ path.pts.reverse(); path.ll.reverse(); path.raw.reverse(); path.sm.reverse(); path.camH.reverse(); const n = path.n; const cum = new Float64Array(n); for(let i=1;i<n;i++) cum[i] = cum[i-1] + Math.sqrt(d2(path.pts[i-1], path.pts[i])); path.cum = cum; path.L = cum[n-1]; }
-  function reverse(){ if(!T.active || !T.path) return; reversePath(T.path); T.s = Math.max(0, T.path.L - T.s); T.head = null; T.floor = 0; T.startedAt = performance.now() - 2500; toast('방향 반전 (종점 → 시점)', 1500); if(T.phase==='run') updHud(pose(T.path, T.s)); }
+  function reversePath(path){ const G = path.G; G.V = G.V.slice().reverse(); G.rs = G.rs.slice().reverse(); G.rsH = G.rsH.slice().reverse(); G.rsCum = cumOf(G.rs); const np = assemble(G, path.mult); Object.assign(path, np); path.G = G; }
+  function reverse(){ if(!T.active || !T.path) return; const cur = at(T.path, T.s); reversePath(T.path); T.s = nearestOn(T.path.pts, T.path.cum, [cur.x, cur.y]); T.head = null; T.dir = null; T.floor = 0; T.floorTgt = 0; T.startedAt = performance.now() - 2500; drawDebug(); toast('방향 반전 (종점 → 시점)', 1500); if(T.phase==='run') updHud(pose(T.path, T.s)); }
   function finish(){ if(!T.active || T.phase !== 'run') return; T.phase = 'done'; scene.preUpdate.removeEventListener(tick); const c = T.c, path = T.path; recStop();
     scene.screenSpaceCameraController.enableInputs = T.prevInputs !== false; H.msg.textContent = T.rec || T.recOn ? '투어 완료 · 영상 파일 만드는 중…' : '투어 완료';
     try{ const pts = c.geom.coordinates.flat().map(p=>C.Cartesian3.fromDegrees(p[0], p[1])); const bs = C.BoundingSphere.fromPoints(pts); camera.flyToBoundingSphere(bs, { offset: new C.HeadingPitchRange(0, rad(-60), Math.max(3000, bs.radius*2.6)), duration: 2.2 }); }catch(e){}
-    toast(c.no+' 드론 투어 완료 ('+(path.L/1000).toFixed(1)+' km)', 3000); T.active = false;
+    toast(c.no+' 드론 투어 완료 ('+(path.L/1000).toFixed(1)+' km)', 3000); T.active = false; removeDebug(); if(T.prevRRM !== null){ try{ scene.requestRenderMode = T.prevRRM; }catch(e){} T.prevRRM = null; } restoreGlobe();
     try{ if(JJ() && JJ().olleCard) JJ().olleCard(c.key); }catch(e){}
     if(!T.recOn){ H.msg.textContent = '투어 완료 · 코스 전체 보기'; } }
   function stop(reason, silent){ const was = T.active || T.phase==='done'; scene.preUpdate.removeEventListener(tick); if(T.active){ recStop(); scene.screenSpaceCameraController.enableInputs = T.prevInputs !== false; try{ camera.cancelFlight(); }catch(e){} }
-    T.active = false; T.phase = 'idle'; T.paused = false; removeLine(); if(!silent){ hud.classList.remove('open'); if(was && reason!=='error') toast('드론 투어 종료', 1500); } }
+    T.active = false; T.phase = 'idle'; T.paused = false; removeLine(); if(T.prevRRM !== null){ try{ scene.requestRenderMode = T.prevRRM; }catch(e){} T.prevRRM = null; } restoreGlobe(); if(!silent){ hud.classList.remove('open'); if(was && reason!=='error') toast('드론 투어 종료', 1500); } }
 
   /* ---- 코스 카드에 버튼 주입 ---- */
   function inject(){ const jj = JJ(); const body = document.getElementById('cardBody'); if(!jj || !body) return; const sel = jj.J.sel; if(!sel || sel.kind !== 'olle' || !sel.c || !sel.c.geom) return; if(body.querySelector('#o71row')) return;
@@ -11792,7 +11877,7 @@ if(!window.__CVB) window.__CVB = (function(){
   const cardClose = document.getElementById('cardClose'); if(cardClose) cardClose.addEventListener('click', ()=>{ if(T.active) stop('card'); });
   try{ const _tg71 = toggleLayer; toggleLayer = async function(id, force){ const r = await _tg71.apply(this, arguments); if(id==='jjOlle' && !STATE.on.has('jjOlle') && T.active) stop('layer'); return r; }; }catch(e){}
 
-  window.__OLLE71 = { version: VER, CFG, T, start, stop, pause, resume, setSpeed, reverse, buildPath, drawLine, removeLine, fileName };
+  window.__OLLE71 = { version: VER, CFG, T, start, stop, pause, resume, setSpeed, reverse, buildPath, assemble, at, rebuildTrack, drawLine, removeLine, drawDebug, fileName, debug: DEBUG, collect: false };
 })();
 </script>
 
