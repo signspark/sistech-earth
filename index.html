@@ -11420,5 +11420,166 @@ if(!window.__CVB) window.__CVB = (function(){
 })();
 </script>
 
+
+<script>
+/* ---------- 70. SITE › 제주 (2026-10-16): 재난 CCTV · 민방위 대피소 · 제주올레 (정적 자료 data/jeju/* 를 처음 켤 때만 지연 로드) ----------
+   1) jjCctv   제주시 재난 CCTV 91대(월파 19 · 하천 62 · 적설 10, 공공데이터포털 "제주시 하천·월파·적설 감시 CCTV", 2026-10-16 전수 확인) + 한라산국립공원 CCTV 5대(hallacctv.kr HLS, CORS 허용 → 카드 안에서 바로 재생)
+      제주시 영상은 www.jejusi.go.kr 의 CSRF 토큰(약 45초 만료)으로만 재생되고 교차 출처 POST·iframe이 막혀 있어 우회하지 않음 → 카드에 "제주시 공식 실시간 영상 열기" 링크
+   2) jjShelter 민방위 대피시설 453곳(행정안전부 민방위대피시설 조회서비스, data.go.kr 15155067, 2026) · 지하/지상 구분 · 라벨은 2.5 km 이내
+   3) jjOlle    제주올레 29개 코스(제주특별자치도 올레코스현황 2026-07-31) · 경로는 OSM(Overpass, 빌드 시 추출·6 m 단순화, 일부 코스는 부분/없음) · 지면 밀착 선 + 코스 번호 라벨 · 클릭 → 코스 카드
+   공통: 제주에서 멀리(>120 km) 있을 때 켜면 제주 전경(약 60 km)으로 한 번 이동 · 끄면 프리미티브 제거 · 카드 닫으면 영상 정지
+*/
+(function(){
+  if(window.__JJ70) return;
+  const C = Cesium;
+  const VER = '70.1';
+  const JEJU = { lat:33.38, lon:126.55 };
+  const DATA = { cctv:'data/jeju/jeju_cctv.json', shelter:'data/jeju/jeju_shelters.json', olle:'data/jeju/jeju_olle.json' };
+  const J = { cctv:null, shelter:null, olle:null, dsCctv:null, dsShelter:null, olleP:null, olleLabels:null, hls:null, video:null, flown:false, hlsP:null, sel:null };
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const deg = r=>r*180/Math.PI, rad = d=>d*Math.PI/180;
+  const url = p => new URL(p, location.href).href;
+  const HALLA = [
+    { id:'halla1', name:'백록담', lat:33.3617, lon:126.5292, hls:'https://hallacctv.kr/live/cctv01.stream_360p/playlist.m3u8' },
+    { id:'halla2', name:'왕관릉', lat:33.3700, lon:126.5395, hls:'https://hallacctv.kr/live/cctv02.stream_360p/playlist.m3u8' },
+    { id:'halla3', name:'윗세오름', lat:33.3600, lon:126.5110, hls:'https://hallacctv.kr/live/cctv03.stream_360p/playlist.m3u8' },
+    { id:'halla4', name:'어승생악', lat:33.3930, lon:126.4920, hls:'https://hallacctv.kr/live/cctv04.stream_360p/playlist.m3u8' },
+    { id:'halla5', name:'1100도로(1100고지)', lat:33.3575, lon:126.4625, hls:'https://hallacctv.kr/live/cctv05.stream_360p/playlist.m3u8' },
+  ];
+  const TYPE = { '월파':{ col:'#4FA3FF', page:'waveHlsCctv', label:'월파(해안 너울)' }, '하천':{ col:'#2ED3B7', page:'riverHlsCctv', label:'하천 수위' }, '적설':{ col:'#FFFFFF', page:'snowHlsCctv', label:'적설' }, '한라산':{ col:'#FFB454', page:'', label:'한라산국립공원' } };
+  const OLLE_COL = ['#FF6B8A','#4FA3FF','#BFE33A','#FFB454','#2ED3B7','#C9A0FF','#FF8C42','#7FD8FF','#F2E85A','#FF9EC4'];
+
+  /* ---- 메뉴: SITE › 제주 (바로가기 다음) ---- */
+  const icon = '<svg viewBox="0 0 24 24"><path d="M3 17c3-6 6-9 9-9s6 3 9 9H3z"/><path d="M12 8V5M9 6l3-1 3 1"/></svg>';
+  const cat = { id:'jeju', name:'제주', icon, items:[
+    { id:'jjCctv',    q:'제주 재난 CCTV는 어디에', name:'재난 CCTV (제주시 91 + 한라산 5)', src:'공공데이터포털 제주시 하천·월파·적설 감시 CCTV 91대(공식 뷰어 링크) · 한라산국립공원 CCTV 5대(카드 안 실시간 재생)', type:'layer' },
+    { id:'jjShelter', q:'가까운 민방위 대피소는', name:'민방위 대피시설 (453곳)', src:'행정안전부 민방위대피시설 조회서비스(공공데이터포털, 2026) · 지하/지상 구분 · 클릭하면 수용인원·면적·주소', type:'layer' },
+    { id:'jjOlle',    q:'제주올레 코스는 어디로 가나', name:'제주올레 29개 코스', src:'제주특별자치도 올레코스현황(2026-07-31) · 경로 OpenStreetMap · 지면 밀착 선 + 코스 번호 · 클릭하면 거리·소요시간·시종점', type:'layer' },
+  ]};
+  if(!MENUS.site.some(c=>c.id==='jeju')){ let i = MENUS.site.findIndex(c=>c.id==='sites'); if(i<0) i = MENUS.site.findIndex(c=>c.id==='cadastre'); MENUS.site.splice(i<0?2:i+1, 0, cat); }
+  try{ renderCats(); renderSub(); }catch(e){}
+
+  /* ---- 공통 ---- */
+  async function load(k){ if(J[k]) return J[k]; const r = await fetch(url(DATA[k])); if(!r.ok) throw new Error(DATA[k]+' '+r.status); J[k] = await r.json(); return J[k]; }
+  function farFromJeju(){ const c = camera.positionCartographic; const d = C.Cartesian3.distance(C.Cartesian3.fromDegrees(JEJU.lon, JEJU.lat, 0), C.Cartesian3.fromDegrees(deg(c.longitude), deg(c.latitude), 0)); return d > 120000; }
+  function flyJeju(){ if(!farFromJeju()) return; camera.flyTo({ destination: C.Cartesian3.fromDegrees(JEJU.lon, JEJU.lat - 0.28, 60000), orientation:{ heading:0, pitch: rad(-62), roll:0 }, duration: 3.0 }); toast('제주 전경으로 이동 (약 60 km)', 2000); }
+  const CARD = (title, sub, html) => { STATE.point = null; const c = document.getElementById('card'); c.classList.add('open'); document.getElementById('cardTitle').innerHTML = title + '<small>' + (sub||'') + '</small>'; document.getElementById('cardBody').innerHTML = html; };
+  function stopVideo(){ try{ if(J.hls){ J.hls.destroy(); } }catch(e){} J.hls = null; try{ if(J.video){ J.video.pause(); J.video.removeAttribute('src'); J.video.load(); } }catch(e){} J.video = null; }
+  function loadHls(){ if(window.Hls) return Promise.resolve(); if(J.hlsP) return J.hlsP; J.hlsP = new Promise((res, rej)=>{ const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js'; s.onload = res; s.onerror = ()=>{ J.hlsP = null; rej(new Error('hls.js 로드 실패')); }; document.head.appendChild(s); }); return J.hlsP; }
+  const kv = (k, v) => '<div>' + k + '<b>' + v + '</b></div>';
+  const fmtLL = (lat, lon) => lat.toFixed(5) + ', ' + lon.toFixed(5);
+  function flyTo(lat, lon, h){ camera.flyTo({ destination: C.Cartesian3.fromDegrees(lon, lat - (h||900)*0.000006, h||900), orientation:{ heading:0, pitch: rad(-50), roll:0 }, duration: 1.6 }); }
+
+  /* ---- 1. 재난 CCTV ---- */
+  // 점·라벨은 PointPrimitiveCollection + LabelCollection (엔티티 CLAMP_TO_GROUND 수백 개는 멈춤 유발) · 지형 높이는 sampleTerrain 으로 한 번에 비동기 샘플링 → 지면 +2 m
+  async function buildPoints(items, styleOf, labelDist){
+    const pts = new C.PointPrimitiveCollection(); const labels = new C.LabelCollection(); const NAVY = C.Color.fromCssColorString('#03122A');
+    let hs = null; try{ hs = await C.sampleTerrain(globe.terrainProvider, 12, items.map(o=>C.Cartographic.fromDegrees(o.lon, o.lat))); }catch(e){ hs = null; }
+    items.forEach((o, i)=>{ const h = (hs && hs[i] && isFinite(hs[i].height) ? hs[i].height : 0) + 2; const st = styleOf(o); const pos = C.Cartesian3.fromDegrees(o.lon, o.lat, h); o._pos = pos;
+      pts.add({ position: pos, pixelSize: st.size, color: st.col, outlineColor: st.outline || NAVY, outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY, id: st.info });
+      labels.add({ position: pos, text: st.text, font: '11.5px Inter, "Noto Sans KR", sans-serif', fillColor: C.Color.WHITE, outlineColor: NAVY, outlineWidth: 3, style: C.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new C.Cartesian2(0, -14), verticalOrigin: C.VerticalOrigin.BOTTOM, disableDepthTestDistance: Number.POSITIVE_INFINITY, distanceDisplayCondition: new C.DistanceDisplayCondition(0, st.labelDist || labelDist), scale: 0.95, id: st.info }); });
+    return { pts: scene.primitives.add(pts), labels: scene.primitives.add(labels) };
+  }
+  function removePoints(P){ if(!P) return; try{ scene.primitives.remove(P.pts); }catch(e){} try{ scene.primitives.remove(P.labels); }catch(e){} }
+  async function cctvOn(){ const d = await load('cctv'); if(J.dsCctv) return;
+    const items = d.map(o=>Object.assign({}, o)).concat(HALLA.map(o=>Object.assign({ type:'한라산' }, o)));
+    J.dsCctv = await buildPoints(items, o => { const t = TYPE[o.type]; const halla = o.type==='한라산'; return { size: halla ? 11 : 8, col: C.Color.fromCssColorString(t.col), text: (halla ? '⛰ ' : '') + o.name, labelDist: halla ? 40000 : 12000, info: { _jj70:{ kind:'cctv', type:o.type, o } } }; }, 12000);
+    if(!STATE.on.has('jjCctv')){ cctvOff(); return; }
+    toast('제주 재난 CCTV '+d.length+'대 + 한라산 '+HALLA.length+'대 표시 · 클릭하면 카드', 2400); }
+  function cctvOff(){ removePoints(J.dsCctv); J.dsCctv = null; if(J.sel && J.sel.kind==='cctv') stopVideo(); }
+  function cctvCard(info){ const o = info.o, t = TYPE[info.type]; J.sel = info; stopVideo();
+    if(info.type === '한라산'){
+      CARD(esc(o.name)+' <small style="display:inline;font-size:13px;color:var(--lime-bright)">한라산 CCTV</small>', '한라산국립공원 실시간 CCTV · 대략 위치', `<div class="sec">
+        <div style="position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden"><video id="jjVid" controls autoplay muted playsinline style="width:100%;height:100%;object-fit:contain;background:#000"></video><div id="jjVidMsg" style="position:absolute;left:0;right:0;bottom:0;padding:6px 9px;font-size:11.5px;background:linear-gradient(transparent,rgba(0,0,0,.75));color:#fff">영상 연결 중…</div></div>
+        <div class="kv" style="margin-top:10px">${kv('지점', esc(o.name))}${kv('좌표 (대략)', fmtLL(o.lat, o.lon))}</div>
+        <div class="meta"><span class="tag obs">LIVE</span> 제주특별자치도 한라산국립공원 CCTV (jeju.go.kr/tool/halla · hallacctv.kr HLS 360p) · 위치는 대략값</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="cta ghost" data-jj="fly" style="flex:1">여기로 이동</button><a class="cta ghost" href="https://www.jeju.go.kr/tool/halla/cctv.htm" target="_blank" rel="noopener" style="flex:1;text-align:center">한라산 CCTV 페이지 ↗</a></div></div>`);
+      const v = document.getElementById('jjVid'); J.video = v; const msg = document.getElementById('jjVidMsg');
+      (async ()=>{ try{ if(v.canPlayType('application/vnd.apple.mpegurl')){ v.src = o.hls; await v.play().catch(()=>{}); msg.textContent = '재생 중 (네이티브 HLS)'; return; } await loadHls(); if(J.video !== v) return; const h = new Hls({ maxBufferLength: 20, liveSyncDurationCount: 3 }); J.hls = h; h.on(Hls.Events.ERROR, (ev, data)=>{ if(data.fatal){ msg.textContent = '영상 오류: '+data.type+' · '+(data.details||''); } }); h.on(Hls.Events.MANIFEST_PARSED, ()=>{ msg.textContent = '재생 중 · hallacctv.kr 실시간 (360p)'; v.play().catch(()=>{ msg.textContent = '▶ 재생 버튼을 눌러 주세요'; }); }); h.loadSource(o.hls); h.attachMedia(v); }catch(e){ msg.textContent = '재생 실패: '+e.message; } })();
+    } else {
+      const page = 'https://www.jejusi.go.kr/bangjae/realcctvHls/' + t.page + '.do';
+      CARD(esc(o.name)+' <small style="display:inline;font-size:13px;color:'+t.col+'">'+esc(t.label)+'</small>', '제주시 재난 감시 CCTV · '+esc(info.type), `<div class="sec">
+        <div class="kv">${kv('구분', esc(t.label))}${kv('지점 ID', esc(o.id))}${kv('좌표', fmtLL(o.lat, o.lon))}</div>
+        <p class="lead" style="margin-top:10px">실시간 영상은 제주시 공식 뷰어에서만 재생됩니다 (영상 주소가 약 45초짜리 보안 토큰으로 보호되어 외부 사이트에 넣을 수 없음).</p>
+        <a class="cta" href="${page}" target="_blank" rel="noopener">제주시 공식 실시간 영상 열기 ↗</a>
+        <div style="display:flex;gap:6px;margin-top:6px"><button class="cta ghost" data-jj="fly" style="flex:1">여기로 이동</button></div>
+        <div class="meta" style="margin-top:8px"><span class="tag obs">OFFICIAL</span> 공공데이터포털 · 제주시 하천·월파·적설 감시 CCTV 위치 (2026-10-16 확인)</div></div>`);
+    }
+    document.querySelectorAll('#cardBody [data-jj="fly"]').forEach(b => b.onclick = ()=> flyTo(o.lat, o.lon, info.type==='한라산' ? 1500 : 500));
+  }
+
+  /* ---- 2. 민방위 대피시설 ---- */
+  async function shelterOn(){ const d = await load('shelter'); if(J.dsShelter) return;
+    const NAVY = C.Color.fromCssColorString('#06224A'), LIME = C.Color.fromCssColorString('#BFE33A');
+    J.dsShelter = await buildPoints(d, o => { const under = o.floor === '지하'; return { size: 7, col: under ? NAVY : LIME, outline: under ? C.Color.WHITE : C.Color.fromCssColorString('#03122A'), text: o.name, labelDist: 2500, info: { _jj70:{ kind:'shelter', o } } }; }, 2500);
+    if(!STATE.on.has('jjShelter')){ shelterOff(); return; }
+    toast('민방위 대피시설 '+d.length+'곳 표시 · 지하=남색/흰 테두리 · 지상=연두 · 라벨은 2.5 km 이내', 2800); }
+  function shelterOff(){ removePoints(J.dsShelter); J.dsShelter = null; }
+  function shelterCard(info){ const o = info.o; J.sel = info; stopVideo(); const num = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+    CARD(esc(o.name)+' <small style="display:inline;font-size:13px;color:var(--lime-bright)">'+esc(o.floor||'')+'</small>', '민방위 대피시설 · '+esc(o.type||''), `<div class="sec">
+      <div class="kv">${kv('시설 구분', esc(o.type||'-'))}${kv('위치', esc(o.floor||'-'))}${kv('최대 수용인원', num(o.cap) ? num(o.cap).toLocaleString()+' 명' : '-')}${kv('면적', num(o.area) ? num(o.area).toLocaleString()+' ㎡' : '-')}<div style="grid-column:1 / -1">주소<b>${esc(o.addr||'-')}</b></div>${kv('갱신일', esc(o.upd||'-'))}${kv('시설 ID', '<span style="font-size:12px">'+esc(o.id||'-')+'</span>')}</div>
+      <div style="display:flex;gap:6px;margin-top:8px"><button class="cta ghost" data-jj="fly" style="flex:1">여기로 이동</button><a class="cta ghost" href="https://www.safekorea.go.kr/idsiSFK/neo/sfk/cs/sfc/tot/toteaiList.jsp" target="_blank" rel="noopener" style="flex:1;text-align:center">국민재난안전포털 ↗</a></div>
+      <div class="meta" style="margin-top:8px"><span class="tag obs">OFFICIAL</span> 행정안전부 민방위대피시설 조회서비스 (공공데이터포털 15155067, 2026) · 사용 중 시설 · 좌표는 자료 원본값</div></div>`);
+    document.querySelectorAll('#cardBody [data-jj="fly"]').forEach(b => b.onclick = ()=> flyTo(o.lat, o.lon, 400)); }
+
+  /* ---- 3. 제주올레 ---- */
+  const courseNo = k => k.replace(/[AB]$/, ''); // 라벨용 번호
+  async function olleOn(){ const d = await load('olle'); if(J.olleP){ J.olleP.show = true; if(J.olleLabels) J.olleLabels.show = true; return; }
+    const inst = []; const labels = new C.LabelCollection(); const labelReq = []; let ci = 0;
+    for(const c of d.courses){ const col = C.Color.fromCssColorString(OLLE_COL[ci++ % OLLE_COL.length]); c._col = col; if(!c.geom) continue; let best = null;
+      for(const line of c.geom.coordinates){ if(line.length < 2) continue; inst.push(new C.GeometryInstance({ geometry: new C.GroundPolylineGeometry({ positions: C.Cartesian3.fromDegreesArray(line.flat()), width: 4 }), attributes:{ color: C.ColorGeometryInstanceAttribute.fromColor(col.withAlpha(.92)) }, id:'jjolle:'+c.key })); if(!best || line.length > best.length) best = line; }
+      if(best){ const m = best[Math.floor(best.length/2)]; labelReq.push({ lon:m[0], lat:m[1], key: c.key, text: c.no + (/[AB]$/.test(c.key) ? '('+c.key.slice(-1)+')' : ''), col }); } }
+    if(inst.length) J.olleP = scene.groundPrimitives.add(new C.GroundPolylinePrimitive({ geometryInstances: inst, appearance: new C.PolylineColorAppearance(), classificationType: C.ClassificationType.BOTH, asynchronous: true }));
+    J.olleLabels = scene.primitives.add(labels);
+    (async ()=>{ let hs = null; try{ hs = await C.sampleTerrain(globe.terrainProvider, 11, labelReq.map(r=>C.Cartographic.fromDegrees(r.lon, r.lat))); }catch(e){} if(J.olleLabels !== labels) return;
+      labelReq.forEach((r,i)=>{ const h = hs && hs[i] && isFinite(hs[i].height) ? hs[i].height : 0; labels.add({ position: C.Cartesian3.fromDegrees(r.lon, r.lat, h + 8), text: r.text, font: '700 13px Inter, "Noto Sans KR", sans-serif', fillColor: r.col, outlineColor: C.Color.fromCssColorString('#03122A'), outlineWidth: 4, style: C.LabelStyle.FILL_AND_OUTLINE, disableDepthTestDistance: Number.POSITIVE_INFINITY, distanceDisplayCondition: new C.DistanceDisplayCondition(0, 150000), showBackground: true, backgroundColor: C.Color.fromCssColorString('#03122A').withAlpha(.6), backgroundPadding: new C.Cartesian2(6,3), id:'jjolle:'+r.key }); }); })();
+    const missing = d.courses.filter(c=>!c.geom).map(c=>c.no); toast('제주올레 '+d.courses.length+'개 코스 · 경로 '+(d.courses.length-missing.length)+'개 표시'+(missing.length ? ' · 경로 없음: '+missing.join(', ') : ''), 3200); }
+  function olleOff(){ if(J.olleP){ scene.groundPrimitives.remove(J.olleP); J.olleP = null; } if(J.olleLabels){ scene.primitives.remove(J.olleLabels); J.olleLabels = null; } }
+  function olleCard(key){ const d = J.olle; if(!d) return; const c = d.courses.find(x=>x.key===key) || d.courses.find(x=>x.no===key); if(!c) return; J.sel = { kind:'olle', c }; stopVideo();
+    const se = String(c.se||'').split('-'); const cover = c.cover || 0; const geomNote = !c.geom ? '경로 자료 없음 (OSM 미등록)' : cover < 0.7 ? '경로 일부만 (OSM '+c.osmKm+' km / 공식 '+c.dist+')' : 'OSM 경로 '+c.osmKm+' km';
+    const col = c._col ? c._col.toCssColorString() : 'var(--lime-bright)';
+    CARD(esc(c.no)+' <small style="display:inline;font-size:13px;color:'+col+'">'+esc(c.name)+'</small>', '제주올레 · '+esc(c.dist)+' · '+esc(c.time), `<div class="sec">
+      <div class="kv">${kv('거리', esc(c.dist||'-'))}${kv('소요 시간', esc(c.time||'-'))}${kv('시점', esc(se[0]||'-'))}${kv('종점', esc(se[1]||se[0]||'-'))}<div style="grid-column:1 / -1">경로<b>${esc(geomNote)}</b></div>${kv('자료 기준일', esc(c.date||'-'))}</div>
+      <div style="display:flex;gap:6px;margin-top:8px">${c.geom ? '<button class="cta ghost" data-jj="fit" style="flex:1">코스 전체 보기</button>' : ''}<a class="cta ghost" href="https://www.jejuolle.org/" target="_blank" rel="noopener" style="flex:1;text-align:center">제주올레 공식 ↗</a></div>
+      <div class="meta" style="margin-top:8px"><span class="tag obs">OFFICIAL</span> 제주특별자치도 올레코스현황 (공공데이터포털, 2026-07-31) · 경로 © OpenStreetMap contributors (ODbL, 6 m 단순화, 참고용)</div></div>`);
+    const fit = document.querySelector('#cardBody [data-jj="fit"]'); if(fit) fit.onclick = ()=>{ const pts = c.geom.coordinates.flat().map(p=>C.Cartesian3.fromDegrees(p[0], p[1])); const bs = C.BoundingSphere.fromPoints(pts); camera.flyToBoundingSphere(bs, { offset: new C.HeadingPitchRange(0, rad(-60), Math.max(3000, bs.radius*2.6)), duration: 1.6 }); }; }
+
+  /* ---- 클릭 ---- */
+  const _prevClick = handler.getInputAction(C.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction(e=>{
+    if(STATE.measure || (window.__GT && window.__GT.picking)) return _prevClick && _prevClick(e);
+    let pk = null; try{ pk = scene.pick(e.position); }catch(err){}
+    if(pk){ const ent = pk.id; if(ent && ent._jj70){ const info = ent._jj70; if(info.kind==='cctv') cctvCard(info); else if(info.kind==='shelter') shelterCard(info); return; }
+      if(typeof ent === 'string' && ent.startsWith('jjolle:') && STATE.on.has('jjOlle')){ olleCard(ent.slice(7)); return; } }
+    return _prevClick && _prevClick(e);
+  }, C.ScreenSpaceEventType.LEFT_CLICK);
+  const cardClose = document.getElementById('cardClose'); if(cardClose) cardClose.addEventListener('click', ()=>{ stopVideo(); J.sel = null; });
+  try{ const _cap70 = closeAllPanels; closeAllPanels = function(){ _cap70.apply(this, arguments); stopVideo(); }; }catch(e){}
+  // 다른 카드가 열리면(영상 요소가 사라지면) 재생 정지
+  try{ new MutationObserver(()=>{ if(J.video && !document.body.contains(J.video)) stopVideo(); }).observe(document.getElementById('cardBody'), { childList:true }); }catch(e){}
+
+  /* ---- 레이어 등록 (L7 + toggleLayer/updateSrc 체인) ---- */
+  const L7 = {
+    jjCctv:    { on: async ()=>{ flyJeju(); await cctvOn(); }, off: cctvOff, src: ()=> J.dsCctv ? '<b>제주시 재난 CCTV</b> '+(J.cctv ? J.cctv.length : 0)+'대 + <b>한라산 CCTV</b> 5대 (OFFICIAL)' : '' },
+    jjShelter: { on: async ()=>{ flyJeju(); await shelterOn(); }, off: shelterOff, src: ()=> J.dsShelter ? '<b>행안부 민방위대피시설</b> 제주 '+(J.shelter ? J.shelter.length : 0)+'곳 (OFFICIAL)' : '' },
+    jjOlle:    { on: async ()=>{ flyJeju(); await olleOn(); }, off: olleOff, src: ()=> J.olleP ? '<b>제주올레</b> 29코스 (OFFICIAL · 경로 OSM)' : '' },
+  };
+  const _toggle70 = toggleLayer;
+  toggleLayer = async function(id, force){
+    if(!L7[id]) return _toggle70(id, force);
+    const want = force!==undefined ? !!force : !STATE.on.has(id);
+    if(want && STATE.mode !== 'site'){ try{ toast('제주 레이어는 SITE 모드에서 켤 수 있습니다'); }catch(e){} return; }
+    if(want) STATE.on.add(id); else STATE.on.delete(id);
+    try{ if(want) await L7[id].on(); else L7[id].off(); }catch(e){ toast('레이어 오류: '+e.message, 4000); STATE.on.delete(id); try{ L7[id].off(); }catch(err){} }
+    renderCats(); renderSub(); updateSrc();
+  };
+  const _updateSrc70 = updateSrc;
+  updateSrc = function(){ _updateSrc70.apply(this, arguments); const extra=[]; for(const id of STATE.on){ const s = L7[id] && L7[id].src; if(!s) continue; const v = typeof s==='function'? s():s; if(v) extra.push(v); } if(extra.length){ const el = document.querySelector('#hudSrc'); if(el) el.innerHTML = el.innerHTML.replace('지형 없음', extra.join(' · ')+' · 지형 없음').replace('<b>Esri World Elevation</b> 지형', extra.join(' · ')+' · <b>Esri World Elevation</b> 지형'); } };
+  // 해시 복원은 하지 않음 (SITE 전용 · 제주 자료는 켤 때만 로드)
+  for(const id of Object.keys(L7)) STATE.on.delete(id);
+  window.__JJ70 = { version: VER, J, L7, load, cctvCard, shelterCard, olleCard, stopVideo, HALLA };
+})();
+</script>
+
 </body>
 </html>
