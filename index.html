@@ -11581,5 +11581,219 @@ if(!window.__CVB) window.__CVB = (function(){
 })();
 </script>
 
+<script>
+/* ---------- 71. SITE › 제주올레 드론 투어 (2026-10-16): 코스 카드의 "드론 투어 ▶" → 시점→종점 드론 뷰(지면 +50 m) 자동 비행 · 지면 밀착 연한 색 코스 선 · MediaRecorder 영상 자동 저장 ----------
+   - 경로: OSM MultiLineString 조각을 끝점 최근접으로 이어 붙임(중복 조각 제외) → 10 m 재표본 → 이동평균(150 m)으로 카메라 경로·방위 평활
+   - 방향: 인접 코스(번호 ±1) 경로와 비교해 시점 방향 추정 · HUD "⇄ 방향" 으로 즉시 반전
+   - 고도: sampleTerrainMostDetailed(일괄) + 200 m 평활 + 지면 50 m · 3D 타일 표면(scene.sampleHeight)이 더 높으면 그 위로
+   - 카메라: 진행점 뒤 약 35 m, 전방 150 m 지점 방위, 피치 -28° · 속도 25 m/s × 1/2/4/8 · 시작/끝 가감속
+   - 영상: viewer.canvas.captureStream(30) + MediaRecorder(mp4/avc1 우선, 없으면 webm) 12 Mbps → 자동 다운로드 "제주올레_<코스>_드론투어_YYYYMMDD-HHmm"
+   - 종료: ✕ · Esc · 카드 닫기 · 레이어 끄기 · EARTH 전환 → 카메라 조작 복원, 선 제거
+*/
+(function(){
+  if(window.__OLLE71) return;
+  const C = Cesium;
+  const VER = '71.1';
+  const deg = r=>r*180/Math.PI, rad = d=>d*Math.PI/180;
+  const CFG = { alt:50, speed:25, back:35, look:150, pitch:-28, step:10, smoothPos:15, smoothH:21, lineW:9, lineA:.55, bitrate:12e6, fps:30 };
+  const T = { active:false, paused:false, c:null, path:null, s:0, mult:1, rec:null, chunks:[], blob:null, url:null, line:null, prevInputs:true, lastT:0, head:null, floor:0, floorT:0, phase:'idle', recOn:true, startedAt:0, ext:'webm', mime:'' };
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const JJ = () => window.__JJ70;
+  try{ T.recOn = localStorage.getItem('o71rec') !== '0'; }catch(e){}
+
+  /* ---- CSS / HUD ---- */
+  const st = document.createElement('style'); st.textContent = `
+  #o71hud{position:fixed;right:14px;bottom:14px;width:min(400px,calc(100vw - 28px));z-index:42;padding:10px 12px;font-size:12.5px;display:none;flex-direction:column;gap:7px}
+  #o71hud.open{display:flex}
+  #o71hud .t{display:flex;align-items:center;gap:8px;font-weight:700;font-size:13.5px}
+  #o71hud .t .dot{width:10px;height:10px;border-radius:50%;flex:none}
+  #o71hud .t .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #o71hud .rec{display:none;align-items:center;gap:5px;font-size:11px;font-weight:800;color:#FF5D5D;letter-spacing:.04em}
+  #o71hud .rec.on{display:flex}
+  #o71hud .rec i{width:8px;height:8px;border-radius:50%;background:#FF5D5D;animation:o71blink 1s infinite}
+  @keyframes o71blink{50%{opacity:.25}}
+  #o71hud .x{color:var(--text-dim);font-size:18px;line-height:1;padding:0 2px;background:none;border:0;cursor:pointer}
+  #o71hud .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden}
+  #o71hud .bar i{display:block;height:100%;width:0;background:var(--lime-bright);transition:width .25s linear}
+  #o71hud .st{display:flex;flex-wrap:wrap;gap:4px 12px;color:var(--text-dim);font-variant-numeric:tabular-nums}
+  #o71hud .st b{color:#fff;font-weight:600}
+  #o71hud .bt{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
+  #o71hud .bt button{min-height:30px;padding:0 10px;border-radius:var(--r-sm);border:1px solid var(--line-strong);background:transparent;color:var(--text);font-weight:600;font-size:12px;cursor:pointer}
+  #o71hud .bt button.on{background:var(--lime);color:var(--navy-950);border-color:var(--lime)}
+  #o71hud .bt .sp{display:flex;gap:0}
+  #o71hud .bt .sp button{border-radius:0;padding:0 8px;margin-left:-1px}
+  #o71hud .bt .sp button:first-child{border-radius:var(--r-sm) 0 0 var(--r-sm)}
+  #o71hud .bt .sp button:last-child{border-radius:0 var(--r-sm) var(--r-sm) 0}
+  #o71hud .msg{font-size:11.5px;color:var(--text-dim);line-height:1.45}
+  #o71hud .msg a{color:var(--lime-bright);font-weight:700;text-decoration:none}
+  #o71row{display:flex;gap:6px;align-items:center;margin-top:6px}
+  #o71row .cta{margin-top:0;flex:1}
+  #o71row label{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);white-space:nowrap;cursor:pointer}
+  @media (max-width:640px){ #o71hud{right:8px;left:8px;bottom:8px;width:auto} }`;
+  document.head.appendChild(st);
+  const hud = document.createElement('div'); hud.id = 'o71hud'; hud.className = 'panel';
+  hud.innerHTML = `<div class="t"><span class="dot"></span><span class="nm"></span><span class="rec"><i></i>REC</span><button class="x" title="투어 종료 (Esc)">✕</button></div>
+    <div class="bar"><i></i></div>
+    <div class="st"><span>진행 <b class="km">0.0 / 0.0 km</b></span><span><b class="pct">0%</b></span><span>남은 <b class="eta">--:--</b></span><span>고도 <b class="alt">+50 m</b></span><span>속도 <b class="spd">25 m/s</b></span></div>
+    <div class="bt"><button class="pp">⏸ 일시정지</button><span class="sp"><button data-m="1" class="on">1×</button><button data-m="2">2×</button><button data-m="4">4×</button><button data-m="8">8×</button></span><button class="rv" title="시점↔종점 방향 반전">⇄ 방향</button></div>
+    <div class="msg"></div>`;
+  document.body.appendChild(hud);
+  const H = { dot: hud.querySelector('.dot'), nm: hud.querySelector('.nm'), rec: hud.querySelector('.rec'), bar: hud.querySelector('.bar i'), km: hud.querySelector('.km'), pct: hud.querySelector('.pct'), eta: hud.querySelector('.eta'), alt: hud.querySelector('.alt'), spd: hud.querySelector('.spd'), pp: hud.querySelector('.pp'), msg: hud.querySelector('.msg') };
+  hud.querySelector('.x').onclick = ()=> stop('user');
+  H.pp.onclick = ()=> T.paused ? resume() : pause();
+  hud.querySelectorAll('.sp button').forEach(b=> b.onclick = ()=> setSpeed(+b.dataset.m));
+  hud.querySelector('.rv').onclick = ()=> reverse();
+  document.addEventListener('keydown', e=>{ if(e.key==='Escape' && T.active) stop('esc'); });
+
+  /* ---- 경로 구성 ---- */
+  const toM = (lon0, lat0) => { const kx = 111320*Math.cos(rad(lat0)), ky = 110574; return { f:(p)=>[(p[0]-lon0)*kx, (p[1]-lat0)*ky], b:(x,y)=>[lon0 + x/kx, lat0 + y/ky] }; };
+  const d2 = (a,b)=>{ const dx=a[0]-b[0], dy=a[1]-b[1]; return dx*dx+dy*dy; };
+  function chain(parts){ // parts: [[x,y],...][] (미터) → 하나의 순서 있는 폴리라인
+    const left = parts.filter(p=>p.length>=2).map(p=>p.slice()); if(!left.length) return [];
+    left.sort((a,b)=>b.length-a.length);
+    let cur = left.shift(); const used = [cur];
+    const near = (pt, poly, r2)=>{ for(const q of poly){ if(d2(pt,q) < r2) return true; } return false; };
+    const dup = (p)=>{ let n=0, step = Math.max(1, Math.floor(p.length/40)); let tot=0; for(let i=0;i<p.length;i+=step){ tot++; const pt=p[i]; for(const u of used){ if(near(pt, u, 30*30)){ n++; break; } } } return n/tot > 0.7; };
+    while(left.length){
+      const head = cur[0], tail = cur[cur.length-1]; let best=null;
+      for(let i=0;i<left.length;i++){ const p = left[i]; if(dup(p)){ left.splice(i,1); i--; continue; } const a=p[0], b=p[p.length-1];
+        const cands = [ {d:d2(tail,a), i, rev:false, end:true}, {d:d2(tail,b), i, rev:true, end:true}, {d:d2(head,b), i, rev:false, end:false}, {d:d2(head,a), i, rev:true, end:false} ];
+        for(const c of cands) if(!best || c.d < best.d) best = c; }
+      if(!best) break;
+      const p = left.splice(best.i,1)[0]; if(best.rev) p.reverse(); used.push(p);
+      cur = best.end ? cur.concat(p) : p.concat(cur);
+    }
+    return cur;
+  }
+  function resample(poly, step){ const out=[poly[0]]; let carry=0; for(let i=1;i<poly.length;i++){ const a=poly[i-1], b=poly[i]; const L=Math.sqrt(d2(a,b)); if(L<1e-6) continue; let t=step-carry; while(t<=L){ out.push([a[0]+(b[0]-a[0])*t/L, a[1]+(b[1]-a[1])*t/L]); t+=step; } carry = L-(t-step); } out.push(poly[poly.length-1]); return out; }
+  function smooth(arr, w, get){ const n=arr.length, h=Math.floor(w/2), out=new Array(n); for(let i=0;i<n;i++){ let s=0, c=0; for(let j=Math.max(0,i-h); j<=Math.min(n-1,i+h); j++){ s+=get(arr[j]); c++; } out[i]=s/c; } return out; }
+  function nearestD2(pt, polys){ let m=Infinity; for(const p of polys){ const st = Math.max(1, Math.floor(p.length/200)); for(let i=0;i<p.length;i+=st){ const d=d2(pt,p[i]); if(d<m) m=d; } } return m; }
+  function autoDirection(c, poly, m){ // 인접 코스(번호 ±1)와 비교 → 반전 필요하면 true
+    const J = JJ() && JJ().J; if(!J || !J.olle) return false; const num = parseInt(c.key, 10); if(!/^\d+[AB]?$/.test(c.key) || !isFinite(num)) return false;
+    const geomsOf = n => J.olle.courses.filter(x=>x!==c && x.geom && parseInt(x.key,10)===n && /^\d+[AB]?$/.test(x.key)).flatMap(x=>x.geom.coordinates.map(l=>l.map(m.f)));
+    const prev = geomsOf(num-1), next = geomsOf(num+1); if(!prev.length && !next.length) return false;
+    const a = poly[0], b = poly[poly.length-1]; let fwd=0, rev=0;
+    if(prev.length){ fwd += Math.sqrt(nearestD2(a, prev)); rev += Math.sqrt(nearestD2(b, prev)); }
+    if(next.length){ fwd += Math.sqrt(nearestD2(b, next)); rev += Math.sqrt(nearestD2(a, next)); }
+    return rev < fwd * 0.8;
+  }
+  async function buildPath(c){
+    const lines = c.geom.coordinates.filter(l=>l.length>=2); const p0 = lines[0][0]; const m = toM(p0[0], p0[1]);
+    let poly = chain(lines.map(l=>l.map(m.f))); if(poly.length < 2) throw new Error('경로가 너무 짧습니다');
+    if(autoDirection(c, poly, m)) poly.reverse();
+    const rs = resample(poly, CFG.step); const n = rs.length;
+    const sx = smooth(rs, CFG.smoothPos, p=>p[0]), sy = smooth(rs, CFG.smoothPos, p=>p[1]);
+    const pts = sx.map((x,i)=>[x, sy[i]]);
+    const cum = new Float64Array(n); for(let i=1;i<n;i++) cum[i] = cum[i-1] + Math.sqrt(d2(pts[i-1], pts[i]));
+    const ll = pts.map(p=>m.b(p[0],p[1]));
+    let hs = null; try{ hs = await C.sampleTerrainMostDetailed(globe.terrainProvider, ll.map(p=>C.Cartographic.fromDegrees(p[0], p[1]))); }catch(e){ try{ hs = await C.sampleTerrain(globe.terrainProvider, 13, ll.map(p=>C.Cartographic.fromDegrees(p[0], p[1]))); }catch(err){ hs = null; } }
+    const raw = ll.map((p,i)=>{ let h = hs && hs[i] && isFinite(hs[i].height) ? hs[i].height : NaN; if(!isFinite(h)){ const g = globe.getHeight(C.Cartographic.fromDegrees(p[0], p[1])); h = isFinite(g) ? g : 0; } return Math.max(h, 0); });
+    const sm = smooth(raw, CFG.smoothH, v=>v);
+    const camH = raw.map((h,i)=> Math.max(sm[i] + CFG.alt, h + CFG.alt*0.5));
+    return { m, pts, ll, raw, sm, camH, cum, L: cum[n-1], n };
+  }
+  function at(path, s){ // s(m) → {x,y,lon,lat,ground,camH}
+    s = Math.max(0, Math.min(path.L, s)); let i = Math.floor(s / CFG.step); if(i >= path.n-1) i = path.n-2; if(i<0) i=0;
+    let t = (s - path.cum[i]) / Math.max(1e-6, path.cum[i+1]-path.cum[i]); t = Math.max(0, Math.min(1, t));
+    const a=path.pts[i], b=path.pts[i+1]; const x=a[0]+(b[0]-a[0])*t, y=a[1]+(b[1]-a[1])*t; const ll = path.m.b(x,y);
+    return { x, y, lon:ll[0], lat:ll[1], ground: path.raw[i]+(path.raw[i+1]-path.raw[i])*t, camH: path.camH[i]+(path.camH[i+1]-path.camH[i])*t };
+  }
+
+  /* ---- 지면 선 ---- */
+  function paleColor(c){ const col = c._col || C.Color.fromCssColorString('#BFE33A'); return C.Color.lerp(col, C.Color.WHITE, 0.6, new C.Color()).withAlpha(CFG.lineA); }
+  function drawLine(c){ removeLine(); const col = paleColor(c); const inst = [];
+    for(const line of c.geom.coordinates){ if(line.length<2) continue; inst.push(new C.GeometryInstance({ geometry: new C.GroundPolylineGeometry({ positions: C.Cartesian3.fromDegreesArray(line.flat()), width: CFG.lineW }), attributes:{ color: C.ColorGeometryInstanceAttribute.fromColor(col) }, id:'o71line' })); }
+    if(inst.length) T.line = scene.groundPrimitives.add(new C.GroundPolylinePrimitive({ geometryInstances: inst, appearance: new C.PolylineColorAppearance(), classificationType: C.ClassificationType.BOTH, asynchronous: true, allowPicking: false })); }
+  function removeLine(){ if(T.line){ try{ scene.groundPrimitives.remove(T.line); }catch(e){} T.line = null; } }
+
+  /* ---- 녹화 ---- */
+  function pickMime(){ const list = ['video/mp4;codecs=avc1.42E01E','video/mp4;codecs=avc1','video/mp4','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm']; for(const m of list){ try{ if(MediaRecorder.isTypeSupported(m)) return m; }catch(e){} } return ''; }
+  function recStart(){ if(!T.recOn || !window.MediaRecorder) return; try{
+      const mime = pickMime(); const stream = viewer.canvas.captureStream(CFG.fps); const opt = { videoBitsPerSecond: CFG.bitrate }; if(mime) opt.mimeType = mime;
+      const r = new MediaRecorder(stream, opt); T.chunks = []; T.blob = null; T.mime = r.mimeType || mime; T.ext = /mp4/.test(T.mime) ? 'mp4' : 'webm';
+      r.ondataavailable = e=>{ if(e.data && e.data.size) T.chunks.push(e.data); };
+      r.onstop = ()=>{ const blob = new Blob(T.chunks, { type: T.mime || 'video/webm' }); T.blob = blob; T.chunks = []; if(T.url){ try{ URL.revokeObjectURL(T.url); }catch(e){} } T.url = URL.createObjectURL(blob);
+        const name = fileName(); if(blob.size > 0){ const a = document.createElement('a'); a.href = T.url; a.download = name; document.body.appendChild(a); a.click(); setTimeout(()=>a.remove(), 1000);
+          H.msg.innerHTML = '영상 저장됨 <b>'+name+'</b> ('+(blob.size/1048576).toFixed(1)+' MB) · <a href="'+T.url+'" download="'+esc(name)+'">영상 다시 저장 ↓</a>'; toast('드론 투어 영상 저장: '+name+' ('+(blob.size/1048576).toFixed(1)+' MB)', 4000); }
+        else H.msg.textContent = '녹화된 영상이 비어 있습니다'; if(T.onRecDone){ T.onRecDone(blob); T.onRecDone = null; } };
+      r.start(1000); T.rec = r; H.rec.classList.add('on'); } catch(e){ T.rec = null; H.rec.classList.remove('on'); toast('녹화를 시작할 수 없습니다: '+e.message, 3500); } }
+  function recStop(){ const r = T.rec; T.rec = null; H.rec.classList.remove('on'); if(r && r.state !== 'inactive'){ try{ r.stop(); }catch(e){} } }
+  function fileName(){ const d = new Date(), p = n=>String(n).padStart(2,'0'); const no = (T.c && T.c.no || '코스').replace(/\s+/g,''); return '제주올레_'+no+'_드론투어_'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+'.'+T.ext; }
+
+  /* ---- 카메라 ---- */
+  const norm = a => { while(a > Math.PI) a -= 2*Math.PI; while(a < -Math.PI) a += 2*Math.PI; return a; };
+  function pose(path, s){ const cp = at(path, s - CFG.back), lp = at(path, s + CFG.look); const fp = at(path, s + 20);
+    let hd = Math.atan2(lp.x - cp.x, lp.y - cp.y); if(!isFinite(hd)) hd = Math.atan2(fp.x - cp.x, fp.y - cp.y); if(!isFinite(hd)) hd = T.head || 0;
+    let camH = cp.camH; if(T.floor > camH) camH = T.floor; return { lon: cp.lon, lat: cp.lat, h: camH, ground: cp.ground, heading: hd }; }
+  function sampleFloor(path, s){ // 3D 타일 표면이 더 높으면 카메라 바닥 올림 (0.3초마다 전방 40 m 지점)
+    try{ const p = at(path, s + 40); const h = scene.sampleHeight(C.Cartographic.fromDegrees(p.lon, p.lat), undefined, 2); if(isFinite(h) && h > p.ground + 2) T.floor = h + CFG.alt*0.8; else T.floor = 0; }catch(e){ T.floor = 0; } }
+  function tick(){ if(!T.active || T.phase !== 'run') return; const now = performance.now(); let dt = (now - T.lastT)/1000; T.lastT = now; if(dt > 0.25) dt = 0.25; if(dt <= 0) return;
+    if(STATE.mode !== 'site' || !STATE.on.has('jjOlle')){ stop('mode'); return; }
+    const path = T.path; if(!T.paused){
+      const el = (now - T.startedAt)/1000; let ramp = Math.min(1, el/2.5); ramp = ramp*ramp*(3-2*ramp); // ease-in
+      const rem = path.L - T.s; const out = rem < 120 ? Math.max(0.12, rem/120) : 1; // ease-out
+      T.s += CFG.speed * T.mult * Math.max(ramp, 0.05) * out * dt;
+      if(now - T.floorT > 300){ T.floorT = now; sampleFloor(path, T.s); } }
+    const P = pose(path, T.s);
+    if(T.head === null) T.head = P.heading; const k = 1 - Math.exp(-dt * 2.2); T.head = T.head + norm(P.heading - T.head) * k;
+    camera.setView({ destination: C.Cartesian3.fromDegrees(P.lon, P.lat, P.h), orientation:{ heading: norm(T.head), pitch: rad(CFG.pitch), roll: 0 } });
+    updHud(P);
+    if(T.s >= path.L - 0.5 && !T.paused) finish(); }
+  function updHud(P){ const path = T.path; const f = T.s/path.L; H.bar.style.width = (f*100).toFixed(1)+'%'; H.km.textContent = (T.s/1000).toFixed(1)+' / '+(path.L/1000).toFixed(1)+' km'; H.pct.textContent = Math.round(f*100)+'%';
+    const v = CFG.speed*T.mult; const rem = Math.max(0, (path.L - T.s)/v); H.eta.textContent = T.paused ? '일시정지' : (Math.floor(rem/60)+':'+String(Math.floor(rem%60)).padStart(2,'0')); H.alt.textContent = '+'+Math.round(P.h - P.ground)+' m'; H.spd.textContent = v+' m/s · '+T.mult+'×'; }
+
+  /* ---- 제어 ---- */
+  async function start(key, opts){ const jj = JJ(); if(!jj) return toast('제주 레이어(addon 70)가 없습니다'); const J = jj.J;
+    if(STATE.mode !== 'site') return toast('드론 투어는 SITE 모드에서 사용할 수 있습니다');
+    if(!STATE.on.has('jjOlle')){ await toggleLayer('jjOlle', true); } if(!J.olle) await jj.load('olle');
+    const c = J.olle.courses.find(x=>x.key===key) || J.olle.courses.find(x=>x.no===key); if(!c) return toast('코스를 찾을 수 없습니다: '+key); if(!c.geom) return toast(c.no+'는 경로 자료가 없어 투어할 수 없습니다', 3000);
+    if(T.active) stop('restart', true);
+    if(opts && typeof opts.rec === 'boolean') T.recOn = opts.rec;
+    T.active = true; T.c = c; T.phase = 'prep'; T.s = 0; T.head = null; T.floor = 0; T.paused = false; T.blob = null; T.mult = (opts && opts.mult) || T.mult || 1; setSpeedUI();
+    H.dot.style.background = c._col ? c._col.toCssColorString() : 'var(--lime-bright)'; H.nm.textContent = c.no+' '+c.name+' · 드론 투어'; H.msg.textContent = '경로·지형 준비 중…'; H.pp.textContent = '⏸ 일시정지'; H.rec.classList.remove('on'); hud.classList.add('open');
+    try{ document.getElementById('card').classList.remove('open'); }catch(e){}
+    toast(c.no+' 드론 투어 준비 중 (지형 샘플링)…', 2500);
+    let path; try{ path = await buildPath(c); }catch(e){ toast('경로 준비 실패: '+e.message, 4000); stop('error'); return; } if(!T.active || T.c !== c) return;
+    if(opts && opts.reverse) reversePath(path);
+    T.path = path; drawLine(c);
+    T.prevInputs = scene.screenSpaceCameraController.enableInputs; scene.screenSpaceCameraController.enableInputs = false;
+    H.msg.textContent = '시점으로 이동 중… (OSM 경로 '+(path.L/1000).toFixed(1)+' km · 지면 +'+CFG.alt+' m · Esc 종료)';
+    const P0 = pose(path, 0); T.head = P0.heading; T.phase = 'fly';
+    const dist = C.Cartesian3.distance(camera.position, C.Cartesian3.fromDegrees(P0.lon, P0.lat, P0.h)); const dur = Math.min(4, Math.max(1.5, dist/6000));
+    camera.flyTo({ destination: C.Cartesian3.fromDegrees(P0.lon, P0.lat, P0.h), orientation:{ heading: P0.heading, pitch: rad(CFG.pitch), roll:0 }, duration: dur, complete: ()=> begin(c), cancel: ()=> begin(c) });
+    setTimeout(()=>{ if(T.active && T.c===c && T.phase==='fly') begin(c); }, dur*1000 + 800); }
+  function begin(c){ if(!T.active || T.c !== c || T.phase !== 'fly') return; T.phase = 'run'; scene.screenSpaceCameraController.enableInputs = false; T.lastT = performance.now(); T.startedAt = T.lastT; T.floorT = 0; updHud(pose(T.path, 0));
+    H.msg.textContent = (T.recOn ? '녹화 중 · ' : '')+'시점 → 종점 자동 비행 (지면 +'+CFG.alt+' m, 속도 '+CFG.speed+' m/s)'; recStart(); scene.preUpdate.addEventListener(tick); }
+  function pause(){ if(!T.active || T.paused) return; T.paused = true; H.pp.textContent = '▶ 계속'; try{ if(T.rec && T.rec.state==='recording') T.rec.pause(); }catch(e){} updHud(pose(T.path, T.s)); }
+  function resume(){ if(!T.active || !T.paused) return; T.paused = false; H.pp.textContent = '⏸ 일시정지'; T.lastT = performance.now(); try{ if(T.rec && T.rec.state==='paused') T.rec.resume(); }catch(e){} }
+  function setSpeed(m){ T.mult = m; setSpeedUI(); if(T.active && T.path) updHud(pose(T.path, T.s)); }
+  function setSpeedUI(){ hud.querySelectorAll('.sp button').forEach(b=> b.classList.toggle('on', +b.dataset.m === T.mult)); }
+  function reversePath(path){ path.pts.reverse(); path.ll.reverse(); path.raw.reverse(); path.sm.reverse(); path.camH.reverse(); const n = path.n; const cum = new Float64Array(n); for(let i=1;i<n;i++) cum[i] = cum[i-1] + Math.sqrt(d2(path.pts[i-1], path.pts[i])); path.cum = cum; path.L = cum[n-1]; }
+  function reverse(){ if(!T.active || !T.path) return; reversePath(T.path); T.s = Math.max(0, T.path.L - T.s); T.head = null; T.floor = 0; T.startedAt = performance.now() - 2500; toast('방향 반전 (종점 → 시점)', 1500); if(T.phase==='run') updHud(pose(T.path, T.s)); }
+  function finish(){ if(!T.active || T.phase !== 'run') return; T.phase = 'done'; scene.preUpdate.removeEventListener(tick); const c = T.c, path = T.path; recStop();
+    scene.screenSpaceCameraController.enableInputs = T.prevInputs !== false; H.msg.textContent = T.rec || T.recOn ? '투어 완료 · 영상 파일 만드는 중…' : '투어 완료';
+    try{ const pts = c.geom.coordinates.flat().map(p=>C.Cartesian3.fromDegrees(p[0], p[1])); const bs = C.BoundingSphere.fromPoints(pts); camera.flyToBoundingSphere(bs, { offset: new C.HeadingPitchRange(0, rad(-60), Math.max(3000, bs.radius*2.6)), duration: 2.2 }); }catch(e){}
+    toast(c.no+' 드론 투어 완료 ('+(path.L/1000).toFixed(1)+' km)', 3000); T.active = false;
+    try{ if(JJ() && JJ().olleCard) JJ().olleCard(c.key); }catch(e){}
+    if(!T.recOn){ H.msg.textContent = '투어 완료 · 코스 전체 보기'; } }
+  function stop(reason, silent){ const was = T.active || T.phase==='done'; scene.preUpdate.removeEventListener(tick); if(T.active){ recStop(); scene.screenSpaceCameraController.enableInputs = T.prevInputs !== false; try{ camera.cancelFlight(); }catch(e){} }
+    T.active = false; T.phase = 'idle'; T.paused = false; removeLine(); if(!silent){ hud.classList.remove('open'); if(was && reason!=='error') toast('드론 투어 종료', 1500); } }
+
+  /* ---- 코스 카드에 버튼 주입 ---- */
+  function inject(){ const jj = JJ(); const body = document.getElementById('cardBody'); if(!jj || !body) return; const sel = jj.J.sel; if(!sel || sel.kind !== 'olle' || !sel.c || !sel.c.geom) return; if(body.querySelector('#o71row')) return;
+    const fit = body.querySelector('[data-jj="fit"]'); const anchor = fit ? fit.parentElement : body.querySelector('.sec'); if(!anchor) return;
+    const row = document.createElement('div'); row.id = 'o71row'; row.innerHTML = '<button class="cta" data-o71="start">드론 투어 ▶</button><label><input type="checkbox" data-o71="rec"'+(T.recOn?' checked':'')+'> 녹화(영상 저장)</label>';
+    anchor.insertAdjacentElement('afterend', row); const hint = document.createElement('div'); hint.className = 'meta'; hint.style.marginTop = '4px'; hint.innerHTML = '시점 → 종점을 드론 뷰(지면 +'+CFG.alt+' m, '+CFG.speed+' m/s)로 자동 비행 · 코스 선은 연한 색으로 지면 표시 · 녹화를 켜면 끝나면 영상 파일로 저장'; row.insertAdjacentElement('afterend', hint);
+    row.querySelector('[data-o71="rec"]').onchange = e=>{ T.recOn = e.target.checked; try{ localStorage.setItem('o71rec', T.recOn?'1':'0'); }catch(err){} };
+    row.querySelector('[data-o71="start"]').onclick = ()=> start(sel.c.key); }
+  try{ new MutationObserver(()=> inject()).observe(document.getElementById('cardBody'), { childList:true }); inject(); }catch(e){}
+  const cardClose = document.getElementById('cardClose'); if(cardClose) cardClose.addEventListener('click', ()=>{ if(T.active) stop('card'); });
+  try{ const _tg71 = toggleLayer; toggleLayer = async function(id, force){ const r = await _tg71.apply(this, arguments); if(id==='jjOlle' && !STATE.on.has('jjOlle') && T.active) stop('layer'); return r; }; }catch(e){}
+
+  window.__OLLE71 = { version: VER, CFG, T, start, stop, pause, resume, setSpeed, reverse, buildPath, drawLine, removeLine, fileName };
+})();
+</script>
+
 </body>
 </html>
