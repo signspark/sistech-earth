@@ -11593,14 +11593,14 @@ if(!window.__CVB) window.__CVB = (function(){
 (function(){
   if(window.__OLLE71) return;
   const C = Cesium;
-  const VER = '71.2';
+  const VER = '71.3';
   const deg = r=>r*180/Math.PI, rad = d=>d*Math.PI/180;
   const CFG = { alt:50, speed:25, back:35, look:150, pitch:-28, step:10, smoothPos:15, smoothH:21, lineW:9, lineA:.55, bitrate:12e6, fps:30 };
-  const T = { active:false, paused:false, c:null, path:null, s:0, mult:1, rec:null, chunks:[], blob:null, url:null, line:null, prevInputs:true, lastT:0, head:null, floor:0, floorT:0, phase:'idle', recOn:true, startedAt:0, ext:'webm', mime:'' };
+  const T = { active:false, paused:false, c:null, path:null, s:0, mult:1, rec:null, chunks:[], blob:null, url:null, line:null, prevInputs:true, lastT:0, head:null, floor:0, floorT:0, phase:'idle', recOn:false, startedAt:0, ext:'webm', mime:'' };
   const $ = id => document.getElementById(id);
   const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const JJ = () => window.__JJ70;
-  try{ T.recOn = localStorage.getItem('o71rec') !== '0'; }catch(e){}
+  // 71.3: 녹화는 기본 꺼짐 (드론 투어는 보기 전용 · 카드 열 때마다 녹화 체크 해제)
 
   /* ---- CSS / HUD ---- */
   const st = document.createElement('style'); st.textContent = `
@@ -11784,9 +11784,9 @@ if(!window.__CVB) window.__CVB = (function(){
   /* ---- 코스 카드에 버튼 주입 ---- */
   function inject(){ const jj = JJ(); const body = document.getElementById('cardBody'); if(!jj || !body) return; const sel = jj.J.sel; if(!sel || sel.kind !== 'olle' || !sel.c || !sel.c.geom) return; if(body.querySelector('#o71row')) return;
     const fit = body.querySelector('[data-jj="fit"]'); const anchor = fit ? fit.parentElement : body.querySelector('.sec'); if(!anchor) return;
-    const row = document.createElement('div'); row.id = 'o71row'; row.innerHTML = '<button class="cta" data-o71="start">드론 투어 ▶</button><label><input type="checkbox" data-o71="rec"'+(T.recOn?' checked':'')+'> 녹화(영상 저장)</label>';
+    T.recOn = false; const row = document.createElement('div'); row.id = 'o71row'; row.innerHTML = '<button class="cta" data-o71="start">드론 투어 ▶</button><label><input type="checkbox" data-o71="rec"'+(T.recOn?' checked':'')+'> 녹화(영상 저장)</label>';
     anchor.insertAdjacentElement('afterend', row); const hint = document.createElement('div'); hint.className = 'meta'; hint.style.marginTop = '4px'; hint.innerHTML = '시점 → 종점을 드론 뷰(지면 +'+CFG.alt+' m, '+CFG.speed+' m/s)로 자동 비행 · 코스 선은 연한 색으로 지면 표시 · 녹화를 켜면 끝나면 영상 파일로 저장'; row.insertAdjacentElement('afterend', hint);
-    row.querySelector('[data-o71="rec"]').onchange = e=>{ T.recOn = e.target.checked; try{ localStorage.setItem('o71rec', T.recOn?'1':'0'); }catch(err){} };
+    row.querySelector('[data-o71="rec"]').onchange = e=>{ T.recOn = e.target.checked; };
     row.querySelector('[data-o71="start"]').onclick = ()=> start(sel.c.key); }
   try{ new MutationObserver(()=> inject()).observe(document.getElementById('cardBody'), { childList:true }); inject(); }catch(e){}
   const cardClose = document.getElementById('cardClose'); if(cardClose) cardClose.addEventListener('click', ()=>{ if(T.active) stop('card'); });
