@@ -136,7 +136,7 @@ const BOTTOMS={
 };
 
 /* ============ 코트 ============ */
-const SLEEVE=(c,w)=>pair(limb(118,206,96,288,w||28,c)+limb(97,281,95,291,w||28,sh(c,.8)));
+const SLEEVE=(c,w)=>pair(limb(118,206,96,288,w||28,c)+limb(97,282,95,290,(w||28)-6,lt(c,.28)));
 const COATS={
  long:c=>SLEEVE(c)+
    pair(`<path d="M114 194 Q130 186 148 196 L148 376 L104 376Z" ${F(c)}/>`+
@@ -235,9 +235,9 @@ const HATS={
 const PAL=[['#ff6f9c','분홍'],['#ff4d4d','빨강'],['#ff9a3c','주황'],['#ffd23f','노랑'],['#7ed957','초록'],['#3cc7b0','민트'],['#4da3ff','파랑'],['#8a6bff','보라'],['#ffc2e2','연분홍'],['#ffffff','하양'],['#9b6b4a','갈색'],['#3b3b4f','남색']];
 const HPAL=[['#7a4a2a','갈색'],['#2b2b33','검정'],['#f2cf6b','금발'],['#d9482b','빨강'],['#ff8fd0','분홍'],['#8a6bff','보라'],['#4da3ff','파랑']];
 const CATS=[
- {k:'top',n:'상의',e:'👚',vb:'50 166 200 220',items:[['tee','반팔티'],['long','긴팔티'],['hood','후드티'],['tank','민소매'],['dress','원피스']],pal:PAL},
+ {k:'top',n:'상의',e:'👚',vb:'50 198 200 198',items:[['tee','반팔티'],['long','긴팔티'],['hood','후드티'],['tank','민소매'],['dress','원피스']],pal:PAL},
  {k:'bottom',n:'하의',e:'👖',vb:'70 280 160 175',items:[['pants','긴바지'],['shorts','반바지'],['skirt','짧은 치마'],['maxi','긴 치마'],['tutu','발레 치마']],pal:PAL},
- {k:'coat',n:'코트',e:'🧥',vb:'46 166 208 220',items:[['long','코트'],['puffy','패딩'],['cardi','가디건'],['cape','망토']],pal:PAL},
+ {k:'coat',n:'코트',e:'🧥',vb:'46 198 208 198',items:[['long','코트'],['puffy','패딩'],['cardi','가디건'],['cape','망토']],pal:PAL},
  {k:'socks',n:'양말',e:'🧦',vb:'90 290 120 165',items:[['ankle','짧은 양말'],['knee','긴 양말'],['stripe','줄무늬 양말'],['tights','스타킹']],pal:PAL},
  {k:'shoes',n:'신발',e:'👟',vb:'90 366 120 90',items:[['sneaker','운동화'],['mary','구두'],['boots','장화'],['sandal','샌들']],pal:PAL},
  {k:'hat',n:'모자',e:'👒',vb:'40 -4 220 130',items:[['beanie','털모자'],['sun','밀짚모자'],['band','리본 머리띠'],['crown','왕관'],['beret','베레모'],['bunny','토끼 귀']],pal:PAL},
@@ -273,7 +273,7 @@ function svgStr(s,vb,bg){
     (bg?`<ellipse cx="150" cy="450" rx="72" ry="9" fill="rgba(160,90,120,.18)"/>`:'')+dollInner(s)+`</svg>`;
 }
 const $=id=>document.getElementById(id);
-function drawDoll(){$('doll').innerHTML=svgStr(sel,'0 0 300 470',true);}
+function drawDoll(){$('doll').innerHTML=svgStr(sel,'0 -14 300 484',true);}
 function bounce(){const d=$('doll');d.classList.remove('bounce');void d.offsetWidth;d.classList.add('bounce');}
 
 /* ============ 패널 UI ============ */
@@ -367,7 +367,7 @@ $('bSave').addEventListener('click',async()=>{
   initAudio();
   try{
     const W=600,H=940;
-    const svg=svgStr(sel,'0 0 300 470',true).replace('<svg ','<svg width="600" height="940" ');
+    const svg=svgStr(sel,'0 -14 300 484',true).replace('<svg ','<svg width="600" height="940" ');
     const url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));
     const img=new Image();await new Promise((ok,no)=>{img.onload=ok;img.onerror=no;img.src=url;});
     const cv=document.createElement('canvas');cv.width=W;cv.height=H;const g=cv.getContext('2d');
