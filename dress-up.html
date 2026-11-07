@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="옷 입히기">
+<meta name="theme-color" content="#ffd6e8">
+<title>예쁜 옷 입히기</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;touch-action:manipulation;
+  font-family:-apple-system,"Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif}
+body{position:fixed;inset:0;display:flex;flex-direction:column;
+  background:linear-gradient(#ffe3f0 0%,#fff3e6 60%,#ffe9c7 100%);
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+@media (orientation:landscape){body{flex-direction:row}}
+#stage{position:relative;flex:1 1 auto;min-height:0;min-width:0;overflow:hidden}
+#doll{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;touch-action:manipulation}
+#doll svg{height:100%;width:100%;max-height:100%;filter:drop-shadow(0 6px 6px rgba(160,90,120,.2))}
+#doll.bounce svg{animation:bnc .55s cubic-bezier(.3,1.6,.5,1)}
+@keyframes bnc{0%{transform:scale(1)}30%{transform:scale(1.06,.95)}60%{transform:scale(.97,1.04)}100%{transform:scale(1)}}
+.deco{position:absolute;font-size:26px;opacity:.55;animation:fl 6s ease-in-out infinite;pointer-events:none}
+@keyframes fl{0%,100%{transform:translateY(0) rotate(-8deg)}50%{transform:translateY(-16px) rotate(8deg)}}
+#tools{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:10px;z-index:3}
+.tool{width:52px;height:52px;border-radius:50%;border:none;background:#fff;font-size:26px;box-shadow:0 4px 0 #f2c5d9;display:flex;align-items:center;justify-content:center}
+.tool:active{transform:translateY(3px);box-shadow:0 1px 0 #f2c5d9}
+.spark{position:absolute;font-size:26px;pointer-events:none;animation:sp .9s ease-out forwards;z-index:4}
+@keyframes sp{0%{opacity:0;transform:translateY(0) scale(.4)}20%{opacity:1}100%{opacity:0;transform:translateY(-70px) scale(1.4) rotate(40deg)}}
+#toast{position:absolute;left:0;right:0;top:12px;text-align:center;z-index:3;pointer-events:none}
+#toast span{display:inline-block;background:#fff;border-radius:999px;padding:8px 20px;font-size:20px;font-weight:900;color:#ff5c93;box-shadow:0 4px 0 #f2c5d9;opacity:0;transition:opacity .2s}
+#toast.on span{opacity:1}
+#panel{flex:0 0 auto;background:rgba(255,255,255,.88);border-radius:28px 28px 0 0;box-shadow:0 -4px 14px rgba(200,120,150,.25);
+  display:flex;flex-direction:column;gap:6px;padding:8px 8px 10px}
+@media (orientation:landscape){#panel{width:50%;max-width:480px;border-radius:28px 0 0 28px;justify-content:flex-start;height:100%;overflow:hidden}}
+#tabs{display:flex;gap:4px}
+.tab{flex:1;border:none;border-radius:16px;background:#fff0f6;padding:5px 0 4px;display:flex;flex-direction:column;align-items:center;
+  font-size:11px;font-weight:800;color:#b07890;gap:1px;min-width:0}
+.tab i{font-style:normal;font-size:24px;line-height:1.1}
+.tab.on{background:#ff7aa8;color:#fff;box-shadow:0 3px 0 #e04d82}
+#items{display:flex;gap:8px;overflow-x:auto;overflow-y:hidden;padding:4px 2px 6px;touch-action:pan-x;-webkit-overflow-scrolling:touch}
+@media (orientation:landscape){#items{flex-wrap:wrap;overflow-x:hidden;overflow-y:auto;touch-action:pan-y;flex:1 1 auto;min-height:0;align-content:flex-start}}
+.item{flex:0 0 auto;width:78px;border:4px solid transparent;border-radius:18px;background:#fff;padding:2px 0 4px;
+  display:flex;flex-direction:column;align-items:center;font-size:12px;font-weight:800;color:#8a6a7c;box-shadow:0 3px 0 #ecd0dd}
+.item svg{width:66px;height:66px;display:block}
+.item.on{border-color:#ff5c93;background:#fff5f9}
+.item .none{width:66px;height:66px;display:flex;align-items:center;justify-content:center;font-size:34px;color:#c9a0b4}
+#colors{display:flex;gap:8px;overflow-x:auto;padding:2px 4px 2px;touch-action:pan-x}
+@media (orientation:landscape){#colors{flex-wrap:wrap;overflow:visible}}
+.sw{flex:0 0 auto;width:38px;height:38px;border-radius:50%;border:4px solid #fff;box-shadow:0 0 0 2px #e8cfdb}
+.sw.on{box-shadow:0 0 0 4px #ff5c93;transform:scale(1.12)}
+</style>
+</head>
+<body>
+<div id="stage">
+  <span class="deco" style="left:6%;top:12%">🎀</span>
+  <span class="deco" style="left:12%;top:60%;animation-delay:1s">⭐</span>
+  <span class="deco" style="right:16%;top:70%;animation-delay:2s">💖</span>
+  <span class="deco" style="left:26%;top:30%;animation-delay:3s">✨</span>
+  <div id="doll"></div>
+  <div id="toast"><span id="toastT"></span></div>
+  <div id="tools">
+    <button class="tool" id="bRand" aria-label="랜덤">🎲</button>
+    <button class="tool" id="bReset" aria-label="처음부터">🔄</button>
+    <button class="tool" id="bSave" aria-label="사진 저장">📸</button>
+    <button class="tool" id="bMute" aria-label="소리">🔊</button>
+  </div>
+</div>
+<div id="panel">
+  <div id="tabs"></div>
+  <div id="items"></div>
+  <div id="colors"></div>
+</div>
+
+<script>
+(()=>{
+'use strict';
+/* ============ 색 도구 ============ */
+const hex=c=>{const n=parseInt(c.slice(1),16);return [(n>>16)&255,(n>>8)&255,n&255];};
+const rgb=a=>'#'+a.map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');
+const sh=(c,f)=>rgb(hex(c).map(v=>v*f));
+const lt=(c,f)=>rgb(hex(c).map(v=>v+(255-v)*f));
+const cs=(c,w)=>`stroke="${sh(c,.66)}" stroke-width="${w||3}" stroke-linejoin="round" stroke-linecap="round"`;
+const F=c=>`fill="${c}" ${cs(c)}`;
+const limb=(x1,y1,x2,y2,w,c)=>
+  `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${sh(c,.66)}" stroke-width="${w+6}" stroke-linecap="round"/>`+
+  `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="${w}" stroke-linecap="round"/>`;
+const pair=s=>s+`<g transform="translate(300 0) scale(-1 1)">${s}</g>`;
+const SKIN='#ffdcc2',SKO='#e2ab88';
+
+/* ============ 몸 ============ */
+const FOOT='M104 436 Q104 422 124 422 L146 422 L146 446 L110 446 Q104 446 104 436Z';
+const LEGS=pair(`<rect x="128" y="294" width="18" height="136" rx="8" fill="${SKIN}" stroke="${SKO}" stroke-width="3"/><path d="${FOOT}" fill="${SKIN}" stroke="${SKO}" stroke-width="3"/>`);
+const UNDER_SHORTS=`<path d="M122 290 H178 V316 Q165 326 152 318 Q150 314 148 318 Q135 326 122 316Z" fill="#fff" stroke="#e6dce2" stroke-width="2"/>`;
+const TORSO=`<rect x="140" y="168" width="20" height="30" fill="${SKIN}" stroke="${SKO}" stroke-width="3"/>`+
+  pair(limb(118,208,98,288,18,SKIN)+`<circle cx="96" cy="294" r="11" fill="${SKIN}" stroke="${SKO}" stroke-width="3"/>`)+
+  `<path d="M116 192 Q150 184 184 192 L186 300 Q150 308 114 300Z" fill="${SKIN}" stroke="${SKO}" stroke-width="3"/>`+
+  `<path d="M124 196 Q150 206 176 196 L178 270 Q150 276 122 270Z" fill="#fff" stroke="#e6dce2" stroke-width="2"/>`;
+
+/* ============ 상의 ============ */
+const TORSO_SHAPE=c=>`<path d="M116 192 Q150 184 184 192 L188 300 Q150 308 112 300Z" ${F(c)}/>`;
+const NECK=c=>`<path d="M135 190 Q150 207 165 190" fill="none" ${cs(c,2.5)}/>`;
+const TOPS={
+ tee:c=>pair(limb(118,204,102,236,26,c))+TORSO_SHAPE(c)+NECK(c)+
+   `<path d="M150 254 C131 239 139 226 150 234 C161 226 169 239 150 254Z" fill="#fff" opacity=".88"/>`,
+ long:c=>pair(limb(118,206,97,284,24,c)+limb(98,279,96,289,24,sh(c,.85)))+TORSO_SHAPE(c)+NECK(c)+
+   `<path d="M122 240 H178 M121 262 H179" stroke="${lt(c,.55)}" stroke-width="6" opacity=".8"/>`,
+ hood:c=>`<ellipse cx="150" cy="198" rx="36" ry="17" ${F(sh(c,.9))}/>`+
+   pair(limb(118,206,97,284,24,c)+limb(98,279,96,289,24,sh(c,.82)))+TORSO_SHAPE(c)+
+   `<path d="M127 262 L173 262 L170 292 L130 292Z" ${F(sh(c,.92))}/>`+
+   `<path d="M143 200 L143 232 M157 200 L157 232" stroke="#fff" stroke-width="3.5" fill="none" stroke-linecap="round"/>`,
+ tank:c=>`<path d="M124 196 L134 190 Q150 208 166 190 L176 196 L180 300 Q150 306 120 300Z" ${F(c)}/>`+
+   `<circle cx="150" cy="246" r="9" fill="#fff" opacity=".85"/>`,
+ dress:c=>pair(`<circle cx="110" cy="206" r="15" ${F(c)}/>`)+
+   `<path d="M116 192 Q150 184 184 192 L188 248 L226 374 Q150 396 74 374 L112 248Z" ${F(c)}/>`+NECK(c)+
+   `<rect x="112" y="246" width="76" height="10" fill="${sh(c,.82)}"/>`+
+   `<path d="M150 251 L136 242 L136 260Z M150 251 L164 242 L164 260Z" fill="${lt(c,.55)}"/><circle cx="150" cy="251" r="4" fill="${lt(c,.8)}"/>`+
+   `<path d="M78 372 Q150 394 222 372" fill="none" stroke="${lt(c,.6)}" stroke-width="5" stroke-linecap="round"/>`+
+   `<circle cx="120" cy="320" r="5" fill="${lt(c,.6)}"/><circle cx="150" cy="340" r="5" fill="${lt(c,.6)}"/><circle cx="180" cy="318" r="5" fill="${lt(c,.6)}"/><circle cx="104" cy="352" r="5" fill="${lt(c,.6)}"/><circle cx="196" cy="350" r="5" fill="${lt(c,.6)}"/>`
+};
+
+/* ============ 하의 ============ */
+const WAIST=c=>`<rect x="120" y="294" width="60" height="10" rx="4" fill="${sh(c,.82)}" stroke="${sh(c,.6)}" stroke-width="2"/>`;
+const BOTTOMS={
+ pants:c=>`<path d="M121 296 H179 V425 H153 V338 Q150 331 147 338 V425 H121Z" ${F(c)}/>`+WAIST(c)+
+   `<path d="M121 410 H147 M153 410 H179" stroke="${sh(c,.82)}" stroke-width="4"/>`,
+ shorts:c=>`<path d="M121 296 H179 V350 H153 V338 Q150 331 147 338 V350 H121Z" ${F(c)}/>`+WAIST(c),
+ skirt:c=>`<path d="M120 296 H180 L198 352 Q150 366 102 352Z" ${F(c)}/>`+WAIST(c)+
+   `<path d="M138 304 L131 358 M150 304 L150 362 M162 304 L169 358" stroke="${sh(c,.8)}" stroke-width="3" fill="none"/>`,
+ maxi:c=>`<path d="M120 296 H180 L212 412 Q150 432 88 412Z" ${F(c)}/>`+WAIST(c)+
+   `<path d="M136 304 L122 420 M150 304 L150 426 M164 304 L178 420" stroke="${sh(c,.82)}" stroke-width="3" fill="none"/>`,
+ tutu:c=>`<path d="M122 296 H178 L216 358 Q150 384 84 358Z" ${F(c)}/>`+
+   `<ellipse cx="150" cy="350" rx="64" ry="17" fill="${lt(c,.4)}" opacity=".9"/>`+
+   `<path d="M88 354 Q102 370 118 358 Q134 376 150 360 Q166 376 182 358 Q198 370 212 354" fill="none" stroke="${lt(c,.7)}" stroke-width="5" stroke-linecap="round"/>`+WAIST(c)
+};
+
+/* ============ 코트 ============ */
+const SLEEVE=(c,w)=>pair(limb(118,206,96,288,w||28,c)+limb(97,281,95,291,w||28,sh(c,.8)));
+const COATS={
+ long:c=>SLEEVE(c)+
+   pair(`<path d="M114 194 Q130 186 148 196 L148 376 L104 376Z" ${F(c)}/>`+
+        `<path d="M126 190 L148 197 L137 220Z" fill="${lt(c,.35)}" ${cs(c,2.5)}/>`+
+        `<circle cx="140" cy="236" r="4" fill="${lt(c,.75)}"/><circle cx="140" cy="266" r="4" fill="${lt(c,.75)}"/><circle cx="140" cy="296" r="4" fill="${lt(c,.75)}"/>`+
+        `<path d="M118 330 H138" stroke="${sh(c,.8)}" stroke-width="4"/>`),
+ puffy:c=>SLEEVE(c,34)+
+   `<path d="M113 194 Q150 182 187 194 L194 326 Q150 340 106 326Z" ${F(c)}/>`+
+   `<path d="M108 230 Q150 242 192 230 M106 266 Q150 278 194 266 M106 300 Q150 312 194 300" fill="none" stroke="${sh(c,.75)}" stroke-width="3.5"/>`+
+   `<rect x="128" y="182" width="44" height="18" rx="9" ${F(sh(c,.92))}/>`+
+   `<path d="M150 200 V334" stroke="${sh(c,.7)}" stroke-width="3"/>`,
+ cardi:c=>SLEEVE(c,24)+
+   pair(`<path d="M114 194 Q130 186 148 200 L148 318 L108 318Z" ${F(c)}/>`+
+        `<circle cx="141" cy="240" r="4.5" fill="${lt(c,.8)}"/><circle cx="141" cy="268" r="4.5" fill="${lt(c,.8)}"/><circle cx="141" cy="296" r="4.5" fill="${lt(c,.8)}"/>`)+
+   `<path d="M108 312 H192" stroke="${sh(c,.82)}" stroke-width="5"/>`,
+ cape:c=>`<ellipse cx="150" cy="196" rx="40" ry="22" ${F(sh(c,.88))}/>`+
+   `<path d="M118 192 Q150 182 182 192 L234 364 Q150 388 66 364Z" ${F(c)}/>`+
+   `<path d="M150 204 V372" stroke="${sh(c,.75)}" stroke-width="3"/>`+
+   `<path d="M130 196 Q150 210 170 196" fill="none" stroke="${lt(c,.6)}" stroke-width="4"/>`+
+   `<circle cx="150" cy="204" r="6" fill="#ffd23f" stroke="#c9a008" stroke-width="2"/>`
+};
+
+/* ============ 양말 ============ */
+const SOCK_FOOT=c=>`<path d="${FOOT}" ${F(c)}/>`;
+const SOCKS={
+ ankle:c=>pair(SOCK_FOOT(c)+`<rect x="126" y="402" width="22" height="26" rx="7" ${F(c)}/><rect x="126" y="402" width="22" height="8" rx="4" fill="${lt(c,.5)}" stroke="${sh(c,.66)}" stroke-width="2"/>`),
+ knee:c=>pair(SOCK_FOOT(c)+`<rect x="126" y="352" width="22" height="78" rx="8" ${F(c)}/><rect x="126" y="352" width="22" height="9" rx="4" fill="${lt(c,.5)}" stroke="${sh(c,.66)}" stroke-width="2"/>`),
+ stripe:c=>pair(SOCK_FOOT(c)+`<rect x="126" y="352" width="22" height="78" rx="8" ${F(c)}/>`+
+   [364,378,392,406,420].map(y=>`<rect x="127" y="${y}" width="20" height="6" fill="#fff" opacity=".9"/>`).join('')+
+   `<rect x="126" y="352" width="22" height="7" rx="3" fill="${sh(c,.85)}"/>`),
+ tights:c=>pair(SOCK_FOOT(c)+`<rect x="126" y="294" width="22" height="136" rx="8" ${F(c)}/>`)
+};
+
+/* ============ 신발 ============ */
+const SHOES={
+ sneaker:c=>pair(`<path d="M102 436 Q102 417 126 417 L148 417 L148 446 L106 446 Q102 446 102 436Z" ${F(c)}/>`+
+   `<path d="M102 436 Q102 426 112 424 L117 446 L106 446 Q102 446 102 436Z" fill="#fff" opacity=".65"/>`+
+   `<rect x="101" y="441" width="48" height="9" rx="4" fill="#fff" stroke="#c9c0c6" stroke-width="2"/>`+
+   `<path d="M132 423 L142 427 M132 430 L142 434" stroke="#fff" stroke-width="3" stroke-linecap="round"/>`),
+ mary:c=>pair(`<path d="M104 438 Q104 424 124 424 L148 424 L148 446 L108 446 Q104 446 104 438Z" ${F(c)}/>`+
+   `<rect x="124" y="425" width="24" height="5" fill="${sh(c,.78)}"/>`+
+   `<rect x="104" y="442" width="45" height="7" rx="3" fill="#6b4a5a"/>`+
+   `<circle cx="136" cy="427" r="4" fill="${lt(c,.7)}"/>`),
+ boots:c=>pair(`<rect x="123" y="372" width="27" height="68" rx="8" ${F(c)}/>`+
+   `<path d="M102 438 Q102 424 122 424 L150 424 L150 449 L106 449 Q102 449 102 438Z" ${F(c)}/>`+
+   `<rect x="123" y="372" width="27" height="10" rx="4" fill="${lt(c,.55)}" stroke="${sh(c,.66)}" stroke-width="2"/>`+
+   `<circle cx="136" cy="394" r="3.5" fill="#fff" opacity=".7"/><circle cx="130" cy="410" r="3.5" fill="#fff" opacity=".7"/><circle cx="142" cy="418" r="3.5" fill="#fff" opacity=".7"/>`+
+   `<rect x="101" y="443" width="49" height="7" rx="3" fill="#fff" stroke="#c9c0c6" stroke-width="2"/>`),
+ sandal:c=>pair(`<path d="M104 440 Q104 430 124 430 L148 430 L148 447 L108 447 Q104 447 104 440Z" fill="#f4dcb0" stroke="#c9a874" stroke-width="2.5"/>`+
+   `<path d="M118 430 V446 M136 430 V446" stroke="${c}" stroke-width="6" stroke-linecap="round"/>`+
+   `<rect x="125" y="410" width="24" height="6" rx="3" ${F(c)}/><circle cx="137" cy="413" r="4" fill="${lt(c,.7)}"/>`)
+};
+
+/* ============ 머리 ============ */
+const HAIR_BACK={
+ pig:c=>pair(`<ellipse cx="76" cy="160" rx="21" ry="36" transform="rotate(14 76 160)" ${F(c)}/>`)+
+        `<ellipse cx="150" cy="112" rx="66" ry="62" ${F(c)}/>`+
+        pair(`<path d="M92 126 L80 118 V134Z M92 126 L104 118 V134Z" fill="#ff6f9c" stroke="#c94a78" stroke-width="2"/><circle cx="92" cy="126" r="4" fill="#ff9fc2"/>`),
+ long:c=>`<path d="M80 112 Q80 50 150 50 Q220 50 220 112 L230 276 Q150 298 70 276Z" ${F(c)}/>`,
+ bob:c=>`<path d="M78 112 Q78 50 150 50 Q222 50 222 112 L218 182 Q150 202 82 182Z" ${F(c)}/>`
+};
+function head(hc){
+  return `<circle cx="150" cy="118" r="58" fill="${SKIN}" stroke="${SKO}" stroke-width="3"/>`+
+   `<path d="M91 114 Q94 60 150 58 Q206 60 209 114 Q192 90 168 92 Q150 78 130 92 Q108 90 91 114Z" ${F(hc)}/>`+
+   `<ellipse cx="128" cy="130" rx="7" ry="9.5" fill="#3a2a3a"/><circle cx="130.5" cy="126" r="3" fill="#fff"/><circle cx="125.5" cy="133.5" r="1.6" fill="#fff"/>`+
+   `<ellipse cx="172" cy="130" rx="7" ry="9.5" fill="#3a2a3a"/><circle cx="174.5" cy="126" r="3" fill="#fff"/><circle cx="169.5" cy="133.5" r="1.6" fill="#fff"/>`+
+   `<ellipse cx="110" cy="148" rx="10" ry="6" fill="#ff9fb5" opacity=".6"/><ellipse cx="190" cy="148" rx="10" ry="6" fill="#ff9fb5" opacity=".6"/>`+
+   `<path d="M141 150 Q150 159 159 150" stroke="#c0505f" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+}
+
+/* ============ 모자 ============ */
+const HATS={
+ beanie:c=>`<path d="M93 98 Q93 40 150 40 Q207 40 207 98Z" ${F(c)}/>`+
+   `<path d="M120 48 V94 M135 42 V94 M150 40 V94 M165 42 V94 M180 48 V94" stroke="${sh(c,.82)}" stroke-width="2.5"/>`+
+   `<rect x="90" y="88" width="120" height="20" rx="9" fill="${lt(c,.4)}" stroke="${sh(c,.66)}" stroke-width="3"/>`+
+   `<circle cx="150" cy="38" r="13" fill="${lt(c,.7)}" stroke="${sh(c,.66)}" stroke-width="3"/>`,
+ sun:c=>`<ellipse cx="150" cy="90" rx="100" ry="22" ${F(c)}/>`+
+   `<path d="M102 90 Q102 44 150 44 Q198 44 198 90Z" ${F(c)}/>`+
+   `<rect x="102" y="76" width="96" height="13" fill="#ff6f9c" stroke="#c94a78" stroke-width="2.5"/>`+
+   `<path d="M186 82 L210 68 L210 96Z M186 82 L170 68 L170 96Z" fill="#ff9fc2" stroke="#c94a78" stroke-width="2"/><circle cx="188" cy="82" r="5" fill="#ff6f9c"/>`,
+ band:c=>`<path d="M92 100 Q150 22 208 100" fill="none" stroke="${sh(c,.66)}" stroke-width="13" stroke-linecap="round"/><path d="M92 100 Q150 22 208 100" fill="none" stroke="${c}" stroke-width="9" stroke-linecap="round"/>`+
+   `<path d="M196 70 L168 52 L168 90Z M196 70 L226 52 L226 90Z" ${F(c)}/><circle cx="197" cy="70" r="8" fill="${lt(c,.6)}" stroke="${sh(c,.66)}" stroke-width="2.5"/>`,
+ crown:c=>`<path d="M100 88 L106 44 L128 68 L150 38 L172 68 L194 44 L200 88Z" fill="${c}" stroke="${sh(c,.6)}" stroke-width="3" stroke-linejoin="round"/>`+
+   `<rect x="100" y="80" width="100" height="12" rx="4" fill="${sh(c,.88)}" stroke="${sh(c,.6)}" stroke-width="2.5"/>`+
+   `<circle cx="150" cy="86" r="4.5" fill="#ff4d7a"/><circle cx="124" cy="86" r="3.5" fill="#4da3ff"/><circle cx="176" cy="86" r="3.5" fill="#7ed957"/>`+
+   `<circle cx="106" cy="44" r="4" fill="#fff"/><circle cx="150" cy="38" r="4" fill="#fff"/><circle cx="194" cy="44" r="4" fill="#fff"/>`,
+ beret:c=>`<ellipse cx="146" cy="70" rx="68" ry="27" transform="rotate(-8 146 70)" ${F(c)}/>`+
+   `<rect x="143" y="36" width="8" height="14" rx="4" ${F(c)}/>`+
+   `<path d="M100 82 Q146 98 196 78" fill="none" stroke="${sh(c,.8)}" stroke-width="3"/>`,
+ bunny:c=>`<ellipse cx="120" cy="34" rx="15" ry="36" transform="rotate(-10 120 34)" ${F(c)}/><ellipse cx="120" cy="36" rx="7" ry="26" transform="rotate(-10 120 36)" fill="#ffc2d6"/>`+
+   `<ellipse cx="180" cy="34" rx="15" ry="36" transform="rotate(10 180 34)" ${F(c)}/><ellipse cx="180" cy="36" rx="7" ry="26" transform="rotate(10 180 36)" fill="#ffc2d6"/>`+
+   `<path d="M95 94 Q150 34 205 94" fill="none" stroke="${sh(c,.66)}" stroke-width="12" stroke-linecap="round"/><path d="M95 94 Q150 34 205 94" fill="none" stroke="${c}" stroke-width="8" stroke-linecap="round"/>`
+};
+
+/* ============ 카탈로그 ============ */
+const PAL=[['#ff6f9c','분홍'],['#ff4d4d','빨강'],['#ff9a3c','주황'],['#ffd23f','노랑'],['#7ed957','초록'],['#3cc7b0','민트'],['#4da3ff','파랑'],['#8a6bff','보라'],['#ffc2e2','연분홍'],['#ffffff','하양'],['#9b6b4a','갈색'],['#3b3b4f','남색']];
+const HPAL=[['#7a4a2a','갈색'],['#2b2b33','검정'],['#f2cf6b','금발'],['#d9482b','빨강'],['#ff8fd0','분홍'],['#8a6bff','보라'],['#4da3ff','파랑']];
+const CATS=[
+ {k:'top',n:'상의',e:'👚',vb:'50 166 200 220',items:[['tee','반팔티'],['long','긴팔티'],['hood','후드티'],['tank','민소매'],['dress','원피스']],pal:PAL},
+ {k:'bottom',n:'하의',e:'👖',vb:'70 280 160 175',items:[['pants','긴바지'],['shorts','반바지'],['skirt','짧은 치마'],['maxi','긴 치마'],['tutu','발레 치마']],pal:PAL},
+ {k:'coat',n:'코트',e:'🧥',vb:'46 166 208 220',items:[['long','코트'],['puffy','패딩'],['cardi','가디건'],['cape','망토']],pal:PAL},
+ {k:'socks',n:'양말',e:'🧦',vb:'90 290 120 165',items:[['ankle','짧은 양말'],['knee','긴 양말'],['stripe','줄무늬 양말'],['tights','스타킹']],pal:PAL},
+ {k:'shoes',n:'신발',e:'👟',vb:'90 366 120 90',items:[['sneaker','운동화'],['mary','구두'],['boots','장화'],['sandal','샌들']],pal:PAL},
+ {k:'hat',n:'모자',e:'👒',vb:'40 -4 220 130',items:[['beanie','털모자'],['sun','밀짚모자'],['band','리본 머리띠'],['crown','왕관'],['beret','베레모'],['bunny','토끼 귀']],pal:PAL},
+ {k:'hair',n:'머리',e:'🎀',vb:'40 30 220 200',items:[['pig','양갈래'],['long','긴 머리'],['bob','단발']],pal:HPAL}
+];
+const TABLE={top:TOPS,bottom:BOTTOMS,coat:COATS,socks:SOCKS,shoes:SHOES,hat:HATS,hair:HAIR_BACK};
+const nameOf=(cat,id)=>CATS.find(c=>c.k===cat).items.find(i=>i[0]===id)[1];
+const cnameOf=(cat,col)=>{const p=CATS.find(c=>c.k===cat).pal.find(p=>p[0]===col);return p?p[1]:'';};
+
+/* ============ 상태/그리기 ============ */
+const DEFAULT_SEL=()=>({hair:{id:'pig',c:'#7a4a2a'},top:{id:'tee',c:'#ffc2e2'},bottom:{id:'shorts',c:'#4da3ff'},coat:null,socks:null,shoes:{id:'sneaker',c:'#ff6f9c'},hat:null});
+let sel=DEFAULT_SEL();
+const lastColor={top:'#ffc2e2',bottom:'#4da3ff',coat:'#ff6f9c',socks:'#ffffff',shoes:'#ff6f9c',hat:'#ff6f9c',hair:'#7a4a2a'};
+let tab='top';
+
+function dollInner(s){
+  const h=s.hair||{id:'pig',c:'#7a4a2a'};
+  const dress=s.top&&s.top.id==='dress';
+  let o=HAIR_BACK[h.id](h.c)+LEGS;
+  if(s.socks)o+=SOCKS[s.socks.id](s.socks.c);
+  if(s.shoes)o+=SHOES[s.shoes.id](s.shoes.c);
+  o+=UNDER_SHORTS;
+  if(s.bottom&&!dress)o+=BOTTOMS[s.bottom.id](s.bottom.c);
+  o+=TORSO;
+  if(s.top)o+=TOPS[s.top.id](s.top.c);
+  if(s.coat)o+=COATS[s.coat.id](s.coat.c);
+  o+=head(h.c);
+  if(s.hat)o+=HATS[s.hat.id](s.hat.c);
+  return o;
+}
+function svgStr(s,vb,bg){
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" preserveAspectRatio="xMidYMid meet">`+
+    (bg?`<ellipse cx="150" cy="450" rx="72" ry="9" fill="rgba(160,90,120,.18)"/>`:'')+dollInner(s)+`</svg>`;
+}
+const $=id=>document.getElementById(id);
+function drawDoll(){$('doll').innerHTML=svgStr(sel,'0 0 300 470',true);}
+function bounce(){const d=$('doll');d.classList.remove('bounce');void d.offsetWidth;d.classList.add('bounce');}
+
+/* ============ 패널 UI ============ */
+function buildTabs(){
+  $('tabs').innerHTML=CATS.map(c=>`<button class="tab${c.k===tab?' on':''}" data-k="${c.k}"><i>${c.e}</i>${c.n}</button>`).join('');
+}
+function thumb(cat,id){
+  const col=sel[cat.k]?sel[cat.k].c:lastColor[cat.k];
+  const s={};s[cat.k]={id,c:col};
+  if(cat.k!=='hair')s.hair={id:'pig',c:'#7a4a2a'};
+  return svgStr(s,cat.vb,false);
+}
+function buildItems(){
+  const cat=CATS.find(c=>c.k===tab);
+  const cur=sel[tab];
+  let h='';
+  if(tab!=='hair')h+=`<button class="item${!cur?' on':''}" data-id=""><div class="none">✖</div>없음</button>`;
+  h+=cat.items.map(([id,n])=>`<button class="item${cur&&cur.id===id?' on':''}" data-id="${id}">${thumb(cat,id)}${n}</button>`).join('');
+  $('items').innerHTML=h;
+  $('items').scrollLeft=0;
+}
+function buildColors(){
+  const cat=CATS.find(c=>c.k===tab);
+  const col=sel[tab]?sel[tab].c:lastColor[tab];
+  $('colors').innerHTML=cat.pal.map(([c,n])=>`<button class="sw${c===col?' on':''}" data-c="${c}" style="background:${c}" aria-label="${n}"></button>`).join('');
+}
+function refresh(){buildTabs();buildItems();buildColors();drawDoll();}
+
+$('tabs').addEventListener('click',e=>{
+  const b=e.target.closest('.tab');if(!b)return;initAudio();
+  tab=b.dataset.k;tick();buildTabs();buildItems();buildColors();
+});
+$('items').addEventListener('click',e=>{
+  const b=e.target.closest('.item');if(!b)return;initAudio();
+  const id=b.dataset.id;
+  if(!id){sel[tab]=null;}
+  else{
+    if(tab==='bottom'&&sel.top&&sel.top.id==='dress')sel.top={id:'tee',c:lastColor.top};
+    sel[tab]={id,c:lastColor[tab]};
+  }
+  afterChange(id?tab:tab,id);
+});
+$('colors').addEventListener('click',e=>{
+  const b=e.target.closest('.sw');if(!b)return;initAudio();
+  const c=b.dataset.c;lastColor[tab]=c;
+  if(sel[tab])sel[tab].c=c;
+  else{const cat=CATS.find(x=>x.k===tab);sel[tab]={id:cat.items[0][0],c};}
+  afterChange(tab,sel[tab].id);
+});
+const PRAISE=['예뻐요!','멋져요!','잘 어울려요!','우와 귀여워!','최고예요!'];
+function afterChange(cat,id){
+  refresh();bounce();sparkle();ding();
+  if(!sel[cat]){toast('벗었어요');return;}
+  const nm=nameOf(cat,sel[cat].id),cn=cnameOf(cat,sel[cat].c);
+  const t=cat==='hair'?`${cn} ${nm}`:`${cn} ${nm}`;
+  toast(t);
+  say(t+'! '+PRAISE[(Math.random()*PRAISE.length)|0]);
+}
+let toastT=0;
+function toast(t){$('toastT').textContent=t;$('toast').classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>$('toast').classList.remove('on'),1600);}
+function sparkle(){
+  const st=$('stage'),r=st.getBoundingClientRect();
+  for(let i=0;i<7;i++){
+    const s=document.createElement('span');s.className='spark';s.textContent=['✨','⭐','💖','🌟'][(Math.random()*4)|0];
+    s.style.left=(r.width*(.25+Math.random()*.5))+'px';s.style.top=(r.height*(.15+Math.random()*.6))+'px';
+    s.style.animationDelay=(Math.random()*.25)+'s';
+    st.appendChild(s);setTimeout(()=>s.remove(),1300);
+  }
+}
+
+/* ============ 버튼 ============ */
+const rnd=a=>a[(Math.random()*a.length)|0];
+$('bRand').addEventListener('click',()=>{
+  initAudio();
+  const s={hair:{id:rnd(CATS[6].items)[0],c:rnd(HPAL)[0]}};
+  const dress=Math.random()<.25;
+  s.top={id:dress?'dress':rnd(CATS[0].items.filter(i=>i[0]!=='dress'))[0],c:rnd(PAL)[0]};
+  if(!dress)s.bottom={id:rnd(CATS[1].items)[0],c:rnd(PAL)[0]};
+  s.coat=Math.random()<.4?{id:rnd(CATS[2].items)[0],c:rnd(PAL)[0]}:null;
+  s.socks=Math.random()<.6?{id:rnd(CATS[3].items)[0],c:rnd(PAL)[0]}:null;
+  s.shoes={id:rnd(CATS[4].items)[0],c:rnd(PAL)[0]};
+  s.hat=Math.random()<.6?{id:rnd(CATS[5].items)[0],c:rnd(PAL)[0]}:null;
+  s.bottom=s.bottom||null;
+  sel=s;for(const k in s)if(s[k])lastColor[k]=s[k].c;
+  refresh();bounce();sparkle();fanfare();toast('짠! 새 옷이에요');say('짠! 새 옷이에요! 예뻐요!');
+});
+$('bReset').addEventListener('click',()=>{initAudio();sel=DEFAULT_SEL();for(const k in sel)if(sel[k])lastColor[k]=sel[k].c;refresh();bounce();tick();toast('처음부터 다시!');});
+let muted=false;
+$('bMute').addEventListener('click',()=>{muted=!muted;$('bMute').textContent=muted?'🔇':'🔊';if(muted){try{speechSynthesis.cancel()}catch(e){}}else initAudio();});
+$('bSave').addEventListener('click',async()=>{
+  initAudio();
+  try{
+    const W=600,H=940;
+    const svg=svgStr(sel,'0 0 300 470',true).replace('<svg ','<svg width="600" height="940" ');
+    const url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));
+    const img=new Image();await new Promise((ok,no)=>{img.onload=ok;img.onerror=no;img.src=url;});
+    const cv=document.createElement('canvas');cv.width=W;cv.height=H;const g=cv.getContext('2d');
+    const gr=g.createLinearGradient(0,0,0,H);gr.addColorStop(0,'#ffe3f0');gr.addColorStop(1,'#ffe9c7');
+    g.fillStyle=gr;g.fillRect(0,0,W,H);g.drawImage(img,0,0,W,H);
+    const blob=await new Promise(r=>cv.toBlob(r,'image/png'));
+    const file=new File([blob],'my-outfit.png',{type:'image/png'});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'내 코디'});}
+    else{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='my-outfit.png';document.body.appendChild(a);a.click();a.remove();}
+    toast('사진을 저장해요');
+  }catch(e){toast('저장은 나중에 해요');}
+});
+$('doll').addEventListener('click',()=>{initAudio();bounce();sparkle();say('안녕! 나 예뻐?');toast('안녕! 나 예뻐?');});
+
+/* ============ 소리 ============ */
+let A=null;
+function initAudio(){try{if(!A)A=new (window.AudioContext||window.webkitAudioContext)();if(A.state==='suspended')A.resume();}catch(e){}}
+function tone(f,at,dur,vol,type){
+  if(!A||muted)return;
+  try{const o=A.createOscillator(),g=A.createGain(),t0=A.currentTime+at;o.type=type||'triangle';o.frequency.value=f;
+    g.gain.setValueAtTime(.0001,t0);g.gain.exponentialRampToValueAtTime(vol||.15,t0+.02);g.gain.exponentialRampToValueAtTime(.0001,t0+dur);
+    o.connect(g);g.connect(A.destination);o.start(t0);o.stop(t0+dur+.05);}catch(e){}
+}
+const tick=()=>tone(700,0,.06,.07,'sine');
+const ding=()=>{[1047,1319,1568].forEach((f,i)=>tone(f,i*.07,.22,.13));};
+const fanfare=()=>{[523,659,784,1047,1319].forEach((f,i)=>tone(f,i*.09,.3,.15));};
+function say(t){
+  if(muted)return;
+  try{const u=new SpeechSynthesisUtterance(t);u.lang='ko-KR';u.rate=.95;u.pitch=1.5;speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}
+}
+
+document.addEventListener('gesturestart',e=>e.preventDefault());
+document.addEventListener('contextmenu',e=>e.preventDefault());
+
+// 홈 화면 아이콘
+(()=>{const c=document.createElement('canvas');c.width=c.height=180;const g=c.getContext('2d');
+  g.fillStyle='#ffd6e8';g.fillRect(0,0,180,180);g.font='110px sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText('👗',90,98);
+  const l=document.createElement('link');l.rel='apple-touch-icon';l.href=c.toDataURL('image/png');document.head.appendChild(l);})();
+
+refresh();
+window.__du={get sel(){return sel},set sel(v){sel=v},refresh,CATS,pick:(cat,id,c)=>{tab=cat;if(c)lastColor[cat]=c;sel[cat]=id?{id,c:c||lastColor[cat]}:null;refresh();}};
+})();
+</script>
+</body>
+</html>
