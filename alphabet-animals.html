@@ -24,7 +24,9 @@ body{position:fixed;inset:0;display:flex;flex-direction:column;
 .chip.now{background:#ff7aa8;color:#fff;transform:scale(1.2)}
 .round{width:44px;height:44px;border-radius:50%;border:none;background:#fff;font-size:22px;box-shadow:0 3px 0 #cfe3f2}
 #stage{position:relative;z-index:2;flex:1 1 auto;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:6px 12px 12px}
-@media (orientation:portrait){#stage{grid-template-columns:1fr;grid-template-rows:1.1fr 1fr}}
+@media (orientation:portrait){#stage{grid-template-columns:minmax(0,1fr);grid-template-rows:1.1fr 1fr}}
+#stage{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+@media (orientation:portrait){#stage{grid-template-columns:minmax(0,1fr)}}
 #card{background:rgba(255,255,255,.68);border-radius:30px;box-shadow:0 6px 0 rgba(120,170,200,.4);
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:8px;min-height:0;position:relative}
 #pic{font-size:min(30vh,40vw);line-height:1.05;touch-action:none;cursor:grab;position:relative;z-index:30;
@@ -39,10 +41,10 @@ body{position:fixed;inset:0;display:flex;flex-direction:column;
 #hint{position:absolute;left:0;right:0;bottom:6px;text-align:center;font-size:clamp(12px,2.6vh,18px);color:#8aa0b8;font-weight:800}
 #slots{display:flex;flex-direction:column;gap:12px;min-height:0}
 @media (orientation:portrait){#slots{flex-direction:row}}
-.slot{flex:1;min-height:0;border:5px dashed #7cc4ff;border-radius:28px;background:rgba(255,255,255,.55);
+.slot{flex:1;min-height:0;min-width:0;overflow:hidden;border:5px dashed #7cc4ff;border-radius:28px;background:rgba(255,255,255,.55);
   display:flex;align-items:center;justify-content:center;font-weight:900;color:#2a8bf2;
   font-size:min(20vh,22vw);line-height:1;transition:transform .15s,background .15s;position:relative}
-@media (orientation:portrait){.slot{font-size:min(14vh,26vw)}}
+@media (orientation:portrait){.slot{font-size:min(12vh,19vw)}}
 .slot.hover{background:rgba(255,236,150,.95);transform:scale(1.05);border-color:#ffb347}
 .slot.shake{animation:shake .45s}
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-14px)}40%{transform:translateX(14px)}60%{transform:translateX(-10px)}80%{transform:translateX(10px)}}
@@ -50,7 +52,7 @@ body{position:fixed;inset:0;display:flex;flex-direction:column;
 .slot .lc{font-size:.55em;margin-left:.15em;opacity:.7}
 #next{position:fixed;left:24px;bottom:calc(22px + env(safe-area-inset-bottom));z-index:40;border:none;border-radius:999px;
   background:#ff7aa8;color:#fff;font-size:30px;font-weight:900;padding:12px 30px;box-shadow:0 6px 0 #e04d82;display:none}
-@media (orientation:portrait){#next{left:50%;transform:translateX(-50%);bottom:auto;top:43vh}#next:active{transform:translateX(-50%) translateY(4px)!important}}
+@media (orientation:portrait){#next{left:auto;right:24px;bottom:auto;top:92px;font-size:24px;padding:10px 22px}}
 #next:active{transform:translateY(4px);box-shadow:0 2px 0 #e04d82}
 #start,#end{position:fixed;inset:0;z-index:50;background:linear-gradient(#bfe7ff,#ffe3ef);display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:14px;text-align:center;padding:20px}
