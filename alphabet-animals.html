@@ -115,7 +115,7 @@ const ANIMALS=[
  {L:'O',w:'Owl',k:'부엉이',e:'🦉'}
 ];
 const $=id=>document.getElementById(id);
-let muted=false, idx=0, locked=false, nextTimer=0;
+let muted=false, idx=0, locked=false, nextTimer=0, Q=[], doneSet=new Set(), lastPos=-1;
 
 /* ================= 소리 ================= */
 let A=null,master=null,noiseBuf=null;
@@ -192,6 +192,12 @@ function applause(){
 }
 function boing(){voice({dur:.35,type:'triangle',f:[[0,300],[.5,180],[1,240]],vol:.3})}
 function ding(){[880,1175,1568].forEach((f,i)=>voice({at:i*.08,dur:.3,type:'triangle',f:[[0,f],[1,f]],vol:.18}))}
+function sayTwice(w){
+  if(muted)return;
+  try{speechSynthesis.cancel();
+    for(let i=0;i<2;i++){const u=new SpeechSynthesisUtterance(w);u.lang='en-US';u.rate=.7;u.pitch=1.3;speechSynthesis.speak(u);}
+  }catch(e){}
+}
 function say(t,lang){
   if(muted)return;
   try{const u=new SpeechSynthesisUtterance(t);u.lang=lang||'en-US';u.rate=.8;u.pitch=1.3;speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}
@@ -201,18 +207,20 @@ function say(t,lang){
 const pic=$('pic'),slotsEl=$('slots');
 function buildChips(){
   const c=$('chips');c.innerHTML='';
-  ANIMALS.forEach((a,i)=>{const d=document.createElement('div');d.className='chip'+(i<idx?' done':i===idx?' now':'');d.textContent=a.L;c.appendChild(d);});
+  ANIMALS.forEach((a,i)=>{const d=document.createElement('div');d.className='chip'+(doneSet.has(a.L)?' done':(Q[idx]&&Q[idx].L===a.L)?' now':'');d.textContent=a.L;c.appendChild(d);});
 }
 function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+function newGame(){Q=shuffle(ANIMALS.slice());doneSet=new Set();idx=0;lastPos=-1;}
 function showQ(){
   clearTimeout(nextTimer);locked=false;$('next').style.display='none';
-  const a=ANIMALS[idx];
+  const a=Q[idx];
   pic.textContent=a.e;pic.className='idle';pic.style.transform='';pic.style.transition='';
   $('word').innerHTML='<b>'+a.w[0]+'</b>'+a.w.slice(1);
   $('kor').textContent=a.k;
   $('hint').style.opacity=1;
   const others=shuffle(ANIMALS.filter(x=>x.L!==a.L).map(x=>x.L)).slice(0,2);
-  const opts=shuffle([a.L,...others]);
+  let opts;do{opts=shuffle([a.L,...others]);}while(opts.indexOf(a.L)===lastPos);
+  lastPos=opts.indexOf(a.L);
   slotsEl.innerHTML='';
   opts.forEach(L=>{
     const s=document.createElement('div');s.className='slot';s.dataset.L=L;
@@ -220,7 +228,7 @@ function showQ(){
     slotsEl.appendChild(s);
   });
   buildChips();
-  setTimeout(()=>say(a.w+'.'),250);
+  setTimeout(()=>sayTwice(a.w),300);
 }
 function slotAt(x,y){
   for(const s of slotsEl.children){const r=s.getBoundingClientRect();
@@ -248,7 +256,7 @@ function endDrag(e){
   const d=drag;drag=null;
   pic.classList.remove('drag');
   if(d.hover)d.hover.classList.remove('hover');
-  const a=ANIMALS[idx];
+  const a=Q[idx];
   if(!d.moved){ // 톡 = 동물 소리 듣기
     pic.style.transform='';pic.classList.add('idle');playAnimal(a.L);return;
   }
@@ -273,32 +281,32 @@ function success(s,d){
   pic.style.transform=`translate(${tx}px,${ty}px) scale(.4)`;
   s.classList.add('ok');
   $('hint').style.opacity=0;
-  const a=ANIMALS[idx];
+  const a=Q[idx];
   ding();
   setTimeout(()=>{playAnimal(a.L);applause();confetti();},250);
   setTimeout(()=>say(a.L+' for '+a.w+'!'),1500);
-  ANIMALS[idx].done=true;buildChips();
+  doneSet.add(a.L);buildChips();
   $('next').style.display='block';
-  $('next').textContent=idx===ANIMALS.length-1?'끝! 🎉':'다음 ▶';
+  $('next').textContent=idx===Q.length-1?'끝! 🎉':'다음 ▶';
   nextTimer=setTimeout(goNext,4500);
 }
 function goNext(){
   clearTimeout(nextTimer);
-  if(idx>=ANIMALS.length-1){finish();return;}
+  if(idx>=Q.length-1){finish();return;}
   idx++;showQ();
 }
 $('next').addEventListener('click',()=>{initAudio();goNext();});
 function finish(){
   $('next').style.display='none';
-  idx=ANIMALS.length;buildChips();
+  idx=Q.length;buildChips();
   $('end').style.display='flex';
   applause();confetti(true);setTimeout(()=>{applause();say('Great job! 정말 잘했어요!')},900);
 }
-$('again').addEventListener('click',()=>{$('end').style.display='none';idx=0;showQ();});
+$('again').addEventListener('click',()=>{$('end').style.display='none';newGame();showQ();});
 $('goBtn').addEventListener('click',()=>{
   initAudio();
   try{const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u);}catch(e){}
-  $('start').style.display='none';idx=0;showQ();
+  $('start').style.display='none';newGame();showQ();
 });
 $('mute').addEventListener('click',()=>{muted=!muted;$('mute').textContent=muted?'🔇':'🔊';if(muted){try{speechSynthesis.cancel()}catch(e){}}else initAudio();});
 
@@ -391,7 +399,7 @@ requestAnimationFrame(loop);
   x.fillStyle='#bfe7ff';x.fillRect(0,0,180,180);x.font='110px sans-serif';x.textAlign='center';x.textBaseline='middle';x.fillText('🐶',90,98);
   const l=document.createElement('link');l.rel='apple-touch-icon';l.href=c.toDataURL('image/png');document.head.appendChild(l);})();
 
-window.__ab={get idx(){return idx},ANIMALS,SOUND,success:()=>success(slotsEl.querySelector('.slot[data-L="'+ANIMALS[idx].L+'"]'),{cx:0,cy:0}),goNext};
+window.__ab={get idx(){return idx},ANIMALS,SOUND,success:()=>success([...slotsEl.children].find(s=>s.dataset.L===Q[idx].L),{cx:0,cy:0}),get Q(){return Q},goNext};
 })();
 </script>
 </body>
